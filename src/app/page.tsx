@@ -1,4 +1,6 @@
 import SiteNav from "@/components/nav/SiteNav";
+import StickyMobileCTA from "@/components/StickyMobileCTA";
+import { SelectionProvider } from "@/components/SelectionProvider";
 import Hero from "@/components/hero/Hero";
 import TrustIndicators from "@/components/sections/TrustIndicators";
 import HowItWorks from "@/components/sections/HowItWorks";
@@ -12,9 +14,9 @@ import SiteFooter from "@/components/footer/SiteFooter";
 
 export default function Home() {
   return (
-    <>
+    <SelectionProvider>
       <SiteNav />
-      <main className="flex-1">
+      <main className="flex-1 pb-20 md:pb-0">
         <Hero />
         <TrustIndicators />
         <HowItWorks />
@@ -26,6 +28,7 @@ export default function Home() {
         <QuoteSection />
       </main>
       <SiteFooter />
-    </>
+      <StickyMobileCTA />
+    </SelectionProvider>
   );
 }

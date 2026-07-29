@@ -1,23 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import {
-  COMMERCIAL_PROPERTY_TYPE_IDS,
-  DEFAULT_PROPERTY_TYPE_ID,
-  PROPERTY_TYPES,
-  type PropertyTypeId,
-} from "@/lib/property-types";
-import { DEFAULT_SERVICE_ID, SERVICES, type ServiceId } from "@/lib/services";
-import PropertyCanvasLoader from "./PropertyCanvasLoader";
+import { useSelection } from "@/components/SelectionProvider";
+import { COMMERCIAL_PROPERTY_TYPE_IDS, PROPERTY_TYPES } from "@/lib/property-types";
+import { SERVICES } from "@/lib/services";
+import PropertyImage from "./PropertyImage";
 import PropertyTypeSelector from "./PropertyTypeSelector";
 import ServiceSelector from "./ServiceSelector";
-import StaticPropertyIllustration from "./StaticPropertyIllustration";
 
 export default function HeroInteractive() {
-  const [propertyType, setPropertyType] = useState<PropertyTypeId>(
-    DEFAULT_PROPERTY_TYPE_ID
-  );
-  const [serviceId, setServiceId] = useState<ServiceId>(DEFAULT_SERVICE_ID);
+  const { propertyType, serviceId, hasInteracted, setPropertyType, setServiceId } =
+    useSelection();
 
   const activeProperty =
     PROPERTY_TYPES.find((type) => type.id === propertyType) ?? PROPERTY_TYPES[0];
@@ -33,17 +25,31 @@ export default function HeroInteractive() {
         onSelect={setPropertyType}
       />
 
-      {activeProperty.visual === "scene" ? (
-        <PropertyCanvasLoader serviceId={serviceId} />
-      ) : (
-        <StaticPropertyIllustration propertyType={propertyType} />
-      )}
+      <PropertyImage
+        property={activeProperty}
+        priority={propertyType === "home" && !hasInteracted}
+      />
 
       <ServiceSelector
         services={SERVICES}
         selectedId={serviceId}
         onSelect={setServiceId}
       />
+
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background-alt/60 p-5 text-left">
+        <p className="text-sm font-medium text-foreground">{activeService.name}</p>
+        <p className="mt-1 text-sm text-muted">{activeService.description}</p>
+        <ul className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-xs text-muted sm:grid-cols-2">
+          {activeService.included.map((item) => (
+            <li key={item} className="flex items-start gap-1.5">
+              <span aria-hidden="true" className="mt-0.5 text-secondary">
+                &bull;
+              </span>
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
 
       <div className="flex flex-col items-center gap-2 sm:items-start">
         <a
@@ -59,8 +65,7 @@ export default function HeroInteractive() {
       </div>
 
       <p className="sr-only" role="status" aria-live="polite">
-        {activeProperty.name} — {activeService.name}
-        {activeProperty.visual === "scene" ? `: ${activeService.visualState}` : "."}
+        Showing {activeProperty.name}: {activeProperty.image.alt}
       </p>
     </div>
   );

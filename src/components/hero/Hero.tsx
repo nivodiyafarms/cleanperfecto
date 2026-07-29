@@ -21,13 +21,7 @@ export default function Hero() {
           <p className="mx-auto mt-6 max-w-md text-lg text-muted sm:mx-0">
             Choose your space, customize your cleaning, and book in minutes.
           </p>
-          <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-            <a
-              href="#quote"
-              className="inline-flex w-full items-center justify-center rounded-full bg-primary px-8 py-4 text-base font-medium text-foreground transition-colors hover:bg-secondary sm:w-auto"
-            >
-              Get Instant Quote
-            </a>
+          <div className="mt-10 flex justify-center sm:justify-start">
             <a
               href="#how-it-works"
               className="inline-flex w-full items-center justify-center rounded-full border border-border px-8 py-4 text-base font-medium text-foreground transition-colors hover:border-secondary/50 sm:w-auto"

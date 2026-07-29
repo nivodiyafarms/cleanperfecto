@@ -5,8 +5,10 @@ export interface PropertyType {
   name: string;
   description: string;
   specializations: string[];
-  /** "scene" reuses the interactive 3D property; "static" uses a dedicated branded illustration. */
-  visual: "scene" | "static";
+  image: {
+    src: string;
+    alt: string;
+  };
 }
 
 export const PROPERTY_TYPES: PropertyType[] = [
@@ -20,7 +22,10 @@ export const PROPERTY_TYPES: PropertyType[] = [
       "Move-in/move-out cleaning",
       "Recurring cleaning",
     ],
-    visual: "scene",
+    image: {
+      src: "/images/home-cleaning.webp",
+      alt: "Bright, freshly cleaned home interior",
+    },
   },
   {
     id: "airbnb",
@@ -32,7 +37,10 @@ export const PROPERTY_TYPES: PropertyType[] = [
       "Kitchen and bathroom preparation",
       "Guest-ready staging",
     ],
-    visual: "scene",
+    image: {
+      src: "/images/airbnb-cleaning.webp",
+      alt: "Guest-ready Airbnb rental interior, staged and spotless",
+    },
   },
   {
     id: "restaurant",
@@ -45,7 +53,10 @@ export const PROPERTY_TYPES: PropertyType[] = [
       "Grease-prone and sanitation-focused areas",
       "Recurring commercial cleaning",
     ],
-    visual: "static",
+    image: {
+      src: "/images/restaurant-cleaning.webp",
+      alt: "Clean restaurant dining area ready for service",
+    },
   },
   {
     id: "office",
@@ -58,7 +69,10 @@ export const PROPERTY_TYPES: PropertyType[] = [
       "Trash and recycling",
       "Recurring commercial cleaning",
     ],
-    visual: "static",
+    image: {
+      src: "/images/office-cleaning.webp",
+      alt: "Tidy, organized office workspace",
+    },
   },
 ];
 

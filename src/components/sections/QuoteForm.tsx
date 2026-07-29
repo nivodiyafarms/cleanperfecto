@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { PROPERTY_TYPES } from "@/lib/property-types";
-import { SERVICES } from "@/lib/services";
+import { useSelection } from "@/components/SelectionProvider";
+import { PROPERTY_TYPES, type PropertyTypeId } from "@/lib/property-types";
+import { SERVICES, type ServiceId } from "@/lib/services";
 import { submitQuoteRequest } from "@/lib/submitQuoteRequest";
 
 type Status = "idle" | "submitting" | "submitted";
@@ -13,6 +14,7 @@ const labelClass = "text-sm font-medium text-foreground";
 
 export default function QuoteForm() {
   const [status, setStatus] = useState<Status>("idle");
+  const { propertyType, serviceId, setPropertyType, setServiceId } = useSelection();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,10 +85,14 @@ export default function QuoteForm() {
         <label htmlFor="propertyType" className={labelClass}>
           Property type
         </label>
-        <select id="propertyType" name="propertyType" required defaultValue="" className={fieldClass}>
-          <option value="" disabled>
-            Select a property type
-          </option>
+        <select
+          id="propertyType"
+          name="propertyType"
+          required
+          value={propertyType}
+          onChange={(event) => setPropertyType(event.target.value as PropertyTypeId)}
+          className={fieldClass}
+        >
           {PROPERTY_TYPES.map((type) => (
             <option key={type.id} value={type.id}>
               {type.name}
@@ -99,10 +105,14 @@ export default function QuoteForm() {
         <label htmlFor="serviceId" className={labelClass}>
           Cleaning service
         </label>
-        <select id="serviceId" name="serviceId" required defaultValue="" className={fieldClass}>
-          <option value="" disabled>
-            Select a cleaning service
-          </option>
+        <select
+          id="serviceId"
+          name="serviceId"
+          required
+          value={serviceId}
+          onChange={(event) => setServiceId(event.target.value as ServiceId)}
+          className={fieldClass}
+        >
           {SERVICES.map((service) => (
             <option key={service.id} value={service.id}>
               {service.name}

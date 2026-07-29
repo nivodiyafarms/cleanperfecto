@@ -32,27 +32,21 @@ Work only on the project foundation and public homepage.
 
 Do not implement the database, authentication, payments, booking, AI chatbot, or RAG yet.
 
-## Design Concept: Interactive Space Transformation
+## Design Concept: Responsive Property Imagery
 
-Create a premium Apple-style experience centered around one interactive 3D property.
+Version 1 (current, launch-ready) uses one primary hero visual: a responsive photograph (`next/image`) of the selected property type, swapped via the Property Type selector — Home, Airbnb, Restaurant, or Office. This replaced the earlier interactive-3D/WebGL hero, which was too weak visually and too heavy for a fast mobile-first launch.
 
-The main visual should be a floating 3D home that reacts when the customer selects a cleaning service:
+- Property Type selector (Home / Airbnb / Restaurant / Office) controls which photo is shown
 
-- Standard Cleaning — the home becomes fresh, polished, and organized
+- Cleaning Service selector (Standard / Deep / Move-In/Move-Out / Recurring) is kept separate and does not change the hero image — it feeds the quote request
 
-- Deep Cleaning — detailed areas such as the oven, cabinets, baseboards, bathrooms, and hard-to-reach spaces are highlighted
+- Service and property-type names must remain clear and immediately understandable
 
-- Move-In/Move-Out Cleaning — furniture disappears and the empty property is transformed
+- Do not use literal planets, invented names, gaming-style navigation, or visuals that make customers guess what each option means
 
-- Office Cleaning — the home transitions into a professional workspace
+- Alt text must change with the selected property type (accessibility, not decorative)
 
-- Recurring Cleaning — a subtle calendar cycle appears around the property
-
-Service names must remain clear and immediately understandable.
-
-Do not use literal planets, invented service names, gaming-style navigation, or visuals that make customers guess what each service means.
-
-The interactive property should support the customer journey and demonstrate the result of the cleaning service without distracting from booking.
+A future milestone may reintroduce an interactive/3D hero (see "Future: Advanced 3D Property" below) once a properly licensed, premium-quality asset is available — do not build that until then.
 
 ## Homepage Message
 
@@ -107,9 +101,9 @@ The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `pu
 
 - Clear service names and descriptions
 
-- One primary interactive 3D property instead of multiple decorative 3D scenes
+- One primary responsive property image instead of decorative 3D scenes
 
-- The property should react to service selection
+- The hero image should react to property-type selection
 
 - Keep all service controls as clear HTML buttons
 
@@ -135,7 +129,7 @@ The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `pu
 
 1. Transparent premium navigation
 
-2. Hero section with interactive 3D property
+2. Hero section with responsive property imagery
 
 3. Clearly labeled service selector
 
@@ -157,37 +151,39 @@ The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `pu
 
 12. Professional footer
 
-## 3D and Animation Rules
+## Property Visuals (Version 1)
 
-The hero property is a real procedurally-built 3D scene using `three`, `@react-three/fiber`, and `@react-three/drei` (approved dependencies for this milestone — see `package.json`).
+The hero property visual is a set of four locally-hosted, licensed photographs (`public/images/{home,airbnb,restaurant,office}-cleaning.webp`), rendered with `next/image`.
 
-- Use only one `<Canvas>` on the homepage
+- Use `next/image`, never a raw `<img>`, for the property photo
 
-- No `OrbitControls` and no free/gaming-style camera interaction — only a fixed professional angle with subtle pointer-based parallax
+- Fixed aspect-ratio container so switching property type causes no layout shift
 
-- No downloaded stock 3D models, textures, images, HDR files, or remote/environment assets — geometry and lighting are built locally (ambient, hemisphere, and directional lights only; no `Environment` presets)
+- `object-cover` for consistent framing across the four photos
 
-- Keep glass/physical materials restrained: `MeshPhysicalMaterial` only where it meaningfully improves quality (desktop window glass); replace transmission-heavy materials with simple transparent/standard materials on mobile
+- A real `sizes` attribute matched to the container's responsive width
 
-- Keep important text, buttons, and service controls (real HTML `<button>`s) outside the Canvas
+- `priority` only on the initial default (Home) image — never on images loaded after user interaction
 
-- Lazy-load the 3D experience (`next/dynamic`, `ssr: false`) behind a component that detects missing WebGL or a failed dynamic import and renders the static fallback instead of a blank canvas
+- Alt text must change with the selected property type
 
-- Provide a static, on-brand visual fallback if 3D cannot load
+- Keep all selector controls as real HTML `<button>`s outside the image
 
-- Reduce complexity on mobile devices (capped `dpr`, reduced/disabled shadows, no transmission materials)
+- One quote CTA in the hero (no duplicates); label switches between "Get Instant Quote" (Home/Airbnb) and "Request a Commercial Quote" (Restaurant/Office)
 
-- Respect the user's reduced-motion preference: disable pointer parallax and recurring/continuous animation; service-state transitions become instant
+- A mobile-only sticky bottom CTA linking to `#quote` is allowed, but must hide/step aside whenever the quote form or footer is in view — never cover form controls or footer content
 
-- Prefer `frameloop="demand"` (or equivalent) so the scene only renders on pointer movement, a service-selection change, or an in-progress purposeful transition — not continuously
+## Future: Advanced 3D Property
 
-- Avoid heavy particle effects
+An interactive/3D hero was prototyped and removed for Version 1 (too weak visually as procedural geometry, added WebGL/mobile-performance risk, and slowed launch). `three`, `@react-three/fiber`, and `@react-three/drei` are **not** installed in Version 1.
 
-- Avoid animations that block clicking or scrolling
+A future milestone may reintroduce a 3D hero, but only once:
 
-- Maintain good performance and readable contrast
+- A properly licensed (commercial-use verified), premium-quality GLB/GLTF asset has been sourced and approved — preview, source, price, license, polygon count, file size, and format must be shown before anything is downloaded or purchased
 
-- Do not add further 3D or animation dependencies until the implementation plan explains why they are required
+- The implementation plan explains why the added dependencies and complexity are justified over the Version 1 image-based hero
+
+Do not re-add 3D dependencies or components until that plan is approved.
 
 ## Technical Rules
 
