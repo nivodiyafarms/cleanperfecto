@@ -1,3 +1,4 @@
+import { SITE_CONTACT } from "@/lib/site-contact";
 import QuoteForm from "./QuoteForm";
 
 export default function QuoteSection() {
@@ -14,6 +15,15 @@ export default function QuoteSection() {
           <p className="mx-auto mt-2 max-w-xl text-sm text-muted">
             Pricing depends on property size, condition, service type, and
             frequency.
+          </p>
+          <p className="mx-auto mt-4 max-w-xl text-sm text-foreground">
+            Prefer to talk? Call or text{" "}
+            <a
+              href={SITE_CONTACT.phoneHref}
+              className="font-semibold text-foreground underline decoration-secondary decoration-2 underline-offset-2 transition-colors hover:text-secondary"
+            >
+              {SITE_CONTACT.phoneDisplay}
+            </a>
           </p>
         </div>
 

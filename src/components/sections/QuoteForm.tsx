@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useSelection } from "@/components/SelectionProvider";
 import { PROPERTY_TYPES, type PropertyTypeId } from "@/lib/property-types";
 import { SERVICES, type ServiceId } from "@/lib/services";
+import { SITE_CONTACT } from "@/lib/site-contact";
 import { submitQuoteRequest } from "@/lib/submitQuoteRequest";
 
 type Status = "idle" | "submitting" | "submitted";
@@ -41,11 +42,17 @@ export default function QuoteForm() {
         role="status"
         className="rounded-3xl border border-primary/30 bg-primary/10 p-10 text-center"
       >
-        <h3 className="text-xl font-semibold text-foreground">
-          Thanks — we&apos;ll be in touch
-        </h3>
+        <h3 className="text-xl font-semibold text-foreground">Thank you</h3>
         <p className="mt-2 text-muted">
-          Your request has been captured. Our team will follow up shortly.
+          We received your request and will contact you shortly. For
+          immediate help, call or text{" "}
+          <a
+            href={SITE_CONTACT.phoneHref}
+            className="font-semibold text-foreground underline decoration-secondary decoration-2 underline-offset-2 transition-colors hover:text-secondary"
+          >
+            {SITE_CONTACT.phoneDisplay}
+          </a>
+          .
         </p>
       </div>
     );

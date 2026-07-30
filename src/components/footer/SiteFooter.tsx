@@ -1,5 +1,6 @@
 import BrandLogo from "@/components/brand/BrandLogo";
 import { SERVICES } from "@/lib/services";
+import { SITE_CONTACT } from "@/lib/site-contact";
 
 export default function SiteFooter() {
   const year = new Date().getFullYear();
@@ -38,10 +39,18 @@ export default function SiteFooter() {
           <ul className="mt-3 space-y-2 text-sm text-background/70">
             <li>
               <a
-                href="mailto:hello@cleanperfecto.com"
+                href={SITE_CONTACT.phoneHref}
                 className="transition-colors hover:text-background"
               >
-                hello@cleanperfecto.com
+                {SITE_CONTACT.phoneDisplay}
+              </a>
+            </li>
+            <li>
+              <a
+                href={SITE_CONTACT.emailHref}
+                className="transition-colors hover:text-background"
+              >
+                {SITE_CONTACT.email}
               </a>
             </li>
           </ul>
