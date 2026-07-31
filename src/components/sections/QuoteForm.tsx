@@ -3,11 +3,12 @@
 import { useState, type FormEvent } from "react";
 import { useSelection } from "@/components/SelectionProvider";
 import { PROPERTY_TYPES, type PropertyTypeId } from "@/lib/property-types";
+import type { QuoteRequestPayload } from "@/lib/quote-request-types";
 import { SERVICES, type ServiceId } from "@/lib/services";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import { submitQuoteRequest } from "@/lib/submitQuoteRequest";
 
-type Status = "idle" | "submitting" | "submitted";
+type Status = "idle" | "submitting" | "submitted" | "error";
 
 const fieldClass =
   "w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/50";
@@ -19,21 +20,27 @@ export default function QuoteForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (status === "submitting") return;
     setStatus("submitting");
 
     const formData = new FormData(event.currentTarget);
-    await submitQuoteRequest({
+    const payload: QuoteRequestPayload = {
       name: String(formData.get("name") ?? ""),
       phone: String(formData.get("phone") ?? ""),
       email: String(formData.get("email") ?? ""),
+      zip: String(formData.get("zip") ?? ""),
       propertyType: String(formData.get("propertyType") ?? ""),
       serviceId: String(formData.get("serviceId") ?? ""),
-      zip: String(formData.get("zip") ?? ""),
       preferredDate: String(formData.get("preferredDate") ?? ""),
       message: String(formData.get("message") ?? ""),
-    });
+    };
 
-    setStatus("submitted");
+    try {
+      const result = await submitQuoteRequest(payload);
+      setStatus(result.ok ? "submitted" : "error");
+    } catch {
+      setStatus("error");
+    }
   }
 
   if (status === "submitted") {
@@ -146,6 +153,21 @@ export default function QuoteForm() {
         </label>
         <textarea id="message" name="message" rows={4} className={fieldClass} />
       </div>
+
+      {status === "error" && (
+        <div className="sm:col-span-2">
+          <p role="alert" className="text-sm text-red-600">
+            We could not submit your request. Please try again or call us at{" "}
+            <a
+              href={SITE_CONTACT.phoneHref}
+              className="font-semibold underline decoration-2 underline-offset-2"
+            >
+              {SITE_CONTACT.phoneDisplay}
+            </a>
+            .
+          </p>
+        </div>
+      )}
 
       <div className="sm:col-span-2">
         <button
