@@ -42,7 +42,7 @@ export default function StickyMobileCTA() {
         tabIndex={hidden ? -1 : undefined}
         className="flex w-full items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
       >
-        Get Instant Quote
+        Get My Cleaning Quote
       </a>
     </div>
   );

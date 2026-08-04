@@ -8,8 +8,7 @@ import PropertyTypeSelector from "./PropertyTypeSelector";
 import ServiceSelector from "./ServiceSelector";
 
 export default function HeroInteractive() {
-  const { propertyType, serviceId, hasInteracted, setPropertyType, setServiceId } =
-    useSelection();
+  const { propertyType, serviceId, setPropertyType, setServiceId } = useSelection();
 
   const activeProperty =
     PROPERTY_TYPES.find((type) => type.id === propertyType) ?? PROPERTY_TYPES[0];
@@ -25,10 +24,7 @@ export default function HeroInteractive() {
         onSelect={setPropertyType}
       />
 
-      <PropertyImage
-        property={activeProperty}
-        priority={propertyType === "home" && !hasInteracted}
-      />
+      <PropertyImage property={activeProperty} />
 
       <ServiceSelector
         services={SERVICES}
@@ -56,7 +52,7 @@ export default function HeroInteractive() {
           href="#quote"
           className="inline-flex items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
         >
-          {isCommercial ? "Request a Commercial Quote" : "Get Instant Quote"}
+          {isCommercial ? "Request a Commercial Quote" : "Get My Cleaning Quote"}
         </a>
         <p className="max-w-xs text-center text-xs text-muted sm:text-left">
           Pricing depends on property size, condition, service type, and

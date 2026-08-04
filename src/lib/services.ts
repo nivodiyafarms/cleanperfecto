@@ -14,7 +14,7 @@ export const SERVICES: Service[] = [
     id: "standard",
     name: "Standard Cleaning",
     description:
-      "A thorough refresh for everyday living — dusted, vacuumed, and polished from room to room.",
+      "Routine maintenance cleaning for spaces that are already regularly maintained.",
     included: [
       "Dusting & surface wipe-down",
       "Vacuuming & mopping",
@@ -28,26 +28,27 @@ export const SERVICES: Service[] = [
     id: "deep",
     name: "Deep Cleaning",
     description:
-      "An intensive, detail-first clean that reaches the spots everyday cleaning skips.",
+      "An intensive, detail-first clean for built-up dirt, grime, and areas that need extra attention.",
     included: [
-      "Inside oven & appliances",
-      "Cabinet interiors",
-      "Baseboards & trim",
-      "Bathroom deep scrub",
+      "Heavy grease & buildup",
+      "Baseboards, trim, corners & edges",
+      "Doors, frames, handles & switches",
+      "Detailed bathroom surfaces",
+      "Interior window refresh (up to 5 panes)",
     ],
     visualState:
-      "Detailed hotspots glow across the oven, cabinets, baseboards, and bathrooms.",
+      "Detailed hotspots glow across baseboards, doors, handles, and bathroom surfaces.",
   },
   {
     id: "move",
     name: "Move-In/Move-Out Cleaning",
     description:
-      "A complete reset for an empty property, ready for its next chapter.",
+      "A detailed reset for an empty property, ready for its next chapter.",
     included: [
-      "Full interior deep clean",
-      "Inside closets & cabinets",
-      "Window sills & tracks",
-      "Move-ready inspection",
+      "Empty-property deep clean",
+      "Inside closets",
+      "Detailed cabinet exteriors",
+      "Move-ready final walkthrough",
     ],
     visualState:
       "Furniture fades away, revealing a fully emptied and reset property.",

@@ -1,4 +1,4 @@
-@[AGENTS.md](http://AGENTS.md)
+@AGENTS.md
 
 # CleanPerfecto
 
@@ -32,35 +32,70 @@ Work only on the project foundation and public homepage.
 
 Do not implement the database, authentication, payments, booking, AI chatbot, or RAG yet.
 
-## Design Concept: Responsive Property Imagery
+## Approved Launch Direction (current source of truth)
 
-Version 1 (current, launch-ready) uses one primary hero visual: a responsive photograph (`next/image`) of the selected property type, swapped via the Property Type selector — Home, Airbnb, Restaurant, or Office. This replaced the earlier interactive-3D/WebGL hero, which was too weak visually and too heavy for a fast mobile-first launch.
+The sections below describe the **approved, owner-signed-off** launch implementation. Where anything here conflicts with older assumptions, this document wins — it reflects a deliberate decision, not a regression.
 
-- Property Type selector (Home / Airbnb / Restaurant / Office) controls which photo is shown
+## Hero: Cinematic Video Background
 
-- Cleaning Service selector (Standard / Deep / Move-In/Move-Out / Recurring) is kept separate and does not change the hero image — it feeds the quote request
+The approved launch hero is a full-width video-background hero — not a static property photograph and not a 3D/WebGL scene.
 
-- Service and property-type names must remain clear and immediately understandable
+Approved assets:
 
-- Do not use literal planets, invented names, gaming-style navigation, or visuals that make customers guess what each option means
+- `public/videos/cleanperfecto-hero.mp4`
+- `public/images/cleanperfecto-hero-poster.webp`
 
-- Alt text must change with the selected property type (accessibility, not decorative)
+Approved behavior:
 
-A future milestone may reintroduce an interactive/3D hero (see "Future: Advanced 3D Property" below) once a properly licensed, premium-quality asset is available — do not build that until then.
+- `autoplay`, `muted`, `loop`, `playsInline`, no visible controls
+- Local MP4 source (no external/CDN video dependency)
+- Poster image (`next/image`, `priority`) renders first and remains the fallback
+- `prefers-reduced-motion: reduce` shows the poster only — no video is mounted
+- Dark navy readability overlay/gradient over the video so hero text stays legible
+- Stable hero height (`min-h-[700px]`, `lg:h-[88vh] lg:min-h-[760px]`) — do not change this unless a new, measurable defect is found
+- Video remains visible on both desktop and mobile (not desktop-only)
+
+**Priority loading**: the hero poster is the only above-the-fold, priority-loaded media on the page. No other image on the homepage should carry `priority` or `fetchPriority="high"` — see "Property Selector" below.
+
+**Known asset caveat**: the current hero MP4 contains a visible Gemini/Veo-style generation sparkle watermark baked into the footage. This is accepted for the current launch — do not crop, blur, cover, or otherwise alter the video file to hide it, and do not block shipping on it. A properly licensed, watermark-free replacement should be sourced for a future revision; when that happens, source, license, price, and format should be presented before anything is downloaded or swapped in (same bar as the "Future: Advanced 3D Property" process below).
+
+## Property Selector: Second Conversion Step
+
+The property type selector, property photo, cleaning service selector, service summary, and quote CTA are **not** part of the hero. They live in their own section directly below it:
+
+**"Find the Right Cleaning Service"** (`CleaningServiceSelector` → renders `HeroInteractive`)
+
+- Property Type selector (Home / Airbnb / Restaurant / Office) controls which photo (`PropertyImage`, `next/image`) is shown
+- Cleaning Service selector (Standard / Deep / Move-In/Move-Out / Recurring) is kept separate and does not change the property photo — it feeds the quote request
+- The property photo is below-the-fold: it must render as a normal lazy-loaded image and must **not** be `priority` — only the hero poster/video is priority media on this page
+- Fixed aspect-ratio container (`aspect-square`) so switching property type causes no layout shift
+- `object-cover` for consistent framing across the four photos
+- A real `sizes` attribute matched to the container's responsive width
+- Alt text changes with the selected property type (accessibility, not decorative)
+- Keep all selector controls as real HTML `<button>`s outside the image
+- One quote CTA in this section; label switches between "Get My Cleaning Quote" (Home/Airbnb) and "Request a Commercial Quote" (Restaurant/Office)
+
+Service and property-type names must remain clear and immediately understandable. Do not use literal planets, invented names, gaming-style navigation, or visuals that make customers guess what each option means.
 
 ## Homepage Message
 
 The website should communicate the service within five seconds.
 
-Suggested hero direction:
+Hero direction:
 
 **From lived-in to perfectly clean.**
 
-Choose your space, customize your cleaning, and book in minutes.
+Professional cleaning for homes, Airbnbs, offices, restaurants, and more across DFW.
 
-The primary call to action should be:
+## Approved CTA Wording
 
-**Get Instant Quote**
+The site does not display a final instant price — pricing is confirmed before service, not shown instantly. CTA copy must reflect that:
+
+- Primary CTA (nav, sticky mobile bar, hero, property selector, starting prices): **"Get My Cleaning Quote"**
+- Commercial property types (Restaurant/Office) in the property selector: **"Request a Commercial Quote"**
+- Quote form section heading: **"Request Your Quote"**
+
+Do not use "Get Instant Quote," "Pricing appears in seconds," or any wording implying a price is calculated/shown instantly — no such feature exists. Do not change the underlying CTA links or form-submission behavior when updating copy.
 
 ## Brand Identity
 
@@ -79,7 +114,11 @@ Base CSS variables (defined in `src/app/globals.css`, adjustable there):
 
 No gold. No black-dominant or dark-space presentation.
 
-The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `public/logo-horizontal.svg`, `src/app/icon.svg`) is a minimal "C" formed from a smooth cleaning sweep with one sparkle, in the blue/turquoise identity. No circular text, no broom/hand illustration, no tagline inside the mark. Use "Where clean meets perfection" as a separate tagline where appropriate (e.g. footer).
+**Navbar branding**: compact `BrandLogo` icon (`src/components/brand/BrandLogo.tsx`) + business name text, current nav links, and the quote CTA. Do not squeeze the full stacked logo into the navbar.
+
+**Footer branding**: the full stacked logo image, `public/brand/cleanperfecto-logo-full.png`, rendered via `next/image` on a white rounded background for contrast against the dark footer. Approved alt text: `"CleanPerfecto — Where Clean Meets Perfection"`. The stacked logo already contains the tagline visually — do not also render a separate tagline line, and do not revert the footer to the icon-only `BrandLogo`.
+
+The `BrandLogo` component/icon (minimal "C" formed from a smooth cleaning sweep with one sparkle) remains the mark used everywhere else (navbar, favicon, `src/app/icon.svg`). No circular text, no broom/hand illustration, no tagline inside the mark itself.
 
 ## Design Requirements
 
@@ -95,15 +134,11 @@ The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `pu
 
 - Smooth but restrained animations
 
-- Strong mobile experience
-
-- Prominent “Get Instant Quote” button visible immediately
+- Prominent "Get My Cleaning Quote" button visible immediately
 
 - Clear service names and descriptions
 
-- One primary responsive property image instead of decorative 3D scenes
-
-- The hero image should react to property-type selection
+- One primary hero visual (cinematic video, see above) plus a dedicated below-hero property/service selector — not decorative 3D scenes
 
 - Keep all service controls as clear HTML buttons
 
@@ -125,65 +160,115 @@ The logo (`src/components/brand/BrandLogo.tsx`, plus `public/logo-icon.svg`, `pu
 
 - Do not sacrifice usability or conversion for visual effects
 
-## Proposed Homepage Sections
+- Consistent section vertical rhythm — see "Approved Section Spacing" below; do not let two adjacent sections each apply a full/large padding value on their shared edge
 
-1. Transparent premium navigation
+## Approved Homepage Section Order (Launch)
 
-2. Hero section with responsive property imagery
+1. Video Hero
+2. Find the Right Cleaning Service (property + service selector)
+3. Trust Indicators
+4. How It Works
+5. Services
+6. Standard vs. Deep Cleaning (service comparison)
+7. Starting Prices
+8. Property Specializations
+9. Service Area
+10. Quote Form
+11. Footer
 
-3. Clearly labeled service selector
+**Intentionally deferred** (not on the launch homepage — do not restore without a new decision):
 
-4. Trust indicators
+- Before/After transformation gallery
+- AI Cleaning Assistant preview
 
-5. How the cleaning process works
+## Approved Section Spacing
 
-6. Before-and-after transformation section
+The spacing audit corrected excessive/inconsistent whitespace between sections. Preserve these values; do not restore the old padding, and do not make further spacing changes for stylistic preference alone. Only touch Hero or Quote Form spacing if a new, measurable defect is found.
 
-7. Services and what is included
+| Section | Mobile | Tablet (`sm:`) | Desktop (`lg:`) |
+|---|---|---|---|
+| CleaningServiceSelector | `pt-10 pb-8` | `pt-12 pb-10` | `pt-14 pb-12` |
+| TrustIndicators (compact band) | `py-10` | `py-12` | `py-14` |
+| HowItWorks | `pt-10 pb-8` | `pt-12 pb-10` | `pt-14 pb-12` |
+| ServicesGrid | `pt-8 pb-8` | `pt-10 pb-10` | `pt-12 pb-12` |
+| ServiceComparison | `pt-10 pb-8` | `pt-12 pb-10` | `pt-14 pb-12` |
+| StartingPrices | `pt-10 pb-8` | `pt-12 pb-10` | `pt-14 pb-12` |
+| PropertySpecializations | `pt-8 pb-8` | `pt-10 pb-10` | `pt-12 pb-12` |
+| ServiceArea (compact band) | `py-10` | `py-12` | `py-14` |
 
-8. AI assistant preview
+Hero and Quote Form spacing are unchanged from their existing values and are not part of this system.
 
-9. Customer reviews
+## Approved Trust Indicators
 
-10. Service-area information
+- Residential & Commercial Cleaning — Homes, Airbnbs, offices, restaurants, and more
+- Serving DFW — Local cleaning across North Dallas communities
+- 24-Hour Make-It-Right Promise — We return for missed areas included in the agreed scope
+- Scope Confirmed Before Service — Your service details and final rate are confirmed in advance
 
-11. Final instant-quote call to action
+Do not require or restore unverified claims such as "5.0 Average Rating," "Insured & Bonded," "Satisfaction Guarantee," or "Background-Checked Team" — these are not currently substantiated.
 
-12. Professional footer
+## Approved How It Works Wording
 
-## Property Visuals (Version 1)
+1. **Request your quote** — Tell us about your space, service needs, and preferred date.
+2. **Confirm your scope and rate** — We confirm the cleaning scope, final rate, and service date.
+3. **We clean, you relax** — Our cleaning team completes the agreed cleaning scope.
 
-The hero property visual is a set of four locally-hosted, licensed photographs (`public/images/{home,airbnb,restaurant,office}-cleaning.webp`), rendered with `next/image`.
+## Approved Business Offers
 
-- Use `next/image`, never a raw `<img>`, for the property photo
+- 40% Off Your First Cleaning — applies across all cleaning service types
+- Fixed rate — available after the first service
+- Save 20% when scheduling 6+ recurring cleanings — applies to the qualifying recurring package itself; it is **not** 20% off the next single cleaning, not a reward earned only after six completed services, and not a replacement for loyalty pricing
+- 24-Hour Make-It-Right Promise
 
-- Fixed aspect-ratio container so switching property type causes no layout shift
+## Approved Service Catalog (`src/lib/services.ts`)
 
-- `object-cover` for consistent framing across the four photos
+**Standard Cleaning** — "Routine maintenance cleaning for spaces that are already regularly maintained."
 
-- A real `sizes` attribute matched to the container's responsive width
+**Deep Cleaning** — "An intensive, detail-first clean for built-up dirt, grime, and areas that need extra attention." Includes: heavy grease and buildup, baseboards/trim/corners/edges, doors/frames/handles/switches, detailed bathroom surfaces, interior window refresh for up to 5 reachable panes.
 
-- `priority` only on the initial default (Home) image — never on images loaded after user interaction
+- Window wording must stay positively framed: "Interior window refresh for up to 5 reachable panes," with supporting copy "Additional window detailing is available by quote." Never phrase this as "only five panes," "the first five panes," or "not included after five panes."
+- Scope note (service comparison section): "Exact scope is confirmed before service. Tracks, screens, exterior glass, and high or unsafe windows require a separate quote."
 
-- Alt text must change with the selected property type
+**Move-In/Move-Out Cleaning** — "A detailed reset for an empty property, ready for its next chapter." Includes: empty-property deep clean, inside closets, detailed cabinet exteriors, move-ready final walkthrough. Inside cabinets/drawers remain a paid add-on (not automatically included); detailed window tracks are available by quote.
 
-- Keep all selector controls as real HTML `<button>`s outside the image
+**Recurring Cleaning** — included list must read exactly: Flexible scheduling, Consistent cleaning team, **Priority booking**, **Loyalty pricing**. These two are approved, standing recurring-plan perks and must not be removed or swapped out (the "Save 20% on 6+ visits" offer is communicated separately via the hero benefits strip, not by replacing these bullets).
 
-- One quote CTA in the hero (no duplicates); label switches between "Get Instant Quote" (Home/Airbnb) and "Request a Commercial Quote" (Restaurant/Office)
+**Add-ons**:
 
-- A mobile-only sticky bottom CTA linking to `#quote` is allowed, but must hide/step aside whenever the quote form or footer is in view — never cover form controls or footer content
+- Priced: Inside Oven ($35), Inside Refrigerator ($35), Inside Cabinets and Drawers (starting at $40), Pet Hair Treatment (starting at $20)
+- Available without a published price: Carpet Shampooing, Heavy Organization, additional interior window detailing
+- Heavy grease and buildup is part of Deep Cleaning, not an add-on
+
+## Approved Starting Prices
+
+| Property | Standard | Deep |
+|---|---|---|
+| Studio / 1 Bath Apartment | From $109 | From $169 |
+| 1 Bedroom / 1 Bath Apartment | From $129 | From $199 |
+| 2 Bedroom / 2 Bath Apartment or Home | From $149 | From $229 |
+| 3 Bedroom / 2 Bath Home | From $179 | From $279 |
+| 4+ Bedrooms or Large Homes | From $209 | From $329 |
+| Move-In / Move-Out Cleaning | From $199 | — |
+
+Disclaimer (must stay attached to these prices): "Starting prices are estimates. Final pricing depends on property size, condition, cleaning type, requested scope, add-ons, and service frequency. Your final rate will be confirmed before service."
+
+## Approved Service Area
+
+Frisco, Plano, Lewisville, Richardson, McKinney, and nearby DFW communities.
+
+Wording: "Serving Frisco, Plano, Lewisville, Richardson, McKinney, and nearby DFW communities. Contact us to confirm availability for your address."
 
 ## Future: Advanced 3D Property
 
-An interactive/3D hero was prototyped and removed for Version 1 (too weak visually as procedural geometry, added WebGL/mobile-performance risk, and slowed launch). `three`, `@react-three/fiber`, and `@react-three/drei` are **not** installed in Version 1.
+An interactive/3D hero was prototyped and removed early in the project for being too weak visually as procedural geometry and too heavy for mobile performance. The current video hero (see above) is the approved launch direction in its place. `three`, `@react-three/fiber`, and `@react-three/drei` are **not** installed.
 
-A future milestone may reintroduce a 3D hero, but only once:
+A future milestone may revisit a 3D hero, but only once:
 
 - A properly licensed (commercial-use verified), premium-quality GLB/GLTF asset has been sourced and approved — preview, source, price, license, polygon count, file size, and format must be shown before anything is downloaded or purchased
 
-- The implementation plan explains why the added dependencies and complexity are justified over the Version 1 image-based hero
+- The implementation plan explains why the added dependencies and complexity are justified over the current video hero
 
-Do not re-add 3D dependencies or components until that plan is approved.
+Do not add 3D dependencies or components until that plan is approved.
 
 ## Technical Rules
 
@@ -213,6 +298,8 @@ Do not re-add 3D dependencies or components until that plan is approved.
 
 - Provide reduced-motion and mobile fallbacks for animations
 
+- Only the true above-the-fold hero media may use `priority` / `fetchPriority="high"` on `next/image` — all other images, including the below-the-fold property selector photo, must lazy-load normally
+
 - Run lint and production build before declaring work complete
 
 - Do not implement backend functionality during the homepage milestone
@@ -240,6 +327,16 @@ Future milestones may use:
 - Vercel
 
 Do not add these integrations during the current homepage milestone.
+
+## Production-Protected Systems
+
+These are live/working and must not be modified as a side effect of homepage or content work — changes here require an explicit, separate request:
+
+- Quote form submission behavior and `submitQuoteRequest.ts`
+- Supabase clients, tables, migrations, and permissions
+- Resend configuration and admin/customer notification emails
+- Environment variables
+- Payment, booking, and pricing-calculator logic (none of this exists yet in the current milestone — do not add it)
 
 ## Development Workflow
 

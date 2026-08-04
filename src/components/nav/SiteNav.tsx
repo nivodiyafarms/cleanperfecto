@@ -18,7 +18,7 @@ export default function SiteNav() {
           <BrandLogo id="cp-logo-nav" />
         </a>
 
-        <div className="hidden items-center gap-8 text-sm text-muted md:flex">
+        <div className="hidden items-center gap-8 text-sm text-muted lg:flex">
           {NAV_LINKS.map((link) => (
             <a
               key={link.href}
@@ -32,9 +32,9 @@ export default function SiteNav() {
 
         <a
           href="#quote"
-          className="inline-flex items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+          className="inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
         >
-          Get Instant Quote
+          Get My Cleaning Quote
         </a>
       </nav>
     </header>

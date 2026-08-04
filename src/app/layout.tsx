@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "CleanPerfecto — Premium Cleaning, Perfectly Delivered",
   description:
-    "Instant quotes for residential and commercial cleaning. Choose your service, customize your clean, and book in minutes.",
+    "Professional residential and commercial cleaning quotes. Choose your service, customize your clean, and request a quote in minutes.",
 };
 
 export default function RootLayout({
