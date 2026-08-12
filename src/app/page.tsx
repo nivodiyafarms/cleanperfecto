@@ -13,6 +13,13 @@ import ServiceArea from "@/components/sections/ServiceArea";
 import QuoteSection from "@/components/sections/QuoteSection";
 import SiteFooter from "@/components/footer/SiteFooter";
 
+// The first-cleaning offer badge transitions from 30% to 25% automatically
+// based on server time (src/lib/offers/first-cleaning-offer.ts). Real
+// visitors get this instantly client-side, but without periodic
+// regeneration a statically-cached page would keep serving build-time
+// offer copy to non-JS clients/crawlers past the deadline.
+export const revalidate = 3600;
+
 export default function Home() {
   return (
     <SelectionProvider>

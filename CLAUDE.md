@@ -215,7 +215,10 @@ Do not require or restore unverified claims such as "5.0 Average Rating," "Insur
 
 ## Approved Business Offers
 
-- 40% Off Your First Cleaning — applies across all cleaning service types
+- **Launch Month Offer** — 30% Off Your First Cleaning, applies across all cleaning service types. Active through August 31, 2026 at 11:59:59 PM America/Chicago, shown with an accessible countdown near the promotional message.
+- **Standard First-Cleaning Offer** — 25% Off Your First Cleaning, applies across all cleaning service types. Takes effect automatically at September 1, 2026 12:00:00 AM America/Chicago and remains active until CleanPerfecto explicitly changes it again.
+- The transition between these two offers is time-based and automatic — it must not require a redeploy. The single source of truth is `getActiveFirstCleaningOffer` in `src/lib/offers/first-cleaning-offer.ts`; do not hardcode `30`, `25`, or the deadline anywhere else, including in a future quote calculator, server-side pricing logic, or emails.
+- This offer engine currently only controls customer-facing marketing copy (hero badge + countdown). It does **not** yet enforce first-cleaning eligibility or calculate a real discount on a quote — no pricing calculator or customer-eligibility service exists yet (see Current Milestone). Do not assume the displayed percentage is applied to any actual quote until that work is separately approved and implemented.
 - Fixed rate — available after the first service
 - Save 20% when scheduling 6+ recurring cleanings — applies to the qualifying recurring package itself; it is **not** 20% off the next single cleaning, not a reward earned only after six completed services, and not a replacement for loyalty pricing
 - 24-Hour Make-It-Right Promise

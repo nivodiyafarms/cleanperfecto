@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { SITE_CONTACT } from "@/lib/site-contact";
+import FirstCleaningOfferBadge from "./FirstCleaningOfferBadge";
 import HeroVideoBackground from "./HeroVideoBackground";
 
 function TagIcon() {
@@ -76,19 +77,7 @@ export default function Hero() {
 
       <div className="relative mx-auto w-full max-w-7xl">
         <div className="max-w-xl text-left">
-          <div className="inline-flex items-center gap-3 rounded-2xl border border-primary/40 bg-foreground/50 px-4 py-2.5 backdrop-blur-sm sm:gap-4 sm:px-5 sm:py-3">
-            <span className="text-2xl leading-none font-bold text-primary sm:text-3xl">
-              40% OFF
-            </span>
-            <span className="flex flex-col leading-tight">
-              <span className="text-sm font-semibold text-white">
-                Your First Cleaning
-              </span>
-              <span className="text-xs text-white/70">
-                New customers &middot; All cleaning service types
-              </span>
-            </span>
-          </div>
+          <FirstCleaningOfferBadge nowIso={new Date().toISOString()} />
 
           <h1 className="mt-6 text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl lg:text-6xl">
             From lived-in to{" "}
