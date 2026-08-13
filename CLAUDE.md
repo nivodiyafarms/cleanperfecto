@@ -215,10 +215,10 @@ Do not require or restore unverified claims such as "5.0 Average Rating," "Insur
 
 ## Approved Business Offers
 
-- **Launch Month Offer** — 30% Off Your First Cleaning, applies across all cleaning service types. Active through August 31, 2026 at 11:59:59 PM America/Chicago, shown with an accessible countdown near the promotional message.
-- **Standard First-Cleaning Offer** — 25% Off Your First Cleaning, applies across all cleaning service types. Takes effect automatically at September 1, 2026 12:00:00 AM America/Chicago and remains active until CleanPerfecto explicitly changes it again.
-- The transition between these two offers is time-based and automatic — it must not require a redeploy. The single source of truth is `getActiveFirstCleaningOffer` in `src/lib/offers/first-cleaning-offer.ts`; do not hardcode `30`, `25`, or the deadline anywhere else, including in a future quote calculator, server-side pricing logic, or emails.
-- This offer engine currently only controls customer-facing marketing copy (hero badge + countdown). It does **not** yet enforce first-cleaning eligibility or calculate a real discount on a quote — no pricing calculator or customer-eligibility service exists yet (see Current Milestone). Do not assume the displayed percentage is applied to any actual quote until that work is separately approved and implemented.
+- **Launch Month Offer** — Up to 30% Off Your First Cleaning, applies across all cleaning service types. Active through August 31, 2026 at 11:59:59 PM America/Chicago, shown with an accessible countdown near the promotional message and a "$99 minimum service total applies" note. The "Up to" qualifier is required — the $99 minimum can reduce the effective discount on smaller jobs below the advertised percentage.
+- **Standard First-Cleaning Offer** — Up to 25% Off Your First Cleaning, applies across all cleaning service types. Takes effect automatically at September 1, 2026 12:00:00 AM America/Chicago and remains active until CleanPerfecto explicitly changes it again. The Launch Month countdown and "Launch Month Special" copy disappear once this offer takes over; the "$99 minimum service total applies" note remains.
+- The transition between these two offers is time-based and automatic — it must not require a redeploy. The single source of truth is `getActiveFirstCleaningOffer` in `src/lib/offers/first-cleaning-offer.ts`; do not hardcode `30`, `25`, or the deadline anywhere else, including in the quote calculator, server-side pricing logic, or emails.
+- The pure pricing-engine architecture (`src/lib/pricing/`, see "Approved Instant Quote Calculator" below) reuses this offer helper for its own calculations, but it is **not yet wired into the production `QuoteForm`, booking, or payment flow**, and no customer-eligibility service exists yet (see Current Milestone). Do not assume the displayed percentage is applied to any actual quote until that integration is separately approved and implemented.
 - Fixed rate — available after the first service
 - Save 20% when scheduling 6+ recurring cleanings — applies to the qualifying recurring package itself; it is **not** 20% off the next single cleaning, not a reward earned only after six completed services, and not a replacement for loyalty pricing
 - 24-Hour Make-It-Right Promise
@@ -254,6 +254,51 @@ Do not require or restore unverified claims such as "5.0 Average Rating," "Insur
 | Move-In / Move-Out Cleaning | From $199 | — |
 
 Disclaimer (must stay attached to these prices): "Starting prices are estimates. Final pricing depends on property size, condition, cleaning type, requested scope, add-ons, and service frequency. Your final rate will be confirmed before service."
+
+## Approved Instant Quote Calculator (Pricing Engine)
+
+A pure, deterministic pricing engine exists at `src/lib/pricing/` (`types.ts`, `config.ts`, `zip-travel.ts`, `supplies-equipment.ts`, `square-footage.ts`, `room-adjustments.ts`, `add-ons.ts`, `discount-program.ts`, `calculate-estimate.ts`), fully unit-tested. It is **not yet wired into the production `QuoteForm`, homepage, or booking flow** — see Current Milestone and Production-Protected Systems. The rules below are the owner-approved calculation rules already implemented; do not re-derive or invent different values elsewhere.
+
+**Condition multipliers** (`CONDITION_MULTIPLIERS` in `src/lib/pricing/config.ts`):
+
+| Condition | Standard | Deep |
+|---|---|---|
+| Light | 1.00 | 1.00 |
+| Moderate | 1.00 | 1.00 |
+| Heavy | 1.15 | 1.15 |
+| Extensive | Unavailable — Deep Cleaning required | 1.20 |
+
+Move-In/Move-Out Cleaning uses the same condition multipliers as Deep Cleaning.
+
+**Customer-facing estimate ranges** (`RANGE_MULTIPLIERS`), applied to the server-calculated total — never a single exact price:
+
+- Light — up to +5%
+- Moderate — up to +7%
+- Heavy — up to +10%
+- Extensive Deep — up to +15%
+
+Ranges round up to clean $5 increments; the lower bound is never rounded below the actual calculated amount, and never below $99.
+
+**Recurring cleaning pricing** (`RECURRING_MULTIPLIERS`):
+
+- Weekly — 21% lower
+- Biweekly — 14% lower
+- Monthly — 7% lower
+
+**6+ prepaid recurring package**: an additional 20% discount, applied sequentially *after* recurring-cycle pricing (e.g. weekly: 0.79 × 0.80 = 0.632, a 36.8% effective saving) — never added to the recurring percentage. The first-cleaning offer does not stack with the 6+ prepaid package; on a first visit that is not yet a 6+ prepaid package, the engine applies whichever of the first-cleaning offer or the plain recurring-cycle rate benefits the customer more, never both.
+
+**$99 minimum**: the final price after the first-cleaning offer (or any other applicable discount) can never fall below $99. This is enforced server-side in `calculate-estimate.ts`, not merely display copy.
+
+**Manual-quote add-ons** (no invented dollar amount; preserved on the request for manual follow-up): Carpet Shampooing, Heavy Organization, Additional Interior Window Detailing, Boxing & Packing.
+
+**Unresolved production configuration** — intentionally empty/unconfigured until the owner supplies approved values; the engine returns a typed manual-review result rather than guessing:
+
+- ZIP → travel percentage table (`src/lib/pricing/zip-travel.ts`)
+- Supplies/equipment charges by service type × size tier (`src/lib/pricing/supplies-equipment.ts`)
+- Square-footage bands and multipliers (`src/lib/pricing/square-footage.ts`)
+- Room-adjustment charges — additional bedroom / full-bath / half-bath (`src/lib/pricing/room-adjustments.ts`)
+
+Do not add values to these four until they are separately approved.
 
 ## Approved Service Area
 
