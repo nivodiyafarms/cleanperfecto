@@ -1,31 +1,53 @@
 import { SIZE_TIER_BASELINE_ROOMS } from "./config";
-import type { RoomCounts, SizeTier } from "./types";
+import type { CleaningType, RoomCounts, SizeTier } from "./types";
 
-export interface RoomAdjustmentConfig {
+export interface RoomAdjustmentRates {
   additionalBedroomCharge: number | null;
   additionalFullBathroomCharge: number | null;
   additionalHalfBathroomCharge: number | null;
 }
+
+/** Keyed by CleaningType — Standard's rates differ from Deep/Move-In-Out's (owner-approved 2026-08-13). */
+export type RoomAdjustmentConfig = Record<CleaningType, RoomAdjustmentRates>;
 
 export type RoomAdjustmentResult =
   | { configured: true; amount: number }
   | { configured: false; reason: "ROOM_ADJUSTMENT_NOT_CONFIGURED" };
 
 /**
- * Production room-adjustment charges — intentionally unconfigured (all
- * null) until approved (owner message 2026-08-12, item 5). A customer whose
- * actual room counts fit within (or below) their size tier's baseline never
- * needs this config at all — it only matters once extra rooms are reported.
- * Tests must inject their own fixture via the `config` parameter, never this
- * constant.
+ * Production room-adjustment charges, owner-approved 2026-08-13. Move-In/
+ * Move-Out shares Deep Cleaning's rates (CLAUDE.md "Move-In / Move-Out
+ * Caution" — no separate Move-specific room-adjustment table was approved).
+ * A customer whose actual room counts fit within (or below) their size
+ * tier's baseline never needs this config at all — it only matters once
+ * extra rooms are reported.
  */
 export const ROOM_ADJUSTMENT_CONFIG: RoomAdjustmentConfig = {
-  additionalBedroomCharge: null,
-  additionalFullBathroomCharge: null,
-  additionalHalfBathroomCharge: null,
+  standard: {
+    additionalBedroomCharge: 20,
+    additionalFullBathroomCharge: 25,
+    additionalHalfBathroomCharge: 12.5,
+  },
+  deep: {
+    additionalBedroomCharge: 25,
+    additionalFullBathroomCharge: 30,
+    additionalHalfBathroomCharge: 15,
+  },
+  move: {
+    additionalBedroomCharge: 25,
+    additionalFullBathroomCharge: 30,
+    additionalHalfBathroomCharge: 15,
+  },
 };
 
+/**
+ * Deterministic: the same (cleaningType, sizeTier, rooms) always resolves to
+ * the same amount for a given config. An adjustment that's needed but
+ * unconfigured returns a typed manual-review reason rather than a guessed
+ * amount.
+ */
 export function getRoomAdjustment(
+  cleaningType: CleaningType,
   sizeTier: SizeTier,
   rooms: RoomCounts | undefined,
   config: RoomAdjustmentConfig = ROOM_ADJUSTMENT_CONFIG
@@ -43,19 +65,21 @@ export function getRoomAdjustment(
     return { configured: true, amount: 0 };
   }
 
+  const rates = config[cleaningType];
+
   const missingConfig =
-    (extraBedrooms > 0 && config.additionalBedroomCharge === null) ||
-    (extraFullBaths > 0 && config.additionalFullBathroomCharge === null) ||
-    (extraHalfBaths > 0 && config.additionalHalfBathroomCharge === null);
+    (extraBedrooms > 0 && rates.additionalBedroomCharge === null) ||
+    (extraFullBaths > 0 && rates.additionalFullBathroomCharge === null) ||
+    (extraHalfBaths > 0 && rates.additionalHalfBathroomCharge === null);
 
   if (missingConfig) {
     return { configured: false, reason: "ROOM_ADJUSTMENT_NOT_CONFIGURED" };
   }
 
   const amount =
-    extraBedrooms * (config.additionalBedroomCharge ?? 0) +
-    extraFullBaths * (config.additionalFullBathroomCharge ?? 0) +
-    extraHalfBaths * (config.additionalHalfBathroomCharge ?? 0);
+    extraBedrooms * (rates.additionalBedroomCharge ?? 0) +
+    extraFullBaths * (rates.additionalFullBathroomCharge ?? 0) +
+    extraHalfBaths * (rates.additionalHalfBathroomCharge ?? 0);
 
   return { configured: true, amount };
 }

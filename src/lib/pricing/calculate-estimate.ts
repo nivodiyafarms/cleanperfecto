@@ -1,35 +1,34 @@
 import { getActiveFirstCleaningOffer } from "@/lib/offers/first-cleaning-offer";
 import { classifyAddOns } from "./add-ons";
-import {
-  BASE_PRICES,
-  CONDITION_MULTIPLIERS,
-  MINIMUM_SERVICE_TOTAL,
-  MOVE_BASE_PRICE,
-  PRICING_VERSION,
-  RANGE_MULTIPLIERS,
-  RANGE_ROUNDING_INCREMENT,
-} from "./config";
+import { BASE_PRICES, CONDITION_MULTIPLIERS, MINIMUM_SERVICE_TOTAL, MOVE_BASE_PRICE, PRICING_VERSION } from "./config";
 import { chooseCleaningServiceDiscount } from "./discount-program";
+import { buildEstimateRange } from "./estimate-range";
+import { roundToCents } from "./money";
 import { getRoomAdjustment, ROOM_ADJUSTMENT_CONFIG, type RoomAdjustmentConfig } from "./room-adjustments";
-import { getSquareFootageMultiplier, SQUARE_FOOTAGE_CONFIG, type SquareFootageBand } from "./square-footage";
 import {
+  getSquareFootageMultiplier,
+  resolveDefaultSquareFeet,
+  SQUARE_FOOTAGE_CONFIG,
+  type SquareFootageBand,
+} from "./square-footage";
+import {
+  AIRBNB_SUPPLIES_CONFIG,
+  getAirbnbSuppliesCharge,
   getSuppliesEquipmentCharge,
   SUPPLIES_EQUIPMENT_CONFIG,
+  type AirbnbSuppliesRule,
   type SuppliesEquipmentRule,
 } from "./supplies-equipment";
 import type { CalculationInput, CalculationResult, ManualReviewReasonCode } from "./types";
 import { getZipTravelRule, ZIP_TRAVEL_CONFIG, type ZipTravelRule } from "./zip-travel";
 
-/** Injectable config bundle — defaults to (currently unconfigured) production config; tests override with isolated fixtures. */
+/** Injectable config bundle — defaults to production config; tests override with isolated fixtures. */
 export interface PricingConfigOverrides {
   zipTravelConfig?: ZipTravelRule[];
   suppliesEquipmentConfig?: SuppliesEquipmentRule[];
+  airbnbSuppliesConfig?: AirbnbSuppliesRule[];
   squareFootageConfig?: SquareFootageBand[];
   roomAdjustmentConfig?: RoomAdjustmentConfig;
-}
-
-function roundUpToIncrement(value: number, increment: number): number {
-  return Math.ceil(value / increment) * increment;
 }
 
 function manualReviewResult(
@@ -53,6 +52,7 @@ function manualReviewResult(
     conditionMultiplier: 0,
     cleaningSubtotal: 0,
     frequency: input.frequency,
+    visitCount: input.visitCount,
     discountProgram: "none",
     recurringAdjustment: 0,
     packageDiscount: 0,
@@ -64,11 +64,17 @@ function manualReviewResult(
     pricedAddOns: [],
     pricedAddOnsTotal: 0,
     manualQuoteAddOns: [],
+    packageAddOnsTotal: 0,
+    packagePricedAddOns: [],
+    packageManualQuoteAddOns: [],
     activeFirstCleaningOfferPercent: null,
     firstCleaningEligible: input.firstCleaningEligible,
     firstCleaningDiscount: 0,
     preDiscountTotal: 0,
     calculatedTotal: 0,
+    hasStartingAtPricing: false,
+    prepaidPackageTotal: null,
+    effectivePricePerVisit: null,
     minimumServiceTotalApplied: false,
     range: null,
     recommendedService,
@@ -116,17 +122,23 @@ export function calculateEstimate(
   const manualReviewReasons: ManualReviewReasonCode[] = [];
 
   const roomAdjustmentConfig = overrides.roomAdjustmentConfig ?? ROOM_ADJUSTMENT_CONFIG;
-  const roomAdjustmentResult = getRoomAdjustment(input.sizeTier, input.rooms, roomAdjustmentConfig);
+  const roomAdjustmentResult = getRoomAdjustment(
+    input.cleaningType,
+    input.sizeTier,
+    input.rooms,
+    roomAdjustmentConfig
+  );
   const roomAdjustmentConfigured = roomAdjustmentResult.configured;
   const roomAdjustments = roomAdjustmentResult.configured ? roomAdjustmentResult.amount : 0;
   if (!roomAdjustmentResult.configured) {
     manualReviewReasons.push(roomAdjustmentResult.reason);
   }
 
+  const squareFootageConfig = overrides.squareFootageConfig ?? SQUARE_FOOTAGE_CONFIG;
+
   let squareFootageMultiplier = 1;
   let squareFootageConfigured = true;
   if (input.squareFeet !== undefined) {
-    const squareFootageConfig = overrides.squareFootageConfig ?? SQUARE_FOOTAGE_CONFIG;
     const sqftResult = getSquareFootageMultiplier(input.sizeTier, input.squareFeet, squareFootageConfig);
     if (sqftResult.configured) {
       squareFootageMultiplier = sqftResult.multiplier;
@@ -162,24 +174,88 @@ export function calculateEstimate(
     manualReviewReasons.push(travelResult.reason);
   }
 
+  // Supplies/equipment is banded by square footage, not size tier — use the
+  // customer's actual square footage when given, otherwise fall back to the
+  // size tier's own included allowance (never an invented number). Airbnb
+  // has its own sq-ft-only schedule, independent of the selected cleaning
+  // type — see AIRBNB_SUPPLIES_CONFIG.
   const suppliesEquipmentConfig = overrides.suppliesEquipmentConfig ?? SUPPLIES_EQUIPMENT_CONFIG;
-  const suppliesResult = getSuppliesEquipmentCharge(
-    input.cleaningType,
-    input.sizeTier,
-    suppliesEquipmentConfig
-  );
+  const airbnbSuppliesConfig = overrides.airbnbSuppliesConfig ?? AIRBNB_SUPPLIES_CONFIG;
+  const effectiveSquareFeet = input.squareFeet ?? resolveDefaultSquareFeet(input.sizeTier, squareFootageConfig);
+  const suppliesResult: ReturnType<typeof getSuppliesEquipmentCharge> =
+    effectiveSquareFeet === null
+      ? { configured: false, reason: "SUPPLIES_EQUIPMENT_NOT_CONFIGURED" }
+      : input.propertyKind === "airbnb"
+        ? getAirbnbSuppliesCharge(effectiveSquareFeet, airbnbSuppliesConfig)
+        : getSuppliesEquipmentCharge(input.cleaningType, effectiveSquareFeet, suppliesEquipmentConfig);
   const suppliesEquipmentConfigured = suppliesResult.configured;
   const suppliesEquipmentCharge = suppliesResult.configured ? suppliesResult.amount : 0;
   if (!suppliesResult.configured) {
     manualReviewReasons.push(suppliesResult.reason);
   }
 
-  const { priced: pricedAddOns, pricedTotal: pricedAddOnsTotal, manual: manualQuoteAddOns } = classifyAddOns(
-    input.addOnIds
-  );
-  if (manualQuoteAddOns.length > 0) {
-    manualReviewReasons.push("MANUAL_QUOTE_ADD_ON_SELECTED");
+  // Add-ons belong to INDIVIDUAL VISITS, owner-approved 2026-08-13. A
+  // prepaid package has no single "once per quote" add-on charge — each of
+  // its visits may carry its own selection, and the same add-on chosen on
+  // two different visits must count twice, never inferred, never
+  // multiplied across every visit automatically. `addOnIds` (a single flat
+  // list) only has a valid meaning for a one-off request; for a package,
+  // per-visit assignment comes from `visitAddOns` instead — see
+  // packageAddOnsTotal/packageManualQuoteAddOns below.
+  const isPackage = discountProgram === "prepaid_package";
+
+  let pricedAddOns: CalculationResult["pricedAddOns"] = [];
+  let pricedAddOnsTotal = 0;
+  let manualQuoteAddOns: CalculationResult["manualQuoteAddOns"] = [];
+  let packageAddOnsTotal = 0;
+  const packageManualQuoteAddOns: CalculationResult["packageManualQuoteAddOns"] = [];
+  const packagePricedAddOns: CalculationResult["packagePricedAddOns"] = [];
+
+  if (isPackage) {
+    const visitAddOns = input.visitAddOns;
+    if (visitAddOns && visitAddOns.length > 0) {
+      visitAddOns.forEach((addOnIdsForVisit, index) => {
+        const visitNumber = index + 1;
+        const classified = classifyAddOns(addOnIdsForVisit);
+        packageAddOnsTotal += classified.pricedTotal;
+        // Keep each visit's own priced add-ons — including pricingKind —
+        // rather than collapsing to a bare number. Losing "starting_at"
+        // here would let a non-guaranteed estimate masquerade as an exact
+        // payable total once summed into packageAddOnsTotal/prepaidPackageTotal.
+        for (const priced of classified.priced) {
+          packagePricedAddOns.push({ ...priced, visitNumber });
+        }
+        for (const manual of classified.manual) {
+          packageManualQuoteAddOns.push({ ...manual, visitNumber });
+        }
+      });
+      if (packageManualQuoteAddOns.length > 0) {
+        manualReviewReasons.push("MANUAL_QUOTE_ADD_ON_SELECTED");
+      }
+    } else if (input.addOnIds.length > 0) {
+      // Add-ons were submitted but there's no visit assignment to attribute
+      // them to — the engine never infers which visit(s) receive them.
+      manualReviewReasons.push("ADD_ON_VISIT_ASSIGNMENT_REQUIRED");
+    }
+  } else {
+    const classified = classifyAddOns(input.addOnIds);
+    pricedAddOns = classified.priced;
+    pricedAddOnsTotal = classified.pricedTotal;
+    manualQuoteAddOns = classified.manual;
+    if (manualQuoteAddOns.length > 0) {
+      manualReviewReasons.push("MANUAL_QUOTE_ADD_ON_SELECTED");
+    }
   }
+
+  // True whenever any add-on contributing to the returned total(s) is
+  // "starting_at" rather than "fixed" — a caller (future UI/payment code)
+  // must check this before treating calculatedTotal/preDiscountTotal (or,
+  // for a package, prepaidPackageTotal/effectivePricePerVisit) as an
+  // authoritative guaranteed payable amount. A starting-at minimum is a
+  // floor, not a promise.
+  const hasStartingAtPricing = isPackage
+    ? packagePricedAddOns.some((addOn) => addOn.pricingKind === "starting_at")
+    : pricedAddOns.some((addOn) => addOn.pricingKind === "starting_at");
 
   const preDiscountTotal = cleaningSubtotal + travelCharge + suppliesEquipmentCharge + pricedAddOnsTotal;
 
@@ -202,7 +278,29 @@ export function calculateEstimate(
     packageDiscount *= scale;
   }
 
-  const calculatedTotal = Math.max(MINIMUM_SERVICE_TOTAL, preDiscountTotal - actualDiscountTotal);
+  // Raw (unrounded) per-visit price — kept at full precision because it
+  // feeds the package-total multiplication below; rounding it first would
+  // compound cent-level error across visitCount. calculatedTotal (the
+  // public field) is the rounded, authoritative version of this same
+  // figure. In package mode pricedAddOnsTotal is always 0 (add-ons are
+  // per-visit, tracked separately in packageAddOnsTotal), so this is purely
+  // the cleaning+travel+supplies portion, identical every visit.
+  const rawCalculatedTotal = Math.max(MINIMUM_SERVICE_TOTAL, preDiscountTotal - actualDiscountTotal);
+  const calculatedTotal = roundToCents(rawCalculatedTotal);
+
+  // Only the prepaid package has a fixed, known visit count the customer
+  // commits to and pays for upfront, so only it gets a meaningful "total
+  // for all visits" — ordinary open-ended recurring pricing does not.
+  // Round once, at the very end, over the full-precision sum — never round
+  // the per-visit or per-add-on components first.
+  const prepaidPackageTotal = isPackage
+    ? roundToCents(rawCalculatedTotal * input.visitCount + packageAddOnsTotal)
+    : null;
+
+  // Reporting convenience only — an average, not a literal per-visit price,
+  // since individual visits can carry different add-ons.
+  const effectivePricePerVisit =
+    prepaidPackageTotal !== null ? roundToCents(prepaidPackageTotal / input.visitCount) : null;
 
   const recommendedService: CalculationResult["recommendedService"] =
     input.cleaningType === "standard" && input.condition === "heavy" ? "deep" : null;
@@ -227,6 +325,7 @@ export function calculateEstimate(
     conditionMultiplier,
     cleaningSubtotal,
     frequency: input.frequency,
+    visitCount: input.visitCount,
     discountProgram,
     recurringAdjustment,
     packageDiscount,
@@ -238,14 +337,25 @@ export function calculateEstimate(
     pricedAddOns,
     pricedAddOnsTotal,
     manualQuoteAddOns,
+    packageAddOnsTotal,
+    packagePricedAddOns,
+    packageManualQuoteAddOns,
     activeFirstCleaningOfferPercent,
     firstCleaningEligible: input.firstCleaningEligible,
     firstCleaningDiscount,
     preDiscountTotal,
     calculatedTotal,
+    hasStartingAtPricing,
+    prepaidPackageTotal,
+    effectivePricePerVisit,
     minimumServiceTotalApplied,
     recommendedService,
   };
+
+  const hasManualQuoteAddOn =
+    manualQuoteAddOns.length > 0 ||
+    packageManualQuoteAddOns.length > 0 ||
+    manualReviewReasons.includes("ADD_ON_VISIT_ASSIGNMENT_REQUIRED");
 
   if (hasBlockingConfigurationGap) {
     return {
@@ -257,20 +367,13 @@ export function calculateEstimate(
     };
   }
 
-  const rangeMultiplier = RANGE_MULTIPLIERS[input.condition];
-  const lower = minimumServiceTotalApplied
-    ? MINIMUM_SERVICE_TOTAL
-    : Math.max(MINIMUM_SERVICE_TOTAL, roundUpToIncrement(calculatedTotal, RANGE_ROUNDING_INCREMENT));
-  const upper = Math.max(
-    lower,
-    roundUpToIncrement(calculatedTotal * rangeMultiplier, RANGE_ROUNDING_INCREMENT)
-  );
+  const range = buildEstimateRange(calculatedTotal, input.condition, minimumServiceTotalApplied);
 
   return {
     ...base,
     estimateType: "instant-range",
-    range: { lower, upper },
-    manualReviewRequired: manualQuoteAddOns.length > 0,
+    range,
+    manualReviewRequired: hasManualQuoteAddOn,
     manualReviewReasons,
   };
 }

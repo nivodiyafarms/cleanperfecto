@@ -8,6 +8,19 @@ export const MINIMUM_SERVICE_TOTAL = 99;
 /** Customer-facing range values round up to this increment. */
 export const RANGE_ROUNDING_INCREMENT = 5;
 
+/**
+ * Minimum displayed dollar gap between the range's lower and upper bound, by
+ * condition (owner-approved 2026-08-13). These are floors, not ceilings — a
+ * large enough job will naturally produce a wider range via RANGE_MULTIPLIERS
+ * below; whichever spread is larger wins. See estimate-range.ts.
+ */
+export const RANGE_MINIMUM_GAP: Record<Condition, number> = {
+  light: 20,
+  moderate: 25,
+  heavy: 30,
+  extensive: 30,
+};
+
 export const PACKAGE_MIN_VISITS = 6;
 export const PACKAGE_DISCOUNT_MULTIPLIER = 0.8;
 
@@ -70,7 +83,10 @@ export const RECURRING_MULTIPLIERS: Partial<Record<FrequencyId, number>> = {
  * (e.g. "3 Bedroom / 2 Bath Home"). These are facts drawn directly from the
  * already-approved tier names, not invented pricing — used only to
  * determine how many *additional* rooms (if any) a customer's actual counts
- * represent for room-adjustments.ts.
+ * represent for room-adjustments.ts. 4br_plus's baseline is explicitly "4
+ * Bedroom / up to 3 Bath" per owner-approved 2026-08-13 base room
+ * assumptions — a 4th full bathroom is included at this tier; only a 5th+
+ * bedroom or 4th+ full bathroom triggers an adjustment.
  */
 export const SIZE_TIER_BASELINE_ROOMS: Record<
   SizeTier,
@@ -80,5 +96,5 @@ export const SIZE_TIER_BASELINE_ROOMS: Record<
   "1br_1ba": { bedrooms: 1, fullBathrooms: 1, halfBathrooms: 0 },
   "2br_2ba": { bedrooms: 2, fullBathrooms: 2, halfBathrooms: 0 },
   "3br_2ba": { bedrooms: 3, fullBathrooms: 2, halfBathrooms: 0 },
-  "4br_plus": { bedrooms: 4, fullBathrooms: 2, halfBathrooms: 0 },
+  "4br_plus": { bedrooms: 4, fullBathrooms: 3, halfBathrooms: 0 },
 };

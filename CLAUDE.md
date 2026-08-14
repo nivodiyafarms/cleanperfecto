@@ -257,9 +257,11 @@ Disclaimer (must stay attached to these prices): "Starting prices are estimates.
 
 ## Approved Instant Quote Calculator (Pricing Engine)
 
-A pure, deterministic pricing engine exists at `src/lib/pricing/` (`types.ts`, `config.ts`, `zip-travel.ts`, `supplies-equipment.ts`, `square-footage.ts`, `room-adjustments.ts`, `add-ons.ts`, `discount-program.ts`, `calculate-estimate.ts`), fully unit-tested. It is **not yet wired into the production `QuoteForm`, homepage, or booking flow** — see Current Milestone and Production-Protected Systems. The rules below are the owner-approved calculation rules already implemented; do not re-derive or invent different values elsewhere.
+A pure, deterministic pricing engine exists at `src/lib/pricing/` (`types.ts`, `config.ts`, `zip-travel.ts`, `supplies-equipment.ts`, `square-footage.ts`, `room-adjustments.ts`, `add-ons.ts`, `discount-program.ts`, `estimate-range.ts`, `money.ts`, `calculate-estimate.ts`), fully unit-tested, including its production configuration tables (ZIP travel, supplies/equipment incl. Airbnb, square footage, room adjustments) — finalized 2026-08-13. It is **still not wired into the production `QuoteForm`, homepage, or booking flow** — see Current Milestone and Production-Protected Systems. The rules below are the owner-approved calculation rules already implemented; do not re-derive or invent different values elsewhere.
 
-**Condition multipliers** (`CONDITION_MULTIPLIERS` in `src/lib/pricing/config.ts`):
+**Core formula**: `CleaningSubtotal = (BasePrice + RoomAdjustments) × SquareFootageMultiplier × ConditionMultiplier`, then `TravelCharge = CleaningSubtotal × ZIPTravelPercentage`. Supplies/equipment and priced add-ons are added after travel, undiscounted, before the discount-program and $99-minimum logic runs. Travel, supplies, and add-ons are never discounted by the first-cleaning offer or any recurring/package program.
+
+**Condition multipliers** (`CONDITION_MULTIPLIERS` in `src/lib/pricing/config.ts`) — unchanged:
 
 | Condition | Standard | Deep |
 |---|---|---|
@@ -270,16 +272,74 @@ A pure, deterministic pricing engine exists at `src/lib/pricing/` (`types.ts`, `
 
 Move-In/Move-Out Cleaning uses the same condition multipliers as Deep Cleaning.
 
-**Customer-facing estimate ranges** (`RANGE_MULTIPLIERS`), applied to the server-calculated total — never a single exact price:
+**Base room assumptions** (`SIZE_TIER_BASELINE_ROOMS` in `config.ts`) — the bedroom/bathroom count already included in each size tier's base price; only counts *above* baseline trigger a room adjustment:
 
-- Light — up to +5%
-- Moderate — up to +7%
-- Heavy — up to +10%
-- Extensive Deep — up to +15%
+| Size tier | Bedrooms included | Full baths included |
+|---|---|---|
+| Studio / 1 Bath | 0 | 1 |
+| 1 Bedroom / 1 Bath | 1 | 1 |
+| 2 Bedroom / up to 2 Bath | 2 | 2 |
+| 3 Bedroom / up to 2 Bath | 3 | 2 |
+| 4 Bedroom / up to 3 Bath | 4 | 3 |
 
-Ranges round up to clean $5 increments; the lower bound is never rounded below the actual calculated amount, and never below $99.
+**Room adjustments** (`ROOM_ADJUSTMENT_CONFIG` in `room-adjustments.ts`), keyed by cleaning type — Deep and Move-In/Move-Out share the same rates:
 
-**Recurring cleaning pricing** (`RECURRING_MULTIPLIERS`):
+| | Standard | Deep / Move-In-Out |
+|---|---|---|
+| Additional bedroom | +$20 | +$25 |
+| Additional full bathroom | +$25 | +$30 |
+| Additional half bathroom | +$12.50 | +$15 |
+
+**Square footage** (`SQUARE_FOOTAGE_CONFIG` in `square-footage.ts`) — a secondary correction on top of the room-driven base price, shared by Standard, Deep, and Move-In/Move-Out. Each size tier gets an included allowance; every additional 500 sq ft above it (rounding a partial band up to a full band) adds +5%, capped at 3 bands (+15%, 1,500 sq ft above allowance); beyond that requires manual review rather than an invented multiplier:
+
+| Size tier | Included sq ft | Manual review beyond |
+|---|---|---|
+| Studio / 1 Bath | 750 | 2,250 |
+| 1 Bedroom / 1 Bath | 1,000 | 2,500 |
+| 2 Bedroom / up to 2 Bath | 1,600 | 3,100 |
+| 3 Bedroom / up to 2 Bath | 2,200 | 3,700 |
+| 4 Bedroom / up to 3 Bath | 3,000 | 4,500 |
+
+When a customer doesn't provide square footage, the multiplier stays neutral at 1.00 (no manual review) — but supplies/equipment below still needs a size context, so it falls back to the tier's own included allowance from this same table (`resolveDefaultSquareFeet`), never an invented number.
+
+**Supplies/equipment** (`SUPPLIES_EQUIPMENT_CONFIG` in `supplies-equipment.ts`) — a fixed per-visit amount (never a percentage, never one universal flat charge), keyed by cleaning type × square-footage band using the customer's actual square footage when given, otherwise the tier's included allowance above:
+
+| Sq ft band | Standard | Deep | Move-In/Out | Airbnb |
+|---|---|---|---|---|
+| Up to 1,000 | $15 | $25 | $25 | $15 |
+| 1,001–2,200 | $22.50 | $30 | $32.50 | $20 |
+| 2,201–3,000 | $27.50 | $35 | $40 | $25 |
+| 3,001–4,500 | $32.50 | $42.50 | $47.50 | $30 |
+| Beyond 4,500 | Manual review — no invented amount | | | |
+
+**Airbnb supplies**: implemented as its own parallel table, `AIRBNB_SUPPLIES_CONFIG` in `supplies-equipment.ts` (`getAirbnbSuppliesCharge`), keyed by square-footage band only — not by `CleaningType`. `calculate-estimate.ts` branches on `propertyKind === "airbnb"`: an Airbnb booking always uses this table regardless of which cleaning type (Standard/Deep/Move) it selects; every other property kind uses `SUPPLIES_EQUIPMENT_CONFIG` keyed by cleaning type as above.
+
+**ZIP travel** (`ZIP_TRAVEL_CONFIG` in `zip-travel.ts`) — CleanPerfecto's base ZIP is **75056** (Frisco/Little Elm area), which resolves to Core / 0%. The production table was converted offline from the owner-approved `CleanPerfecto_DFW_ZIP_Travel_Bands_Simple.csv` (not committed to the repo unless separately approved) into a static, typed array — no runtime CSV parsing or filesystem access. **All 273 approved ZIPs are represented explicitly**, including the 88 whose CSV band is "Manual review" — those rows are kept in the table with `band: "manual_review"` and `percentage: null` rather than omitted, so a known DFW ZIP that's simply out of automatic range stays distinguishable from a ZIP that was never approved at all. The same ZIP always resolves to the same result on every lookup — one of three distinct outcomes:
+
+| Band | Distance | Travel % | Lookup result when resolved |
+|---|---|---|---|
+| Core | 0–10 mi | 0% | `{ configured: true, percentage, band }` |
+| Nearby | 11–20 mi | 3% | `{ configured: true, percentage, band }` |
+| Extended | 21–30 mi | 6% | `{ configured: true, percentage, band }` |
+| Outer | 31–40 mi | 10% | `{ configured: true, percentage, band }` |
+| Manual review (known ZIP) | Over 40 mi | No automatic percentage | `{ configured: false, reason: "ZIP_MANUAL_REVIEW_REQUIRED" }` |
+| Not in the approved table at all | — | No automatic percentage | `{ configured: false, reason: "ZIP_TRAVEL_NOT_CONFIGURED" }` |
+
+To add or change ZIPs, get a newly approved CSV and regenerate the array — never hand-edit individual entries or duplicate a ZIP.
+
+**Customer-facing estimate range** (`estimate-range.ts`, `buildEstimateRange`) — every eligible instant quote displays a range around the authoritative `calculatedTotal`, never a single exact price. The range is presentation-only and never feeds back into the authoritative total:
+
+- Lower bound: `calculatedTotal` rounded **up** to the next $5, never below `calculatedTotal` itself, and never below $99 — except when the $99-minimum rule (below) is what produced the total, in which case the lower bound stays exactly **$99** rather than rounding up to $100.
+- Upper bound: the larger of (a) `calculatedTotal × (1 + ConditionRate)`, or (b) the lower bound plus the condition's minimum dollar gap — then rounded up to the next $5. The dollar gaps are floors, not ceilings; a large enough job's percentage spread naturally exceeds them.
+
+| Condition | Percentage spread | Minimum dollar gap |
+|---|---|---|
+| Light | +5% | $20 |
+| Moderate | +7% | $25 |
+| Heavy | +10% | $30 |
+| Extensive Deep | +15% | $30 |
+
+**Recurring cleaning pricing** (`RECURRING_MULTIPLIERS`) — unchanged:
 
 - Weekly — 21% lower
 - Biweekly — 14% lower
@@ -287,18 +347,19 @@ Ranges round up to clean $5 increments; the lower bound is never rounded below t
 
 **6+ prepaid recurring package**: an additional 20% discount, applied sequentially *after* recurring-cycle pricing (e.g. weekly: 0.79 × 0.80 = 0.632, a 36.8% effective saving) — never added to the recurring percentage. The first-cleaning offer does not stack with the 6+ prepaid package; on a first visit that is not yet a 6+ prepaid package, the engine applies whichever of the first-cleaning offer or the plain recurring-cycle rate benefits the customer more, never both.
 
-**$99 minimum**: the final price after the first-cleaning offer (or any other applicable discount) can never fall below $99. This is enforced server-side in `calculate-estimate.ts`, not merely display copy.
+`calculatedTotal` is always the effective **per-visit** cleaning + travel + supplies price (no add-ons — see below), for every discount program, rounded to the cent. For `discountProgram === "prepaid_package"` specifically, `prepaidPackageTotal` additionally reports the **authoritative, payable total for all prepaid visits**: (discounted cleaning + undiscounted travel + undiscounted supplies) × `visitCount`, plus `packageAddOnsTotal` (visit-specific add-ons, see below) — summed at full precision and rounded to the cent **once, at the end** (`roundToCents` in `money.ts`; never round an intermediate multiplication). `effectivePricePerVisit` (`prepaidPackageTotal ÷ visitCount`, also cent-rounded) is a reporting average only, not a literal per-visit price. Both are `null` for every other discount program, since only a prepaid package has a fixed, known visit count worth totaling. Authoritative payable monetary output must always resolve to valid USD cents — never expose a raw float like `700.008` or `116.668` as a customer- or payment-facing amount.
+
+**Add-ons belong to individual visits, not "once per package"** (owner-approved 2026-08-13, supersedes the milestone's earlier interim behavior). For a one-time or plain-recurring (not-yet-6-prepaid) request, `addOnIds` (a flat list) works as before — a single charge added once. For a request that resolves to `discountProgram === "prepaid_package"`, `addOnIds` is not used for pricing at all; instead `CalculationInput.visitAddOns?: AddOnId[][]` supplies each visit's own selection (`visitAddOns[i]` = visit `i + 1`'s add-ons; a missing/omitted visit means none). The same add-on chosen on two different visits is counted twice; an add-on is never multiplied across every visit automatically, and the engine never infers which visit an unassigned add-on belongs to — if `addOnIds` is non-empty on a package request with no `visitAddOns`, the request is flagged `ADD_ON_VISIT_ASSIGNMENT_REQUIRED` for manual review rather than guessed at. `packageAddOnsTotal` sums every visit's priced add-ons (fixed-price and starting-at, at their approved amount — never inflated to a guaranteed final price); `packagePricedAddOns` preserves each individual selection (id, amount, `pricingKind`, `visitNumber`) rather than collapsing to a bare number; `packageManualQuoteAddOns` collects manual-quote add-ons with their 1-based `visitNumber` attached for traceability. None of this receives the recurring or 20% package discount. The classic `pricedAddOns`/`pricedAddOnsTotal`/`manualQuoteAddOns` fields stay empty/0 for a package request. No package-visit UI exists yet — a future website feature will let customers assign add-ons per visit and update the total automatically.
+
+**"Starting at" add-ons are never silently promoted into a guaranteed exact total.** `CalculationResult.hasStartingAtPricing: boolean` is `true` whenever any add-on contributing to the returned total(s) — `pricedAddOns` for a one-off request, or `packagePricedAddOns` for a package — has `pricingKind === "starting_at"` (Inside Cabinets & Drawers "starting at $40", Extra Pet Hair Removal "starting at $20"). A caller (future UI/payment code) **must** check this flag before presenting or charging `calculatedTotal`/`preDiscountTotal` (or, for a package, `prepaidPackageTotal`/`effectivePricePerVisit`) as a final price — when `true`, present it as an estimate ("starting at $X" / "requires confirmation"), never as a guaranteed payable amount, even though a concrete number is available. `pricingKind` is preserved per selection all the way through to `CalculationResult` (never collapsed to a plain number) so this distinction can't be lost.
+
+**$99 minimum**: the final price after the first-cleaning offer (or any other applicable discount) can never fall below $99. This is enforced server-side in `calculate-estimate.ts`, not merely display copy — it applies per visit; `prepaidPackageTotal` is derived from the (already-floored, full-precision) per-visit price × `visitCount`, not floored independently at the package level.
 
 **Manual-quote add-ons** (no invented dollar amount; preserved on the request for manual follow-up): Carpet Shampooing, Heavy Organization, Additional Interior Window Detailing, Boxing & Packing.
 
-**Unresolved production configuration** — intentionally empty/unconfigured until the owner supplies approved values; the engine returns a typed manual-review result rather than guessing:
+**Manual-review behavior**: a request routes to manual review (never an invented number) when — a ZIP was never in the approved table (`ZIP_TRAVEL_NOT_CONFIGURED`); a ZIP is a known DFW ZIP explicitly assigned "Manual review," over 40 miles (`ZIP_MANUAL_REVIEW_REQUIRED` — kept semantically distinct from the unknown-ZIP case above); actual square footage exceeds a tier's configured limit; a room count needs an adjustment that isn't configured; a commercial property is selected; Standard + Extensive condition is requested (Deep is recommended instead); a manual-quote add-on is selected (this alone doesn't block the rest of the instant range); or a prepaid package request submits `addOnIds` with no `visitAddOns` to attribute them to (`ADD_ON_VISIT_ASSIGNMENT_REQUIRED`).
 
-- ZIP → travel percentage table (`src/lib/pricing/zip-travel.ts`)
-- Supplies/equipment charges by service type × size tier (`src/lib/pricing/supplies-equipment.ts`)
-- Square-footage bands and multipliers (`src/lib/pricing/square-footage.ts`)
-- Room-adjustment charges — additional bedroom / full-bath / half-bath (`src/lib/pricing/room-adjustments.ts`)
-
-Do not add values to these four until they are separately approved.
+**Move-In/Move-Out sizing note**: Move-In/Move-Out's base price stays the flat $199 shown in Approved Starting Prices regardless of size tier (no separate bedroom-category base-price table exists or should be invented), but its room-adjustment and square-footage *corrections* reuse the same generic size-tier baselines as Standard/Deep (Deep's room rates, the shared square-footage table) — this was already the pre-existing architecture before this milestone and required no new decision.
 
 ## Approved Service Area
 
