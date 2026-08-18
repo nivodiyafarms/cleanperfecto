@@ -1,3 +1,4 @@
+import Link from "next/link";
 import BrandLogo from "@/components/brand/BrandLogo";
 
 const NAV_LINKS = [
@@ -30,12 +31,12 @@ export default function SiteNav() {
           ))}
         </div>
 
-        <a
-          href="#quote"
+        <Link
+          href="/quote"
           className="inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
         >
           Get My Cleaning Quote
-        </a>
+        </Link>
       </nav>
     </header>
   );

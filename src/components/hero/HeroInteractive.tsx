@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useSelection } from "@/components/SelectionProvider";
 import { COMMERCIAL_PROPERTY_TYPE_IDS, PROPERTY_TYPES } from "@/lib/property-types";
 import { SERVICES } from "@/lib/services";
@@ -48,12 +49,12 @@ export default function HeroInteractive() {
       </div>
 
       <div className="flex flex-col items-center gap-2 sm:items-start">
-        <a
-          href="#quote"
+        <Link
+          href={isCommercial ? "#quote" : "/quote"}
           className="inline-flex items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
         >
           {isCommercial ? "Request a Commercial Quote" : "Get My Cleaning Quote"}
-        </a>
+        </Link>
         <p className="max-w-xs text-center text-xs text-muted sm:text-left">
           Pricing depends on property size, condition, service type, and
           frequency.

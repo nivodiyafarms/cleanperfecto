@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 export default function StickyMobileCTA() {
@@ -37,13 +38,13 @@ export default function StickyMobileCTA() {
         hidden ? "pointer-events-none translate-y-full" : "translate-y-0"
       }`}
     >
-      <a
-        href="#quote"
+      <Link
+        href="/quote"
         tabIndex={hidden ? -1 : undefined}
         className="flex w-full items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
       >
         Get My Cleaning Quote
-      </a>
+      </Link>
     </div>
   );
 }

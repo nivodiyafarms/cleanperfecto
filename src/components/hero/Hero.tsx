@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import FirstCleaningOfferBadge from "./FirstCleaningOfferBadge";
@@ -96,12 +97,12 @@ export default function Hero() {
           </p>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row lg:mt-8">
-            <a
-              href="#quote"
+            <Link
+              href="/quote"
               className="inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-8 py-3.5 text-base font-medium text-foreground transition-colors hover:bg-secondary lg:py-4"
             >
               Get My Cleaning Quote
-            </a>
+            </Link>
             <a
               href={SITE_CONTACT.phoneHref}
               className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/40 px-8 py-3.5 text-base font-medium text-white transition-colors hover:border-white hover:bg-white/10 lg:py-4"

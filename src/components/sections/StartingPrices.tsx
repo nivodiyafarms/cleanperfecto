@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const PROPERTY_PRICING = [
   {
     label: "Studio / 1 Bath Apartment",
@@ -119,12 +121,12 @@ export default function StartingPrices() {
         </p>
 
         <div className="mt-8 flex justify-center">
-          <a
-            href="#quote"
+          <Link
+            href="/quote"
             className="inline-flex min-h-11 items-center justify-center rounded-full bg-primary px-8 py-3.5 text-base font-medium text-foreground transition-colors hover:bg-secondary"
           >
             Get My Cleaning Quote
-          </a>
+          </Link>
         </div>
       </div>
     </section>
