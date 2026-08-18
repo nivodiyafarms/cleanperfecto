@@ -1,0 +1,523 @@
+import { describe, expect, it } from "vitest";
+import type { CustomerContactPatch, CustomerRecord, NewCustomerInput } from "./customer-repository";
+import type { InsertQuoteRequestResult, InstantQuoteRepository } from "./repository";
+import type { QuoteRequestRow } from "./build-quote-request-row";
+import { submitInstantQuote, type SubmitInstantQuoteInternalDependencies } from "./submit-instant-quote";
+import type { InstantQuoteRawInput } from "./types";
+import { buildServiceAddressIdentity } from "./normalize-address";
+
+interface FakeVisit {
+  customerId: string;
+  status: "scheduled" | "completed" | "cancelled";
+  serviceAddressIdentity: string | null;
+}
+
+class FakeInstantQuoteRepository implements InstantQuoteRepository {
+  customers: CustomerRecord[] = [];
+  visits: FakeVisit[] = [];
+  insertedRows: QuoteRequestRow[] = [];
+  private nextCustomerId = 1;
+  insertShouldFail = false;
+
+  async findByEmailNormalized(emailNormalized: string): Promise<CustomerRecord[]> {
+    return this.customers.filter((c) => c.emailNormalized === emailNormalized);
+  }
+
+  async findByPhoneNormalized(phoneNormalized: string): Promise<CustomerRecord[]> {
+    return this.customers.filter((c) => c.phoneNormalized === phoneNormalized);
+  }
+
+  async createCustomer(input: NewCustomerInput): Promise<CustomerRecord> {
+    const customer: CustomerRecord = { id: `customer-${this.nextCustomerId++}`, ...input };
+    this.customers.push(customer);
+    return customer;
+  }
+
+  async updateCustomerContact(customerId: string, patch: CustomerContactPatch): Promise<void> {
+    const customer = this.customers.find((c) => c.id === customerId);
+    if (!customer) return;
+    if (patch.name !== undefined) customer.name = patch.name;
+    if (patch.email !== undefined) customer.email = patch.email;
+    if (patch.emailNormalized !== undefined) customer.emailNormalized = patch.emailNormalized;
+    if (patch.phone !== undefined) customer.phone = patch.phone;
+    if (patch.phoneNormalized !== undefined) customer.phoneNormalized = patch.phoneNormalized;
+  }
+
+  async hasCompletedVisitByEmail(emailNormalized: string): Promise<boolean> {
+    const ids = this.customers.filter((c) => c.emailNormalized === emailNormalized).map((c) => c.id);
+    return this.visits.some((v) => v.status === "completed" && ids.includes(v.customerId));
+  }
+
+  async hasCompletedVisitByPhone(phoneNormalized: string): Promise<boolean> {
+    const ids = this.customers.filter((c) => c.phoneNormalized === phoneNormalized).map((c) => c.id);
+    return this.visits.some((v) => v.status === "completed" && ids.includes(v.customerId));
+  }
+
+  async hasCompletedVisitByAddress(serviceAddressIdentity: string): Promise<boolean> {
+    return this.visits.some((v) => v.status === "completed" && v.serviceAddressIdentity === serviceAddressIdentity);
+  }
+
+  async insertQuoteRequest(row: QuoteRequestRow): Promise<InsertQuoteRequestResult> {
+    if (this.insertShouldFail) {
+      return { ok: false, error: "simulated insert failure" };
+    }
+    this.insertedRows.push(row);
+    return { ok: true };
+  }
+}
+
+function deps(overrides: Partial<SubmitInstantQuoteInternalDependencies> = {}): SubmitInstantQuoteInternalDependencies {
+  return {
+    repo: new FakeInstantQuoteRepository(),
+    asOf: new Date("2026-08-20T12:00:00-05:00"),
+    ...overrides,
+  };
+}
+
+function rawInput(overrides: Partial<InstantQuoteRawInput> = {}): InstantQuoteRawInput {
+  return {
+    propertyType: "home",
+    cleaningType: "standard",
+    condition: "light",
+    rooms: { bedrooms: 1, fullBathrooms: 1, halfBathrooms: 0 },
+    frequency: "one_time",
+    isPrepaidPackage: false,
+    visitCount: 1,
+    addOnIds: [],
+    name: "Jane Customer",
+    phone: "469-555-0100",
+    email: "jane@example.com",
+    serviceAddress: { line1: "123 Main St", city: "Frisco", state: "TX", zip: "75056" },
+    ...overrides,
+  };
+}
+
+describe("submitInstantQuote", () => {
+  it("rejects invalid input before touching the repository at all", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput({ email: "not-an-email", phone: undefined }), deps({ repo }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.stage).toBe("validation");
+    expect(repo.insertedRows).toHaveLength(0);
+  });
+
+  it("first-time customer at the Core ZIP gets an instant-range quote with the first-cleaning offer applied", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput(), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.estimateType).toBe("instant_range");
+      expect(result.calculatedTotal).toBeCloseTo(105.3); // 30% launch offer on a 1B1B Standard Light quote
+      expect(result.manualReviewRequired).toBe(false);
+    }
+    expect(repo.insertedRows).toHaveLength(1);
+    expect(repo.insertedRows[0].first_cleaning_offer_applied).toBe(true);
+  });
+
+  it("a returning customer (matched by email, completed history) does not get the first-cleaning offer", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const customer = await repo.createCustomer({
+      name: "Jane Customer",
+      email: "jane@example.com",
+      emailNormalized: "jane@example.com",
+      phone: "+14695550100",
+      phoneNormalized: "+14695550100",
+    });
+    repo.visits.push({ customerId: customer.id, status: "completed", serviceAddressIdentity: null });
+
+    const result = await submitInstantQuote(rawInput(), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.calculatedTotal).toBe(144); // no discount — same as production-scenarios test #1
+      expect(result.customerId).toBe(customer.id);
+    }
+    expect(repo.insertedRows[0].first_cleaning_offer_applied).toBe(false);
+  });
+
+  it("resolves the active offer through the real server-side helper, not a client-suppliable value", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const launchResult = await submitInstantQuote(rawInput(), deps({ repo, asOf: new Date("2026-08-20T00:00:00Z") }));
+    const standardResult = await submitInstantQuote(
+      rawInput({ email: "other@example.com" }),
+      deps({ repo, asOf: new Date("2026-09-15T00:00:00Z") })
+    );
+    expect(launchResult.ok).toBe(true);
+    expect(standardResult.ok).toBe(true);
+    if (launchResult.ok && standardResult.ok) {
+      // 30% launch vs 25% standard on the same 1B1B Standard Light base — different totals prove the
+      // percentage came from getActiveFirstCleaningOffer(asOf), not a fixed/guessed constant.
+      expect(launchResult.calculatedTotal).not.toBe(standardResult.calculatedTotal);
+    }
+  });
+
+  it("Nearby ZIP applies a travel charge via the real pricing engine", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput({ serviceAddress: { line1: "1 Elm St", zip: "75001" } }), deps({ repo }));
+    expect(repo.insertedRows[0].zip).toBe("75001");
+  });
+
+  it("a manual-review ZIP still persists the quote as a manual-review outcome", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(
+      rawInput({ serviceAddress: { line1: "1 Far Rd", zip: "75054" } }),
+      deps({ repo })
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.estimateType).toBe("manual_review");
+      expect(result.manualReviewReasons).toContain("ZIP_MANUAL_REVIEW_REQUIRED");
+      expect(result.range).toBeNull();
+    }
+    expect(repo.insertedRows).toHaveLength(1);
+  });
+
+  it("persists a one-time quote whose scalar DB fields match pricing_snapshot.result exactly", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput(), deps({ repo }));
+    const row = repo.insertedRows[0];
+    expect(row.calculated_total).toBe(row.pricing_snapshot.result.calculatedTotal);
+    expect(row.display_range_lower).toBe(row.pricing_snapshot.result.range?.lower ?? null);
+    expect(row.display_range_upper).toBe(row.pricing_snapshot.result.range?.upper ?? null);
+    expect(row.has_starting_at_pricing).toBe(row.pricing_snapshot.result.hasStartingAtPricing);
+  });
+
+  it("flags hasStartingAtPricing for a starting-at add-on without treating the total as final", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput({ addOnIds: ["inside_cabinets_drawers"] }), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.hasStartingAtPricing).toBe(true);
+    }
+  });
+
+  it("routes a manual-quote add-on to manual review without inventing a price", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput({ addOnIds: ["carpet_shampooing"] }), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manualReviewRequired).toBe(true);
+      expect(result.manualReviewReasons).toContain("MANUAL_QUOTE_ADD_ON_SELECTED");
+    }
+  });
+
+  it("prices a recurring (non-package) quote using the recurring-cycle discount", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput({ frequency: "weekly" }), deps({ repo }));
+    expect(repo.insertedRows[0].service_id).toBe("recurring");
+    expect(repo.insertedRows[0].frequency).toBe("weekly");
+  });
+
+  it("prices a 6-visit prepaid package with the authoritative package total", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(
+      rawInput({
+        rooms: { bedrooms: 2, fullBathrooms: 2, halfBathrooms: 0 },
+        frequency: "weekly",
+        isPrepaidPackage: true,
+        visitCount: 6,
+      }),
+      deps({ repo })
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.prepaidPackageTotal).not.toBeNull();
+      expect(Number.isInteger(result.prepaidPackageTotal! * 100)).toBe(true);
+    }
+  });
+
+  it("applies visit-specific package add-ons via visitAddOns, undiscounted", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(
+      rawInput({
+        rooms: { bedrooms: 2, fullBathrooms: 2, halfBathrooms: 0 },
+        frequency: "weekly",
+        isPrepaidPackage: true,
+        visitCount: 6,
+        visitAddOns: [["inside_oven"], [], [], [], [], []],
+      }),
+      deps({ repo })
+    );
+    const snapshot = repo.insertedRows[0].pricing_snapshot.result;
+    expect(snapshot.packageAddOnsTotal).toBe(35);
+  });
+
+  it("maps a one-time deep clean to the legacy service_id 'deep'", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput({ cleaningType: "deep" }), deps({ repo }));
+    expect(repo.insertedRows[0].service_id).toBe("deep");
+  });
+
+  it("persists the real property_type without collapsing apartment to home", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput({ propertyType: "apartment" }), deps({ repo }));
+    expect(repo.insertedRows[0].property_type).toBe("apartment");
+  });
+
+  it("knows the quote UUID without needing SELECT-after-insert — the returned quoteId matches the persisted row id", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput(), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quoteId).toBe(repo.insertedRows[0].id);
+      expect(result.quoteId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    }
+  });
+
+  it("returns a typed persistence failure and does not throw when the insert fails", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    repo.insertShouldFail = true;
+    const result = await submitInstantQuote(rawInput(), deps({ repo }));
+    expect(result).toEqual({ ok: false, stage: "persistence", error: "simulated insert failure" });
+  });
+
+  describe("identity conflict", () => {
+    async function seedConflict(repo: FakeInstantQuoteRepository) {
+      const a = await repo.createCustomer({
+        name: "Customer A",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: "+14695551111",
+        phoneNormalized: "+14695551111",
+      });
+      const b = await repo.createCustomer({
+        name: "Customer B",
+        email: "other@example.com",
+        emailNormalized: "other@example.com",
+        phone: "+14695550100",
+        phoneNormalized: "+14695550100",
+      });
+      return { a, b };
+    }
+
+    it("persists the quote with customer_id null and an identity-conflict reason, without merging customers", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      await seedConflict(repo);
+
+      const result = await submitInstantQuote(rawInput(), deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.identityConflict).toBe(true);
+        expect(result.customerId).toBeNull();
+        expect(result.manualReviewRequired).toBe(true);
+        expect(result.manualReviewReasons).toContain("CUSTOMER_IDENTITY_CONFLICT");
+      }
+      expect(repo.insertedRows[0].customer_id).toBeNull();
+      expect(repo.customers).toHaveLength(2); // no merge, no new customer created
+    });
+
+    it("forces estimate_type to manual_review even though the underlying pricing succeeded as an ordinary instant range", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      await seedConflict(repo);
+
+      const result = await submitInstantQuote(rawInput(), deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.estimateType).toBe("manual_review");
+        // The real calculated figures are still present as informational context.
+        expect(result.calculatedTotal).toBeGreaterThan(0);
+      }
+      expect(repo.insertedRows[0].estimate_type).toBe("manual_review");
+    });
+
+    it("does not mutate either existing customer's stored contact info", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const { a, b } = await seedConflict(repo);
+      const snapshotA = { ...a };
+      const snapshotB = { ...b };
+
+      await submitInstantQuote(rawInput(), deps({ repo }));
+
+      expect(repo.customers.find((c) => c.id === a.id)).toEqual(snapshotA);
+      expect(repo.customers.find((c) => c.id === b.id)).toEqual(snapshotB);
+    });
+
+    it("never exposes either conflicting customer's UUID in the public-safe result", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const { a, b } = await seedConflict(repo);
+
+      const result = await submitInstantQuote(rawInput(), deps({ repo }));
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(a.id);
+      expect(serialized).not.toContain(b.id);
+    });
+
+    it("still runs pricing and eligibility, and still persists — a conflict does not abort the request", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      await seedConflict(repo);
+
+      const result = await submitInstantQuote(rawInput(), deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.calculatedTotal).toBeGreaterThan(0);
+      }
+      expect(repo.insertedRows).toHaveLength(1);
+    });
+  });
+
+  describe("contact refresh wiring (safer per-match-kind rules)", () => {
+    it("email-only match does not overwrite a different existing non-null phone", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const customer = await repo.createCustomer({
+        name: "Jane Customer",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: "+14695551111",
+        phoneNormalized: "+14695551111",
+      });
+
+      await submitInstantQuote(rawInput({ phone: "469-555-0100" }), deps({ repo }));
+
+      const updated = repo.customers.find((c) => c.id === customer.id)!;
+      expect(updated.phoneNormalized).toBe("+14695551111"); // untouched
+    });
+
+    it("email-only match fills a currently-null phone", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const customer = await repo.createCustomer({
+        name: "Jane Customer",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: null,
+        phoneNormalized: null,
+      });
+
+      await submitInstantQuote(rawInput({ phone: "469-555-0100" }), deps({ repo }));
+
+      const updated = repo.customers.find((c) => c.id === customer.id)!;
+      expect(updated.phoneNormalized).toBe("+14695550100");
+    });
+
+    it("dual match (email and phone both match the same customer) refreshes all contact fields", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const customer = await repo.createCustomer({
+        name: "Old Name",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: "+14695550100",
+        phoneNormalized: "+14695550100",
+      });
+
+      await submitInstantQuote(rawInput({ name: "New Name" }), deps({ repo }));
+
+      const updated = repo.customers.find((c) => c.id === customer.id)!;
+      expect(updated.name).toBe("New Name");
+    });
+
+    it("quote_requests always preserves the raw submitted contact info regardless of what the customer profile refresh did", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      await repo.createCustomer({
+        name: "Jane Customer",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: "+14695551111",
+        phoneNormalized: "+14695551111",
+      });
+
+      await submitInstantQuote(rawInput({ phone: "469-555-0100" }), deps({ repo }));
+
+      // The customer's stored phone stayed +14695551111 (not overwritten), but
+      // this specific quote row still records exactly what was submitted.
+      expect(repo.insertedRows[0].phone).toBe("469-555-0100");
+      expect(repo.insertedRows[0].phone_normalized).toBe("+14695550100");
+    });
+  });
+
+  describe("security/trust — nothing client-suppliable is treated as authoritative", () => {
+    it("ignores a smuggled calculatedTotal and recomputes from scratch", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const hostile = { ...rawInput(), calculatedTotal: 1 } as InstantQuoteRawInput & { calculatedTotal: number };
+      const result = await submitInstantQuote(hostile, deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.calculatedTotal).not.toBe(1);
+        expect(result.calculatedTotal).toBeCloseTo(105.3);
+      }
+    });
+
+    it("ignores a smuggled pricing_snapshot and builds its own from the real engine", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const hostile = { ...rawInput(), pricing_snapshot: { input: {}, result: { calculatedTotal: 1 } } } as InstantQuoteRawInput & {
+        pricing_snapshot: unknown;
+      };
+      await submitInstantQuote(hostile, deps({ repo }));
+      expect(repo.insertedRows[0].pricing_snapshot.result.calculatedTotal).toBeCloseTo(105.3);
+    });
+
+    it("ignores a smuggled discount/offer percentage — the server helper alone decides", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const hostile = { ...rawInput(), activeFirstCleaningOfferPercent: 99 } as InstantQuoteRawInput & {
+        activeFirstCleaningOfferPercent: number;
+      };
+      const result = await submitInstantQuote(hostile, deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.calculatedTotal).toBeCloseTo(105.3); // still exactly the real 30% launch figure, not a 99%-off figure
+      }
+    });
+
+    it("ignores a smuggled asOf/current-date claim — the server's own clock (internalDependencies.asOf in tests) is always authoritative", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      // Smuggle a date far outside the launch window into the raw payload —
+      // InstantQuoteRawInput has no `asOf` field, so even a hostile object
+      // with an extra property can't influence which offer applies.
+      const hostile = { ...rawInput(), asOf: new Date("2026-09-15T00:00:00Z") } as InstantQuoteRawInput & {
+        asOf: Date;
+      };
+      const result = await submitInstantQuote(hostile, deps({ repo, asOf: new Date("2026-08-20T00:00:00Z") }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // Still the 30% launch figure, from internalDependencies.asOf — the smuggled September date was never read.
+        expect(result.calculatedTotal).toBeCloseTo(105.3);
+      }
+    });
+
+    it("ignores a smuggled firstCleaningEligible claim — eligibility is always server-derived", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const customer = await repo.createCustomer({
+        name: "Jane Customer",
+        email: "jane@example.com",
+        emailNormalized: "jane@example.com",
+        phone: "+14695550100",
+        phoneNormalized: "+14695550100",
+      });
+      repo.visits.push({ customerId: customer.id, status: "completed", serviceAddressIdentity: null });
+
+      const hostile = { ...rawInput(), firstCleaningEligible: true } as InstantQuoteRawInput & {
+        firstCleaningEligible: boolean;
+      };
+      const result = await submitInstantQuote(hostile, deps({ repo }));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // Real service history says NOT eligible — the smuggled `true` is never read.
+        expect(result.calculatedTotal).toBe(144);
+      }
+    });
+
+    it("ignores a smuggled service_address_identity — the server always rebuilds it from line1/line2/zip", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const realIdentity = buildServiceAddressIdentity({ zip: "75056", line1: "123 Main St" })!;
+      const hostile = {
+        ...rawInput(),
+        serviceAddress: { ...rawInput().serviceAddress, service_address_identity: "FAKE|IDENTITY|X" },
+      } as InstantQuoteRawInput;
+      await submitInstantQuote(hostile, deps({ repo }));
+      expect(repo.insertedRows[0].service_address_identity).toBe(realIdentity);
+      expect(repo.insertedRows[0].service_address_identity).not.toBe("FAKE|IDENTITY|X");
+    });
+
+    it("entry_channel is always 'website', hardcoded server-side — a smuggled claim of 'admin' is never read", async () => {
+      const repo = new FakeInstantQuoteRepository();
+      const hostile = { ...rawInput(), entryChannel: "admin" } as InstantQuoteRawInput & { entryChannel: string };
+      await submitInstantQuote(hostile, deps({ repo }));
+      expect(repo.insertedRows[0].entry_channel).toBe("website");
+    });
+
+    it("InstantQuoteRawInput has no entryChannel or asOf field in its type at all — a structural guarantee, not just a runtime check", () => {
+      // Compile-time assertion: this file would fail `tsc --noEmit` if either
+      // field existed on the public input type.
+      const input = rawInput();
+      expect("entryChannel" in input).toBe(false);
+      expect("asOf" in input).toBe(false);
+    });
+  });
+});
