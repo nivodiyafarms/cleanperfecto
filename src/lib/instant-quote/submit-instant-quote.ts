@@ -1,9 +1,9 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
 import type { EstimateRange } from "@/lib/pricing/types";
 import { buildCalculationInput } from "./build-calculation-input";
+import { calculateEstimateWithComparison } from "./estimate-with-comparison";
 import { buildQuoteRequestRow } from "./build-quote-request-row";
 import { buildCustomerContactRefreshPatch } from "./contact-refresh";
 import { resolveLegacyServiceId } from "./legacy-service-id";
@@ -48,6 +48,8 @@ export type SubmitInstantQuoteResult =
       effectivePricePerVisit: number | null;
       /** Audit/display information: whether THIS quote's own calculation applied the first-cleaning discount — never an eligibility source of truth on its own (see calculate-estimate.ts). */
       firstCleaningOfferApplied: boolean;
+      /** Non-null only when firstCleaningOfferApplied is true — the same trusted engine's answer to "what would this cost without the first-cleaning special". Presentation only; see estimate-with-comparison.ts. */
+      regularRange: EstimateRange | null;
       manualReviewRequired: boolean;
       manualReviewReasons: InstantQuoteManualReviewReasonCode[];
     }
@@ -155,7 +157,7 @@ export async function submitInstantQuote(
     );
 
     const calculationInput = buildCalculationInput(validated, eligibility.eligible, asOf);
-    const calculationResult = calculateEstimate(calculationInput);
+    const { result: calculationResult, regularRange } = calculateEstimateWithComparison(calculationInput);
 
     const legacyServiceId = resolveLegacyServiceId(validated.cleaningType, validated.frequency);
 
@@ -191,6 +193,7 @@ export async function submitInstantQuote(
       prepaidPackageTotal: calculationResult.prepaidPackageTotal,
       effectivePricePerVisit: calculationResult.effectivePricePerVisit,
       firstCleaningOfferApplied: calculationResult.discountProgram === "first_cleaning",
+      regularRange,
       manualReviewRequired: calculationResult.manualReviewRequired || identityConflict,
       manualReviewReasons: row.manual_review_reasons,
     };

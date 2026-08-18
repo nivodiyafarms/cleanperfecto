@@ -37,6 +37,7 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     prepaidPackageTotal: null,
     effectivePricePerVisit: null,
     firstCleaningOfferApplied: true,
+    regularRange: null,
     manualReviewRequired: false,
     manualReviewReasons: [],
     ...overrides,

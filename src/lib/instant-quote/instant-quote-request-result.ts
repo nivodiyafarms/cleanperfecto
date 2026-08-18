@@ -1,3 +1,8 @@
+import {
+  MANUAL_REVIEW_CUSTOMER_MESSAGE,
+  type InstantQuoteEstimateDisplay,
+  type InstantQuoteManualReviewDisplay,
+} from "./instant-quote-estimate-display";
 import type { SubmitInstantQuoteResult } from "./submit-instant-quote";
 
 /**
@@ -15,33 +20,14 @@ export type InstantQuoteRequestResult =
   | InstantQuoteRequestValidationFailure
   | InstantQuoteRequestFailure;
 
-export interface InstantQuoteRequestAutomaticEstimate {
+export interface InstantQuoteRequestAutomaticEstimate extends InstantQuoteEstimateDisplay {
   success: true;
   quoteId: string;
-  estimateType: "instant_range";
-  manualReviewRequired: false;
-  displayRangeLower: number;
-  displayRangeUpper: number;
-  hasStartingAtPricing: boolean;
-  /** Non-null only for a 6+ prepaid package. */
-  prepaidPackageTotal: number | null;
-  effectivePricePerVisit: number | null;
-  firstCleaningOfferApplied: boolean;
 }
 
-export interface InstantQuoteRequestManualReview {
+export interface InstantQuoteRequestManualReview extends InstantQuoteManualReviewDisplay {
   success: true;
   quoteId: string;
-  estimateType: "manual_review";
-  manualReviewRequired: true;
-  /**
-   * A single, deliberately generic customer-safe code — never one of the
-   * pricing engine's or core's internal ManualReviewReasonCode /
-   * CUSTOMER_IDENTITY_CONFLICT values. Those internal codes are for the
-   * admin email only (see build-admin-email.ts).
-   */
-  reasonCode: "custom_quote_required";
-  customerMessage: string;
 }
 
 export interface InstantQuoteRequestValidationFailure {
@@ -57,9 +43,6 @@ export interface InstantQuoteRequestFailure {
   /** Generic, customer-safe message only — never a provider/database error string. */
   message: string;
 }
-
-const MANUAL_REVIEW_CUSTOMER_MESSAGE =
-  "We received your request and will contact you to confirm the details and pricing.";
 
 /**
  * Maps the trusted core's result into the customer-safe shape above. Only
@@ -86,12 +69,14 @@ export function mapToCustomerSafeResult(
     success: true,
     quoteId: result.quoteId,
     estimateType: "instant_range",
-    manualReviewRequired: false,
+    manualReviewRequired: result.manualReviewRequired,
     displayRangeLower: result.range.lower,
     displayRangeUpper: result.range.upper,
     hasStartingAtPricing: result.hasStartingAtPricing,
     prepaidPackageTotal: result.prepaidPackageTotal,
     effectivePricePerVisit: result.effectivePricePerVisit,
     firstCleaningOfferApplied: result.firstCleaningOfferApplied,
+    regularDisplayRangeLower: result.firstCleaningOfferApplied ? (result.regularRange?.lower ?? null) : null,
+    regularDisplayRangeUpper: result.firstCleaningOfferApplied ? (result.regularRange?.upper ?? null) : null,
   };
 }

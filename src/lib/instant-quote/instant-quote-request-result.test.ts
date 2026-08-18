@@ -17,6 +17,7 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     prepaidPackageTotal: null,
     effectivePricePerVisit: null,
     firstCleaningOfferApplied: false,
+    regularRange: null,
     manualReviewRequired: false,
     manualReviewReasons: [],
     ...overrides,
@@ -37,6 +38,8 @@ describe("mapToCustomerSafeResult", () => {
       prepaidPackageTotal: null,
       effectivePricePerVisit: null,
       firstCleaningOfferApplied: false,
+      regularDisplayRangeLower: null,
+      regularDisplayRangeUpper: null,
     });
   });
 
@@ -62,6 +65,59 @@ describe("mapToCustomerSafeResult", () => {
     } else {
       throw new Error("expected instant_range");
     }
+  });
+
+  it("surfaces the regular comparison range when the first-cleaning offer was applied", () => {
+    const safe = mapToCustomerSafeResult(
+      okResult({
+        firstCleaningOfferApplied: true,
+        range: { lower: 110, upper: 130 },
+        regularRange: { lower: 145, upper: 165 },
+      })
+    );
+    if (safe.estimateType === "instant_range") {
+      expect(safe.regularDisplayRangeLower).toBe(145);
+      expect(safe.regularDisplayRangeUpper).toBe(165);
+    } else {
+      throw new Error("expected instant_range");
+    }
+  });
+
+  it("never fabricates a regular comparison range when the offer was not applied, even if regularRange were somehow non-null", () => {
+    const safe = mapToCustomerSafeResult(
+      okResult({ firstCleaningOfferApplied: false, regularRange: { lower: 999, upper: 1000 } })
+    );
+    if (safe.estimateType === "instant_range") {
+      expect(safe.regularDisplayRangeLower).toBeNull();
+      expect(safe.regularDisplayRangeUpper).toBeNull();
+    } else {
+      throw new Error("expected instant_range");
+    }
+  });
+
+  it("returns null regular range fields when the offer was applied but regularRange is null (defensive)", () => {
+    const safe = mapToCustomerSafeResult(
+      okResult({ firstCleaningOfferApplied: true, regularRange: null })
+    );
+    if (safe.estimateType === "instant_range") {
+      expect(safe.regularDisplayRangeLower).toBeNull();
+      expect(safe.regularDisplayRangeUpper).toBeNull();
+    } else {
+      throw new Error("expected instant_range");
+    }
+  });
+
+  it("surfaces manualReviewRequired: true for an instant_range result carrying a manual-quote add-on, without hiding the base range", () => {
+    const safe = mapToCustomerSafeResult(
+      okResult({ manualReviewRequired: true, manualReviewReasons: ["MANUAL_QUOTE_ADD_ON_SELECTED"] })
+    );
+    expect(safe.estimateType).toBe("instant_range");
+    expect(safe.manualReviewRequired).toBe(true);
+    if (safe.estimateType === "instant_range") {
+      expect(safe.displayRangeLower).toBe(145);
+      expect(safe.displayRangeUpper).toBe(165);
+    }
+    expect(JSON.stringify(safe)).not.toContain("MANUAL_QUOTE_ADD_ON_SELECTED");
   });
 
   it("maps a manual-review result to a generic customer-safe code, never the internal reasons", () => {

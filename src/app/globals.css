@@ -39,3 +39,27 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Quote wizard: regular-vs-first-cleaning estimate reveal. Both elements
+   are present in the DOM from the start and animated purely via CSS, so
+   the reduced-motion override above (0.01ms duration) is sufficient on its
+   own to make both appear immediately — no JS branching required. */
+@keyframes quote-strike-grow {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes quote-fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

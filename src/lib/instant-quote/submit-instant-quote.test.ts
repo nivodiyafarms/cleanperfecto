@@ -109,9 +109,13 @@ describe("submitInstantQuote", () => {
       expect(result.estimateType).toBe("instant_range");
       expect(result.calculatedTotal).toBeCloseTo(105.3); // 30% launch offer on a 1B1B Standard Light quote
       expect(result.manualReviewRequired).toBe(false);
+      // Server-authoritative regular-vs-discounted comparison, rerun through the same trusted engine.
+      expect(result.regularRange).toEqual({ lower: 145, upper: 165 });
     }
     expect(repo.insertedRows).toHaveLength(1);
     expect(repo.insertedRows[0].first_cleaning_offer_applied).toBe(true);
+    // The comparison is presentation-only — it never reaches the persisted row/snapshot.
+    expect(repo.insertedRows[0].pricing_snapshot.result).not.toHaveProperty("regularRange");
   });
 
   it("a returning customer (matched by email, completed history) does not get the first-cleaning offer", async () => {
@@ -130,6 +134,7 @@ describe("submitInstantQuote", () => {
     if (result.ok) {
       expect(result.calculatedTotal).toBe(144); // no discount — same as production-scenarios test #1
       expect(result.customerId).toBe(customer.id);
+      expect(result.regularRange).toBeNull(); // no offer applied -> no fabricated comparison
     }
     expect(repo.insertedRows[0].first_cleaning_offer_applied).toBe(false);
   });
