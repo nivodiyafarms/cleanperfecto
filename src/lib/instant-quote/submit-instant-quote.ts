@@ -46,6 +46,8 @@ export type SubmitInstantQuoteResult =
       hasStartingAtPricing: boolean;
       prepaidPackageTotal: number | null;
       effectivePricePerVisit: number | null;
+      /** Audit/display information: whether THIS quote's own calculation applied the first-cleaning discount — never an eligibility source of truth on its own (see calculate-estimate.ts). */
+      firstCleaningOfferApplied: boolean;
       manualReviewRequired: boolean;
       manualReviewReasons: InstantQuoteManualReviewReasonCode[];
     }
@@ -188,6 +190,7 @@ export async function submitInstantQuote(
       hasStartingAtPricing: calculationResult.hasStartingAtPricing,
       prepaidPackageTotal: calculationResult.prepaidPackageTotal,
       effectivePricePerVisit: calculationResult.effectivePricePerVisit,
+      firstCleaningOfferApplied: calculationResult.discountProgram === "first_cleaning",
       manualReviewRequired: calculationResult.manualReviewRequired || identityConflict,
       manualReviewReasons: row.manual_review_reasons,
     };
