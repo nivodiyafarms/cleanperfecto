@@ -1,4 +1,4 @@
-import type { CleaningType, Condition, FrequencyId } from "@/lib/pricing/types";
+import type { CleaningType, Condition } from "@/lib/pricing/types";
 import type { InstantQuotePropertyType, LeadSource } from "@/lib/instant-quote/types";
 
 /**
@@ -12,8 +12,11 @@ export type WizardPropertyType = Extract<InstantQuotePropertyType, "home" | "apa
 /**
  * Phase 1 deliberately has no customer-facing prepaid-package concept — no
  * toggle, no visit count. Every submission from this wizard is an ordinary
- * (non-prepaid) quote; see map-form-to-raw-input.ts. The 6+ prepaid package
- * offer is planned for the future Booking + Payment milestone instead. The
+ * (non-prepaid), one-time quote; see map-form-to-raw-input.ts. Frequency
+ * itself is not collected here at all (owner-approved 2026-08-19 — the
+ * initial quote should be as fast as possible; recurring frequency is
+ * chosen later, during Booking & Payment). The 6+ prepaid package offer is
+ * planned for the future Booking + Payment milestone instead. The
  * backend's package support (src/lib/pricing/, InstantQuoteRawInput's
  * isPrepaidPackage/visitCount/visitAddOns) is untouched and unaffected.
  */
@@ -27,7 +30,6 @@ export interface WizardFormState {
   squareFeet: string; // raw text field value — parsed at submission time; "" means not provided
   condition: Condition;
   zip: string;
-  frequency: FrequencyId;
 
   // Step 2 — Where should we send your estimate?
   firstName: string;
@@ -47,7 +49,6 @@ export const DEFAULT_WIZARD_FORM_STATE: WizardFormState = {
   squareFeet: "",
   condition: "light",
   zip: "",
-  frequency: "one_time",
 
   firstName: "",
   phone: "",

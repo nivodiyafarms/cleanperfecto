@@ -36,6 +36,14 @@ export interface InstantQuoteEstimateDisplay {
    */
   regularDisplayRangeLower: number | null;
   regularDisplayRangeUpper: number | null;
+  /**
+   * True when the $99 minimum-service floor actually capped the applied
+   * discount for this estimate (see MINIMUM_SERVICE_TOTAL enforcement in
+   * calculate-estimate.ts). The UI should only show the "$99 minimum
+   * service total applies" note near a result when this is true — not
+   * unconditionally whenever a discount was applied.
+   */
+  minimumServiceFloorApplied: boolean;
 }
 
 export interface InstantQuoteManualReviewDisplay {

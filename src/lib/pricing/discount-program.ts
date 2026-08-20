@@ -23,8 +23,8 @@ export interface DiscountProgramResult {
  * first-cleaning offer and recurring-cycle pricing are never combined — on a
  * customer's first visit, whichever benefits them more wins. A 6+ scheduled
  * AND prepaid package always uses recurring-cycle pricing followed by an
- * additional 20% package discount (sequential, not additive), and never the
- * first-cleaning offer.
+ * additional 10% package discount (owner-approved 2026-08-19, was 20%;
+ * sequential, not additive), and never the first-cleaning offer.
  *
  * Given the currently approved percentages (30%/25% first-cleaning vs a max
  * 21% weekly recurring rate), the first-cleaning offer always wins in

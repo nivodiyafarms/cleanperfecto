@@ -58,7 +58,7 @@ const BENEFITS: { icon: ReactNode; title: string; supporting: string }[] = [
   },
   {
     icon: <CalendarIcon />,
-    title: "Save 20%",
+    title: "Save 10%",
     supporting: "When scheduling 6+ recurring cleanings",
   },
   {

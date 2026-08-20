@@ -7,6 +7,7 @@ import type {
   InstantQuoteRequestAutomaticEstimate,
   InstantQuoteRequestManualReview,
 } from "@/lib/instant-quote/instant-quote-request-result";
+import type { AddOnId } from "@/lib/pricing/types";
 import CustomizeSection from "./CustomizeSection";
 import EstimateResult from "./EstimateResult";
 import { mapWizardFormToRawInput } from "./map-form-to-raw-input";
@@ -36,6 +37,7 @@ export default function QuoteWizard({ nowIso }: QuoteWizardProps) {
   const [result, setResult] = useState<
     InstantQuoteRequestAutomaticEstimate | InstantQuoteRequestManualReview | null
   >(null);
+  const [selectedAddOnIds, setSelectedAddOnIds] = useState<AddOnId[]>([]);
 
   function updateField<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) {
     setFormState((prev) => ({ ...prev, [key]: value }));
@@ -81,14 +83,20 @@ export default function QuoteWizard({ nowIso }: QuoteWizardProps) {
   function handleEditDetails() {
     setResult(null);
     setSubmitError(null);
+    setSelectedAddOnIds([]);
     setPhase("step1");
   }
 
   if (phase === "result" && result) {
+    const bookingHref =
+      result.success && result.quoteId
+        ? `/quote/${result.quoteId}/booking${selectedAddOnIds.length > 0 ? `?addOns=${selectedAddOnIds.join(",")}` : ""}`
+        : undefined;
+
     return (
       <div className="mx-auto max-w-3xl px-6 py-16 sm:py-20 lg:px-8">
-        <EstimateResult result={result} frequency={formState.frequency} onEditDetails={handleEditDetails}>
-          <CustomizeSection formState={formState} />
+        <EstimateResult result={result} frequency="one_time" onEditDetails={handleEditDetails} bookingHref={bookingHref}>
+          <CustomizeSection formState={formState} onAddOnsChange={setSelectedAddOnIds} />
         </EstimateResult>
       </div>
     );

@@ -72,5 +72,6 @@ export function mapToCustomizationPreviewResult(
     firstCleaningOfferApplied,
     regularDisplayRangeLower: firstCleaningOfferApplied ? (regularRange?.lower ?? null) : null,
     regularDisplayRangeUpper: firstCleaningOfferApplied ? (regularRange?.upper ?? null) : null,
+    minimumServiceFloorApplied: result.minimumServiceTotalApplied,
   };
 }

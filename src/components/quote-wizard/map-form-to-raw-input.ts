@@ -6,12 +6,16 @@ import type { PostEstimateDetails, WizardFormState } from "./wizard-types";
 const FIXED_STATE = "TX";
 
 /**
- * Every Phase 1 wizard submission is an ordinary (non-prepaid) quote — no
- * customer-facing package toggle exists in this milestone (see
- * wizard-types.ts). isPrepaidPackage/visitCount are fixed at the backend's
- * own ordinary-quote values; the trusted core's package support itself is
- * untouched, just not reachable from this UI yet.
+ * Every Phase 1 wizard submission is an ordinary (non-prepaid), one-time
+ * quote — no customer-facing package toggle or frequency picker exists on
+ * Step 1 (owner-approved 2026-08-19; see wizard-types.ts). frequency/
+ * isPrepaidPackage/visitCount are fixed at the backend's own ordinary-quote
+ * values, hardcoded here rather than read from any (now nonexistent)
+ * client field; the trusted core's frequency/package support itself is
+ * untouched, just not reachable from this UI yet. Recurring frequency is
+ * chosen later, during Booking & Payment.
  */
+const ORDINARY_FREQUENCY: InstantQuoteRawInput["frequency"] = "one_time";
 const ORDINARY_VISIT_COUNT = 1;
 
 export interface AddOnSelection {
@@ -47,7 +51,7 @@ export function mapWizardFormToRawInput(
       halfBathrooms: formState.halfBathrooms,
     },
     squareFeet: squareFeet ?? undefined,
-    frequency: formState.frequency,
+    frequency: ORDINARY_FREQUENCY,
     isPrepaidPackage: false,
     visitCount: ORDINARY_VISIT_COUNT,
     addOnIds: addOnSelection.addOnIds,

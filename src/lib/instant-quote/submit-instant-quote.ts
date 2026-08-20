@@ -52,6 +52,8 @@ export type SubmitInstantQuoteResult =
       regularRange: EstimateRange | null;
       manualReviewRequired: boolean;
       manualReviewReasons: InstantQuoteManualReviewReasonCode[];
+      /** Whether the $99 minimum-service floor capped this calculation's discount — see calculate-estimate.ts. */
+      minimumServiceTotalApplied: boolean;
     }
   | { ok: false; stage: "validation"; errors: string[] }
   | { ok: false; stage: "persistence"; error: string }
@@ -196,6 +198,7 @@ export async function submitInstantQuote(
       regularRange,
       manualReviewRequired: calculationResult.manualReviewRequired || identityConflict,
       manualReviewReasons: row.manual_review_reasons,
+      minimumServiceTotalApplied: calculationResult.minimumServiceTotalApplied,
     };
   } catch (err) {
     return {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import type { CleaningType, Condition, FrequencyId } from "@/lib/pricing/types";
+import type { CleaningType, Condition } from "@/lib/pricing/types";
 import FirstCleaningOfferBadge from "@/components/hero/FirstCleaningOfferBadge";
 import { validateStepOne } from "./step-validation";
 import type { WizardFormState, WizardPropertyType } from "./wizard-types";
@@ -45,13 +45,6 @@ const CONDITION_OPTIONS: { id: Condition; label: string; helper: string }[] = [
   { id: "moderate", label: "Moderate", helper: "Some buildup" },
   { id: "heavy", label: "Heavy", helper: "Needs extra attention" },
   { id: "extensive", label: "Extensive", helper: "Significant buildup" },
-];
-
-const FREQUENCY_OPTIONS: { id: FrequencyId; label: string }[] = [
-  { id: "one_time", label: "One-Time" },
-  { id: "weekly", label: "Weekly" },
-  { id: "biweekly", label: "Every 2 Weeks" },
-  { id: "every_4_weeks", label: "Every 4 Weeks" },
 ];
 
 function OptionPills<T extends string | number>({
@@ -206,11 +199,12 @@ export default function StepOneCleaning({
               name="square-footage"
               type="text"
               inputMode="numeric"
-              placeholder="e.g. 1,200 sq. ft. (optional)"
+              placeholder="e.g. 1,200 sq. ft."
               value={formState.squareFeet}
               onChange={(event) => onFieldChange("squareFeet", event.target.value.replace(/[^\d]/g, ""))}
               className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
+            <p className="mt-1.5 text-xs text-muted">Optional — helps improve estimate accuracy</p>
           </div>
         </div>
 
@@ -239,40 +233,28 @@ export default function StepOneCleaning({
           </div>
         </div>
 
-        <div className="grid gap-6 sm:grid-cols-2">
-          <div>
-            <label htmlFor="wizard-zip" className="mb-2.5 block text-sm font-medium text-foreground">
-              ZIP code
-            </label>
-            <input
-              id="wizard-zip"
-              name="zip"
-              type="text"
-              inputMode="numeric"
-              autoComplete="postal-code"
-              maxLength={5}
-              value={formState.zip}
-              onChange={(event) => onFieldChange("zip", event.target.value.replace(/[^\d]/g, ""))}
-              aria-invalid={showErrors && Boolean(errors.zip) ? true : undefined}
-              aria-describedby={showErrors && errors.zip ? "wizard-zip-error" : undefined}
-              className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/50"
-            />
-            {showErrors && errors.zip && (
-              <p id="wizard-zip-error" role="alert" className="mt-1.5 text-sm text-red-600">
-                {errors.zip}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <p className="mb-2.5 text-sm font-medium text-foreground">Frequency</p>
-            <OptionPills
-              options={FREQUENCY_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-              selected={formState.frequency}
-              onSelect={(value) => onFieldChange("frequency", value)}
-              ariaLabel="Frequency"
-            />
-          </div>
+        <div>
+          <label htmlFor="wizard-zip" className="mb-2.5 block text-sm font-medium text-foreground">
+            ZIP code
+          </label>
+          <input
+            id="wizard-zip"
+            name="zip"
+            type="text"
+            inputMode="numeric"
+            autoComplete="postal-code"
+            maxLength={5}
+            value={formState.zip}
+            onChange={(event) => onFieldChange("zip", event.target.value.replace(/[^\d]/g, ""))}
+            aria-invalid={showErrors && Boolean(errors.zip) ? true : undefined}
+            aria-describedby={showErrors && errors.zip ? "wizard-zip-error" : undefined}
+            className="w-full max-w-xs rounded-xl border border-border bg-white px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+          {showErrors && errors.zip && (
+            <p id="wizard-zip-error" role="alert" className="mt-1.5 text-sm text-red-600">
+              {errors.zip}
+            </p>
+          )}
         </div>
       </div>
 

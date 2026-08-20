@@ -39,6 +39,7 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     regularRange: null,
     manualReviewRequired: false,
     manualReviewReasons: [],
+    minimumServiceTotalApplied: false,
     ...overrides,
   };
 }

@@ -75,22 +75,17 @@ describe("mapWizardFormToRawInput", () => {
     expect(mapWizardFormToRawInput(formState({ squareFeet: "-5" })).squareFeet).toBeUndefined();
   });
 
-  describe("Phase 1 is always an ordinary (non-prepaid) quote", () => {
-    it("always submits isPrepaidPackage: false and the ordinary visitCount, regardless of frequency", () => {
-      for (const frequency of ["one_time", "weekly", "biweekly", "every_4_weeks"] as const) {
-        const input = mapWizardFormToRawInput(formState({ frequency }));
-        expect(input.isPrepaidPackage).toBe(false);
-        expect(input.visitCount).toBe(1);
-      }
+  describe("Phase 1 is always an ordinary (non-prepaid), one-time quote", () => {
+    it("always submits frequency: one_time, isPrepaidPackage: false, and the ordinary visitCount — frequency is not a customer-facing field on Step 1 at all", () => {
+      const input = mapWizardFormToRawInput(formState());
+      expect(input.frequency).toBe("one_time");
+      expect(input.isPrepaidPackage).toBe(false);
+      expect(input.visitCount).toBe(1);
     });
 
-    it("still maps the selected frequency itself through correctly", () => {
-      expect(mapWizardFormToRawInput(formState({ frequency: "weekly" })).frequency).toBe("weekly");
-      expect(mapWizardFormToRawInput(formState({ frequency: "biweekly" })).frequency).toBe("biweekly");
-      expect(mapWizardFormToRawInput(formState({ frequency: "every_4_weeks" })).frequency).toBe(
-        "every_4_weeks"
-      );
-      expect(mapWizardFormToRawInput(formState({ frequency: "one_time" })).frequency).toBe("one_time");
+    it("has no frequency field on WizardFormState at all — a structural guarantee, not just a runtime default (owner-approved 2026-08-19: frequency removed from the initial quote)", () => {
+      const state = formState();
+      expect("frequency" in state).toBe(false);
     });
 
     it("has no isPrepaidPackage field on WizardFormState at all — a structural guarantee, not just a runtime default", () => {

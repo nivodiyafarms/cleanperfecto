@@ -20,6 +20,7 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     regularRange: null,
     manualReviewRequired: false,
     manualReviewReasons: [],
+    minimumServiceTotalApplied: false,
     ...overrides,
   };
 }
@@ -40,7 +41,19 @@ describe("mapToCustomerSafeResult", () => {
       firstCleaningOfferApplied: false,
       regularDisplayRangeLower: null,
       regularDisplayRangeUpper: null,
+      minimumServiceFloorApplied: false,
     });
+  });
+
+  it("surfaces minimumServiceFloorApplied only when the $99 floor actually capped the discount", () => {
+    const uncapped = mapToCustomerSafeResult(okResult({ minimumServiceTotalApplied: false }));
+    const capped = mapToCustomerSafeResult(okResult({ minimumServiceTotalApplied: true }));
+    if (uncapped.estimateType === "instant_range" && capped.estimateType === "instant_range") {
+      expect(uncapped.minimumServiceFloorApplied).toBe(false);
+      expect(capped.minimumServiceFloorApplied).toBe(true);
+    } else {
+      throw new Error("expected instant_range");
+    }
   });
 
   it("carries prepaidPackageTotal/effectivePricePerVisit through for a package", () => {

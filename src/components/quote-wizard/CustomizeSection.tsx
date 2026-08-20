@@ -54,16 +54,24 @@ function AddOnChip({
 
 interface CustomizeSectionProps {
   formState: WizardFormState;
+  /** Notified with the current add-on selection on every toggle, so the parent can carry it into the "Continue to Booking" link — see QuoteWizard.tsx. Add-on selections here are not persisted to quote_requests; they only exist as this component's local state until the customer proceeds to booking. */
+  onAddOnsChange?: (addOnIds: AddOnId[]) => void;
 }
 
 /**
  * Phase 1 post-estimate customization: add-ons only. No prepaid-package /
- * per-visit UI exists here (that belongs to the future Booking + Payment
- * milestone's 6+ prepaid package flow) and no preferred-date field (real
- * scheduling is part of that same future milestone) — see wizard-types.ts.
+ * per-visit UI exists here (that belongs to the Booking + Payment
+ * milestone's 6+ prepaid package flow, which does not collect add-ons at
+ * purchase time either — see src/lib/booking) and no preferred-date field
+ * (real scheduling for a normal booking happens on the /quote/[quoteId]/
+ * booking page instead) — see wizard-types.ts.
+ *
+ * The "Add extras (optional)" panel is always visible immediately below
+ * the estimate (owner-approved 2026-08-19) — no click is required to
+ * reveal it. The base estimate above stays visually prominent; this panel
+ * is intentionally compact.
  */
-export default function CustomizeSection({ formState }: CustomizeSectionProps) {
-  const [expanded, setExpanded] = useState(false);
+export default function CustomizeSection({ formState, onAddOnsChange }: CustomizeSectionProps) {
   const [addOnIds, setAddOnIds] = useState<AddOnId[]>([]);
   const [preview, setPreview] = useState<InstantQuoteCustomizationPreviewResult | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
@@ -89,76 +97,66 @@ export default function CustomizeSection({ formState }: CustomizeSectionProps) {
   function toggleAddOn(id: AddOnId) {
     const next = addOnIds.includes(id) ? addOnIds.filter((existing) => existing !== id) : [...addOnIds, id];
     setAddOnIds(next);
+    onAddOnsChange?.(next);
     void requestPreview(next);
   }
 
   return (
     <div className="mt-8">
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-        className="text-sm font-semibold text-secondary underline decoration-secondary/40 underline-offset-2"
-      >
-        {expanded ? "Hide extras" : "Customize your cleaning"}
-      </button>
-
-      {expanded && (
-        <div className="mt-4 flex flex-col gap-6 rounded-3xl border border-border bg-white p-5 sm:p-6">
-          <div>
-            <p className="mb-3 text-sm font-medium text-foreground">Add extras</p>
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              {ALL_ADD_ON_IDS.map((id) => (
-                <AddOnChip key={id} id={id} selected={addOnIds.includes(id)} onToggle={() => toggleAddOn(id)} />
-              ))}
-            </div>
+      <div className="flex flex-col gap-6 rounded-3xl border border-border bg-white p-5 sm:p-6">
+        <div>
+          <p className="mb-3 text-sm font-medium text-foreground">Add extras (optional)</p>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {ALL_ADD_ON_IDS.map((id) => (
+              <AddOnChip key={id} id={id} selected={addOnIds.includes(id)} onToggle={() => toggleAddOn(id)} />
+            ))}
           </div>
-
-          <PreviewSummary preview={preview} pending={previewPending} />
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label htmlFor="wizard-lead-source" className="mb-2 block text-sm font-medium text-foreground">
-                How did you hear about us?
-              </label>
-              <select
-                id="wizard-lead-source"
-                value={postEstimate.leadSource}
-                onChange={(event) =>
-                  setPostEstimate((prev) => ({ ...prev, leadSource: event.target.value as LeadSource | "" }))
-                }
-                className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
-              >
-                <option value="">Select one (optional)</option>
-                {LEAD_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label htmlFor="wizard-notes" className="mb-2 block text-sm font-medium text-foreground">
-                Anything else we should know? <span className="font-normal text-muted">(optional)</span>
-              </label>
-              <textarea
-                id="wizard-notes"
-                rows={3}
-                value={postEstimate.leadSourceDetail}
-                onChange={(event) =>
-                  setPostEstimate((prev) => ({ ...prev, leadSourceDetail: event.target.value }))
-                }
-                className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <p className="text-sm text-muted">
-            Our team will follow up to confirm your final scope and booking details.
-          </p>
         </div>
-      )}
+
+        <PreviewSummary preview={preview} pending={previewPending} />
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="wizard-lead-source" className="mb-2 block text-sm font-medium text-foreground">
+              How did you hear about us?
+            </label>
+            <select
+              id="wizard-lead-source"
+              value={postEstimate.leadSource}
+              onChange={(event) =>
+                setPostEstimate((prev) => ({ ...prev, leadSource: event.target.value as LeadSource | "" }))
+              }
+              className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
+            >
+              <option value="">Select one (optional)</option>
+              {LEAD_SOURCE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="wizard-notes" className="mb-2 block text-sm font-medium text-foreground">
+              Anything else we should know? <span className="font-normal text-muted">(optional)</span>
+            </label>
+            <textarea
+              id="wizard-notes"
+              rows={3}
+              value={postEstimate.leadSourceDetail}
+              onChange={(event) =>
+                setPostEstimate((prev) => ({ ...prev, leadSourceDetail: event.target.value }))
+              }
+              className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <p className="text-sm text-muted">
+          Our team will follow up to confirm your final scope and booking details.
+        </p>
+      </div>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import GlassPanel from "@/components/ui/GlassPanel";
 import { getInstantQuoteFrequencyLabel } from "@/lib/instant-quote/email/labels";
 import type { FrequencyId } from "@/lib/pricing/types";
@@ -58,7 +59,7 @@ function AutomaticEstimatePanel({
         </p>
       )}
 
-      {result.firstCleaningOfferApplied && (
+      {result.minimumServiceFloorApplied && (
         <p className="mt-4 text-xs text-muted">*$99 minimum service total applies.</p>
       )}
 
@@ -93,11 +94,13 @@ interface EstimateResultProps {
   /** The frequency the customer selected in Step 1 — drives the estimate heading, e.g. "Your Weekly Cleaning Estimate". */
   frequency: FrequencyId;
   onEditDetails: () => void;
+  /** Link to /quote/[quoteId]/booking (with the currently selected add-ons carried along) — only rendered for an automatic estimate, never for manual review (no bookable instant range exists yet). */
+  bookingHref?: string;
   /** Rendered below the estimate panel — the "Customize your cleaning" section, only meaningful for an automatic estimate. */
   children?: ReactNode;
 }
 
-export default function EstimateResult({ result, frequency, onEditDetails, children }: EstimateResultProps) {
+export default function EstimateResult({ result, frequency, onEditDetails, bookingHref, children }: EstimateResultProps) {
   return (
     <div className="mx-auto max-w-2xl">
       {result.estimateType === "instant_range" ? (
@@ -115,6 +118,15 @@ export default function EstimateResult({ result, frequency, onEditDetails, child
       </button>
 
       {result.estimateType === "instant_range" && children}
+
+      {result.estimateType === "instant_range" && bookingHref && (
+        <Link
+          href={bookingHref}
+          className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-primary px-8 py-3.5 text-base font-medium text-foreground transition-colors hover:bg-secondary sm:w-auto"
+        >
+          Continue to Booking
+        </Link>
+      )}
     </div>
   );
 }

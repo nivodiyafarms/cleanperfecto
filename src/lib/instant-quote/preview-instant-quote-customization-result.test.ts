@@ -38,8 +38,19 @@ describe("mapToCustomizationPreviewResult", () => {
       firstCleaningOfferApplied: false,
       regularDisplayRangeLower: null,
       regularDisplayRangeUpper: null,
+      minimumServiceFloorApplied: false,
     });
     expect(safe).not.toHaveProperty("quoteId");
+  });
+
+  it("passes minimumServiceFloorApplied through from the engine's minimumServiceTotalApplied", () => {
+    const estimate = calculateEstimateWithComparison(baseInput());
+    const safe = mapToCustomizationPreviewResult(estimate);
+    if (safe.estimateType === "instant_range") {
+      expect(safe.minimumServiceFloorApplied).toBe(estimate.result.minimumServiceTotalApplied);
+    } else {
+      throw new Error("expected instant_range");
+    }
   });
 
   it("surfaces the regular comparison range when the offer is applied", () => {

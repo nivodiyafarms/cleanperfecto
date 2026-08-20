@@ -57,9 +57,9 @@ export default function FirstCleaningOfferBadge({ nowIso }: FirstCleaningOfferBa
       : null;
 
   return (
-    <div className="inline-flex flex-col gap-1 rounded-2xl border border-primary/40 bg-foreground/50 px-4 py-2.5 backdrop-blur-sm sm:px-5 sm:py-3">
-      <div className="flex items-center gap-3 sm:gap-4">
-        <span className="text-2xl leading-none font-bold text-primary sm:text-3xl">
+    <div className="inline-flex flex-col gap-1.5 rounded-2xl border border-primary/40 bg-foreground/50 px-5 py-3 backdrop-blur-sm sm:py-3.5">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-4">
+        <span className="text-2xl leading-none font-bold whitespace-nowrap text-primary sm:text-3xl">
           Up to {offer.percent}% OFF
         </span>
         <span className="flex flex-col leading-tight">

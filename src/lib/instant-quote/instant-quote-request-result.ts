@@ -78,5 +78,6 @@ export function mapToCustomerSafeResult(
     firstCleaningOfferApplied: result.firstCleaningOfferApplied,
     regularDisplayRangeLower: result.firstCleaningOfferApplied ? (result.regularRange?.lower ?? null) : null,
     regularDisplayRangeUpper: result.firstCleaningOfferApplied ? (result.regularRange?.upper ?? null) : null,
+    minimumServiceFloorApplied: result.minimumServiceTotalApplied,
   };
 }

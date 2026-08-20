@@ -470,10 +470,10 @@ describe("6+ prepaid package", () => {
     );
     expect(result.discountProgram).toBe("prepaid_package");
 
-    // Cleaning subtotal $149 -> weekly recurring (×0.79) -> package (×0.80).
+    // Cleaning subtotal $149 -> weekly recurring (×0.79) -> package (×0.90).
     const cleaningSubtotal = 149;
     const afterRecurring = cleaningSubtotal * 0.79; // 117.71
-    const afterPackage = afterRecurring * 0.8; // 94.168 (discounted cleaning-only, per visit)
+    const afterPackage = afterRecurring * 0.9; // 105.939 (discounted cleaning-only, per visit)
     const perVisitTravel = 0;
     const perVisitSupplies = 15;
 
