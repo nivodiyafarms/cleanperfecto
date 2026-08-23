@@ -1,4 +1,6 @@
 import type Stripe from "stripe";
+import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
+import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { sendNormalBookingConfirmationEmails } from "../email/send-normal-booking-confirmation-emails";
 import { sendPrepaidPackageSuccessEmails } from "../email/send-prepaid-package-success-emails";
 import type { BookingRepository } from "../repository";
@@ -20,12 +22,29 @@ function intentIdOf(value: string | { id: string } | null): string | null {
  * verified SetupIntent status of 'succeeded' moves the booking order to
  * pending_confirmation — bare checkout.session.completed is not
  * sufficient (see the approved plan's §3).
+ *
+ * Scheduling integration point (Scheduling + Package Management milestone):
+ * once setup succeeds, creates the initial 'requested' service_visits row
+ * for this normal booking — see create-requested-visit-from-booking.ts.
+ * Deliberately called BEFORE the booking_orders status transition below,
+ * not after: create-requested-visit-from-booking.ts is itself idempotent
+ * (safe to call again), so if it succeeds here but the status update fails/
+ * retries, a Stripe retry's call to this function is a harmless no-op while
+ * the status update proceeds normally. Doing it in the other order would
+ * mean a visit-creation failure on the FIRST attempt could never be
+ * retried — a later retry finds status already advanced and, since
+ * updateBookingOrderStatus's `changed` gate below only fires on the run
+ * that performs the real transition, would silently skip visit creation
+ * forever. schedulingRepo is optional so existing tests that don't care
+ * about scheduling behavior are unaffected; the production route always
+ * supplies it (see src/app/api/stripe/webhook/route.ts).
  */
 async function handleSetupSessionCompleted(
   stripe: Stripe,
   repo: BookingRepository,
   session: Stripe.Checkout.Session,
-  bookingOrderId: string
+  bookingOrderId: string,
+  schedulingRepo?: SchedulingRepository
 ): Promise<void> {
   const setupIntentId = intentIdOf(session.setup_intent);
   if (!setupIntentId) return;
@@ -42,6 +61,26 @@ async function handleSetupSessionCompleted(
     status: "completed",
     stripeSetupIntentId: setupIntentId,
   });
+
+  if (schedulingRepo) {
+    const bookingOrder = await repo.findBookingOrderById(bookingOrderId);
+    if (bookingOrder && bookingOrder.bookingType === "normal" && bookingOrder.requestedDate && bookingOrder.requestedStartTime) {
+      await createRequestedVisitFromBooking(schedulingRepo, {
+        bookingOrderId: bookingOrder.id,
+        customerId: bookingOrder.customerId,
+        quoteRequestId: bookingOrder.quoteRequestId,
+        cleaningType: bookingOrder.cleaningType,
+        frequency: bookingOrder.frequency,
+        requestedDate: bookingOrder.requestedDate,
+        requestedStartTime: bookingOrder.requestedStartTime,
+        serviceAddressLine1: bookingOrder.serviceAddressLine1,
+        serviceAddressLine2: bookingOrder.serviceAddressLine2,
+        serviceCity: bookingOrder.serviceCity,
+        serviceState: bookingOrder.serviceState,
+        serviceAddressIdentity: bookingOrder.serviceAddressIdentity,
+      });
+    }
+  }
 
   const changed = await repo.updateBookingOrderStatus(bookingOrderId, "awaiting_payment_method", "pending_confirmation");
   if (changed) {
@@ -128,7 +167,12 @@ async function handlePaymentSessionCompleted(
  * quote_requests (booking_orders/payment_attempts/prepaid_packages are
  * this milestone's source of truth).
  */
-export async function processStripeWebhookEvent(stripe: Stripe, repo: BookingRepository, event: Stripe.Event): Promise<void> {
+export async function processStripeWebhookEvent(
+  stripe: Stripe,
+  repo: BookingRepository,
+  event: Stripe.Event,
+  schedulingRepo?: SchedulingRepository
+): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;
@@ -136,7 +180,7 @@ export async function processStripeWebhookEvent(stripe: Stripe, repo: BookingRep
       if (!bookingOrderId) return;
 
       if (session.mode === "setup") {
-        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId);
+        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo);
       } else if (session.mode === "payment") {
         await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId);
       }
