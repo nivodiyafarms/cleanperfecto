@@ -19,7 +19,13 @@ import type {
   ServiceVisitEventRow,
   ServiceVisitRow,
 } from "./domain-types";
-import type { CalendarDate, PackageAmendmentApprovalState, PackageAmendmentPaymentState, PackageVisitPlanStatus } from "./types";
+import type {
+  CalendarDate,
+  FeeAssessmentState,
+  PackageAmendmentApprovalState,
+  PackageAmendmentPaymentState,
+  PackageVisitPlanStatus,
+} from "./types";
 
 /**
  * Everything the scheduling module needs from persistence, combined into
@@ -60,6 +66,8 @@ export interface SchedulingRepository {
   // -- events / fees / reminders ---------------------------------------
   insertServiceVisitEvent(row: ServiceVisitEventRow): Promise<void>;
   insertServiceFeeAssessment(row: NewServiceFeeAssessmentRow): Promise<ServiceFeeAssessmentRow>;
+  /** Workflow-state transition only (assessed -> waived/paid/void) — never touches amount/feeType/policyVersion, which stay a frozen record of what was actually assessed. reasonAppend, if given, is appended to the existing reason (e.g. why a fee was waived) rather than overwriting the original assessment reason. */
+  updateServiceFeeAssessmentState(id: string, state: FeeAssessmentState, reasonAppend?: string): Promise<ServiceFeeAssessmentRow | null>;
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
 

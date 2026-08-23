@@ -135,6 +135,13 @@ function cleanerIsFreeFor(
     );
 }
 
+/** Shared by computeAvailableStartTimes and computeAvailableCleaners so the two never drift on how a partial_block override is interpreted. */
+function blockedStartRangesFor(context: AvailabilityContext): MinuteInterval[] {
+  return context.dayOverrides
+    .filter((o) => o.type === "partial_block" && o.blockStartTime && o.blockEndTime)
+    .map((o) => ({ start: timeToMinutes(o.blockStartTime as string), end: timeToMinutes(o.blockEndTime as string) }));
+}
+
 /**
  * Dynamically computes which start times, on the requested date, can
  * actually support the job — never a stored slot inventory. Considers (in
@@ -157,9 +164,7 @@ export function computeAvailableStartTimes(query: AvailabilityQuery, context: Av
     return { date: query.date, availableStartTimes: [], closedByOverride: true };
   }
 
-  const blockedStartRanges: MinuteInterval[] = context.dayOverrides
-    .filter((o) => o.type === "partial_block" && o.blockStartTime && o.blockEndTime)
-    .map((o) => ({ start: timeToMinutes(o.blockStartTime as string), end: timeToMinutes(o.blockEndTime as string) }));
+  const blockedStartRanges = blockedStartRangesFor(context);
 
   const dayOfWeek = dayOfWeekForDate(query.date);
   const activeCleanerIds = context.activeCleanerIds;
@@ -194,4 +199,64 @@ export function computeAvailableStartTimes(query: AvailabilityQuery, context: Av
   }
 
   return { date: query.date, availableStartTimes, closedByOverride: false };
+}
+
+export interface AvailableCleanersQuery {
+  date: CalendarDate;
+  /** A specific chosen start time — typically one of computeAvailableStartTimes' own results, but this function is self-contained and re-checks day overrides independently rather than assuming the caller already filtered them. */
+  startTime: TimeOfDay;
+  serviceMinutes: number;
+  bufferMinutes: number;
+}
+
+export interface CleanerAvailabilityResult {
+  cleanerId: string;
+  available: boolean;
+}
+
+export interface AvailableCleanersResult {
+  date: CalendarDate;
+  startTime: TimeOfDay;
+  closedByOverride: boolean;
+  /** One entry per active cleaner (see AvailabilityContext.activeCleanerIds) — never omits an inactive-for-this-slot cleaner, so the caller can show "unavailable" rather than just absence. */
+  cleaners: CleanerAvailabilityResult[];
+}
+
+/**
+ * For the ADMIN ASSIGNMENT UI specifically: given one already-chosen start
+ * time (not a range of candidates), which specific active cleaners can
+ * actually take the job. Reuses the exact same cleanerWindowsForDate/
+ * cleanerIsFreeFor/blockedStartRangesFor logic computeAvailableStartTimes
+ * already uses — this is the one piece computeAvailableStartTimes itself
+ * doesn't expose (it only returns which START TIMES work in aggregate,
+ * never which specific cleaners are free at one of them).
+ */
+export function computeAvailableCleaners(query: AvailableCleanersQuery, context: AvailabilityContext): AvailableCleanersResult {
+  if (context.dayOverrides.some((o) => o.type === "closed_all_day")) {
+    return {
+      date: query.date,
+      startTime: query.startTime,
+      closedByOverride: true,
+      cleaners: context.activeCleanerIds.map((cleanerId) => ({ cleanerId, available: false })),
+    };
+  }
+
+  const startMinutes = timeToMinutes(query.startTime);
+  const isBlockedStart = blockedStartRangesFor(context).some(
+    (blocked) => startMinutes >= blocked.start && startMinutes < blocked.end
+  );
+
+  const dayOfWeek = dayOfWeekForDate(query.date);
+  const jobInterval: MinuteInterval = { start: startMinutes, end: startMinutes + query.serviceMinutes };
+
+  const cleaners = context.activeCleanerIds.map((cleanerId) => {
+    if (isBlockedStart) {
+      return { cleanerId, available: false };
+    }
+    const windows = cleanerWindowsForDate(cleanerId, dayOfWeek, context);
+    const available = windows.length > 0 && cleanerIsFreeFor(cleanerId, jobInterval, query.bufferMinutes, windows, context);
+    return { cleanerId, available };
+  });
+
+  return { date: query.date, startTime: query.startTime, closedByOverride: false, cleaners };
 }

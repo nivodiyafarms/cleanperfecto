@@ -304,6 +304,50 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return changed;
     },
 
+    async updateServiceFeeAssessmentState(id, state, reasonAppend) {
+      if (reasonAppend) {
+        const { data: existing, error: fetchError } = await supabase
+          .from("service_fee_assessments")
+          .select("reason")
+          .eq("id", id)
+          .maybeSingle();
+        if (fetchError) throw new Error(`[scheduling] service_fee_assessments lookup before state update failed: ${fetchError.message}`);
+        if (!existing) return null;
+        const nextReason = existing.reason ? `${existing.reason} — ${reasonAppend}` : reasonAppend;
+        const { data, error } = await supabase
+          .from("service_fee_assessments")
+          .update({ state, reason: nextReason })
+          .eq("id", id)
+          .select()
+          .maybeSingle();
+        if (error) throw new Error(`[scheduling] service_fee_assessments state update failed: ${error.message}`);
+        return data
+          ? {
+              id: data.id,
+              serviceVisitId: data.service_visit_id,
+              feeType: data.fee_type,
+              amount: Number(data.amount),
+              policyVersion: data.policy_version,
+              reason: data.reason,
+              state: data.state,
+            }
+          : null;
+      }
+      const { data, error } = await supabase.from("service_fee_assessments").update({ state }).eq("id", id).select().maybeSingle();
+      if (error) throw new Error(`[scheduling] service_fee_assessments state update failed: ${error.message}`);
+      return data
+        ? {
+            id: data.id,
+            serviceVisitId: data.service_visit_id,
+            feeType: data.fee_type,
+            amount: Number(data.amount),
+            policyVersion: data.policy_version,
+            reason: data.reason,
+            state: data.state,
+          }
+        : null;
+    },
+
     async insertServiceVisitEvent(row) {
       const { error } = await supabase.from("service_visit_events").insert({
         service_visit_id: row.serviceVisitId,

@@ -264,6 +264,18 @@ export function createFakeSchedulingRepository(
       feeAssessments.push(created);
       return created;
     },
+    async updateServiceFeeAssessmentState(id, state, reasonAppend) {
+      const index = feeAssessments.findIndex((f) => f.id === id);
+      if (index === -1) return null;
+      const existing = feeAssessments[index];
+      const updated: ServiceFeeAssessmentRow = {
+        ...existing,
+        state,
+        reason: reasonAppend ? (existing.reason ? `${existing.reason} — ${reasonAppend}` : reasonAppend) : existing.reason,
+      };
+      feeAssessments[index] = updated;
+      return updated;
+    },
     async insertServiceVisitNotification(row: NewServiceVisitNotificationRow) {
       if (notifications.has(row.idempotencyKey)) {
         return { inserted: false };

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeAvailableStartTimes, type AvailabilityContext, type AvailabilityQuery } from "./availability";
+import {
+  computeAvailableCleaners,
+  computeAvailableStartTimes,
+  type AvailabilityContext,
+  type AvailabilityQuery,
+  type AvailableCleanersQuery,
+} from "./availability";
 
 const DATE = "2026-08-24"; // a Monday
 
@@ -159,5 +165,69 @@ describe("computeAvailableStartTimes", () => {
     const context = baseContext();
     const query = baseQuery();
     expect(computeAvailableStartTimes(query, context)).toEqual(computeAvailableStartTimes(query, context));
+  });
+});
+
+function baseCleanersQuery(overrides: Partial<AvailableCleanersQuery> = {}): AvailableCleanersQuery {
+  return { date: DATE, startTime: "10:00", serviceMinutes: 120, bufferMinutes: 60, ...overrides };
+}
+
+describe("computeAvailableCleaners", () => {
+  it("marks a cleaner available at a chosen start time within their window with no conflicts", () => {
+    const result = computeAvailableCleaners(baseCleanersQuery(), baseContext());
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: true }]);
+    expect(result.closedByOverride).toBe(false);
+  });
+
+  it("marks all cleaners unavailable on a business-level full-day closure", () => {
+    const context = baseContext({ dayOverrides: [{ type: "closed_all_day", blockStartTime: null, blockEndTime: null }] });
+    const result = computeAvailableCleaners(baseCleanersQuery(), context);
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: false }]);
+    expect(result.closedByOverride).toBe(true);
+  });
+
+  it("marks cleaners unavailable when the chosen start falls inside a partial-day block", () => {
+    const context = baseContext({ dayOverrides: [{ type: "partial_block", blockStartTime: "08:00", blockEndTime: "12:00" }] });
+    const result = computeAvailableCleaners(baseCleanersQuery({ startTime: "10:00" }), context);
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: false }]);
+  });
+
+  it("marks a cleaner unavailable when they have no recurring rule for that day of week", () => {
+    const context = baseContext({
+      availabilityRules: [{ cleanerId: "cleaner-1", dayOfWeek: 2, startTime: "08:00", endTime: "18:00" }],
+    });
+    const result = computeAvailableCleaners(baseCleanersQuery(), context);
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: false }]);
+  });
+
+  it("marks a cleaner unavailable when an existing buffered assignment overlaps the chosen slot", () => {
+    const context = baseContext({
+      existingAssignments: [{ cleanerId: "cleaner-1", startTime: "09:00", endTime: "11:00" }],
+    });
+    const result = computeAvailableCleaners(baseCleanersQuery({ startTime: "10:00" }), context);
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: false }]);
+  });
+
+  it("returns one entry per active cleaner, correctly distinguishing available from unavailable", () => {
+    const context = baseContext({
+      activeCleanerIds: ["cleaner-1", "cleaner-2"],
+      availabilityRules: [
+        { cleanerId: "cleaner-1", dayOfWeek: 1, startTime: "08:00", endTime: "18:00" },
+        // cleaner-2 has no rule for Monday at all.
+      ],
+    });
+    const result = computeAvailableCleaners(baseCleanersQuery(), context);
+    expect(result.cleaners).toEqual([
+      { cleanerId: "cleaner-1", available: true },
+      { cleanerId: "cleaner-2", available: false },
+    ]);
+  });
+
+  it("an unavailable_all_day exception overrides an otherwise-available recurring rule", () => {
+    const context = baseContext({
+      exceptions: [{ cleanerId: "cleaner-1", type: "unavailable_all_day", startTime: null, endTime: null }],
+    });
+    const result = computeAvailableCleaners(baseCleanersQuery(), context);
+    expect(result.cleaners).toEqual([{ cleanerId: "cleaner-1", available: false }]);
   });
 });
