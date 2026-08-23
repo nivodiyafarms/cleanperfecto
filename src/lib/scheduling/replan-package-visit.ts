@@ -1,5 +1,6 @@
 import { InvalidVisitStateError } from "./errors";
 import type { SchedulingRepository } from "./repository";
+import { syncRecurringPlanFromPackagePlan } from "./sync-linked-recurring-package-plan";
 import type { CalendarDate, TimeOfDay } from "./types";
 
 export interface ReplanPackageVisitInput {
@@ -42,4 +43,10 @@ export async function replanPackageVisit(repo: SchedulingRepository, input: Repl
     changeReason: "manual_single_move",
     packageAmendmentId: null,
   });
+
+  await syncRecurringPlanFromPackagePlan(
+    repo,
+    { ...plan, plannedDate: input.newPlannedDate, plannedStartTime: input.newPlannedStartTime },
+    "manual_single_move"
+  );
 }

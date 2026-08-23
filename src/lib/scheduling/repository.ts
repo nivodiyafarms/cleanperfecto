@@ -7,16 +7,23 @@ import type {
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
   NewRecurringScheduleRow,
+  NewRecurringScopeVersionRow,
+  NewRecurringVisitPlanHistoryRow,
+  NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
   RecurringScheduleRow,
+  RecurringScopeVersionRow,
+  RecurringVisitPlanRow,
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
+  ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
 import type {
@@ -25,6 +32,9 @@ import type {
   PackageAmendmentApprovalState,
   PackageAmendmentPaymentState,
   PackageVisitPlanStatus,
+  RecurringScopeVersionStatus,
+  RecurringVisitPlanStatus,
+  ServiceVisitPricingPaymentStatus,
 } from "./types";
 
 /**
@@ -47,7 +57,11 @@ export interface SchedulingRepository {
   findServiceVisitById(id: string): Promise<ServiceVisitRow | null>;
   /** The one directly-created visit for a booking order (recurring_schedule_id IS NULL), if any — used by create-requested-visit-from-booking's idempotency check. */
   findDirectServiceVisitByBookingOrderId(bookingOrderId: string): Promise<ServiceVisitRow | null>;
+  /** Every service_visits row for a customer (any status), newest first — used by the customer portal's history/profile-address-fallback views. */
+  listServiceVisitsForCustomer(customerId: string): Promise<ServiceVisitRow[]>;
   insertServiceVisit(row: NewServiceVisitRow): Promise<ServiceVisitRow>;
+  /** Updates ONLY requested_start_at — never confirmed_start_at/confirmed_end_at/status/assignments. Used by a customer's self-service reschedule REQUEST against an already-'scheduled' visit, which must never silently overwrite the confirmed operational schedule (see request-visit-reschedule.ts). */
+  updateServiceVisitRequestedStart(serviceVisitId: string, requestedStartAt: Date): Promise<void>;
   /** Atomic confirm/reschedule/reassign via the set_service_visit_schedule() Postgres function. Throws a SchedulingConflictError (see errors.ts) on an exclusion_violation (23P01). */
   setServiceVisitSchedule(params: {
     serviceVisitId: string;
@@ -76,16 +90,28 @@ export interface SchedulingRepository {
   findRecurringScheduleById(id: string): Promise<RecurringScheduleRow | null>;
   findActiveRecurringScheduleForBookingOrder(bookingOrderId: string): Promise<RecurringScheduleRow | null>;
   findActiveRecurringScheduleForPackage(prepaidPackageId: string): Promise<RecurringScheduleRow | null>;
+  /** Every active recurring_schedules row for a customer (booking-order- and package-backed alike) — used to answer "does this customer have an active recurring relationship at all" (portal eligibility) and to drive the universal next-six calendar. */
+  listActiveRecurringSchedulesForCustomer(customerId: string): Promise<RecurringScheduleRow[]>;
   supersedeRecurringSchedule(id: string, effectiveUntil: CalendarDate): Promise<void>;
 
   // -- prepaid packages / plans -------------------------------------------
   findPrepaidPackageById(id: string): Promise<PrepaidPackageRow | null>;
+  /** The oldest active prepaid package still carrying credit for this customer (remaining_visit_count > 0), or null if none — resolved fresh at the moment a recurring_visit_plans row is turned into a real visit, never decided upfront by the schedule itself. Once every package is exhausted, this returns null and later visits become Pay Per Cleaning. */
+  findActivePrepaidPackageForCustomer(customerId: string): Promise<PrepaidPackageRow | null>;
   listPackageVisitPlans(prepaidPackageId: string): Promise<PackageVisitPlanRow[]>;
   findPackageVisitPlanById(id: string): Promise<PackageVisitPlanRow | null>;
+  /** The package_visit_plans row linked to a given universal recurring_visit_plans row, if any — the other half of the sync invariant (see sync-linked-recurring-package-plan.ts). */
+  findPackageVisitPlanByRecurringVisitPlanId(recurringVisitPlanId: string): Promise<PackageVisitPlanRow | null>;
   insertPackageVisitPlan(row: NewPackageVisitPlanRow): Promise<{ plan: PackageVisitPlanRow; inserted: boolean }>;
   updatePackageVisitPlan(
     id: string,
-    patch: { plannedDate?: CalendarDate; plannedStartTime?: string; status?: PackageVisitPlanStatus; serviceVisitId?: string }
+    patch: {
+      plannedDate?: CalendarDate;
+      plannedStartTime?: string;
+      status?: PackageVisitPlanStatus;
+      serviceVisitId?: string;
+      recurringVisitPlanId?: string;
+    }
   ): Promise<void>;
   insertPackageVisitPlanHistory(row: NewPackageVisitPlanHistoryRow): Promise<void>;
 
@@ -96,4 +122,39 @@ export interface SchedulingRepository {
     id: string,
     patch: { approvalState?: PackageAmendmentApprovalState; paymentState?: PackageAmendmentPaymentState }
   ): Promise<PackageAmendmentRow | null>;
+
+  // -- recurring_visit_plans (universal calendar, Customer Portal V1) -----
+  listRecurringVisitPlans(recurringScheduleId: string): Promise<RecurringVisitPlanRow[]>;
+  findRecurringVisitPlanById(id: string): Promise<RecurringVisitPlanRow | null>;
+  insertRecurringVisitPlan(row: NewRecurringVisitPlanRow): Promise<{ plan: RecurringVisitPlanRow; inserted: boolean }>;
+  updateRecurringVisitPlan(
+    id: string,
+    patch: {
+      plannedDate?: CalendarDate;
+      plannedStartTime?: string;
+      status?: RecurringVisitPlanStatus;
+      serviceVisitId?: string;
+      /** Moves a still-'planned' row onto a new recurring_schedule_id version — used only by a cadence regeneration (replan-recurring-cadence.ts), never on an already-'linked' row. */
+      recurringScheduleId?: string;
+    }
+  ): Promise<void>;
+  insertRecurringVisitPlanHistory(row: NewRecurringVisitPlanHistoryRow): Promise<void>;
+
+  // -- recurring_scope_versions (Customer Portal V1) -----------------------
+  findActiveRecurringScopeVersion(recurringScheduleId: string): Promise<RecurringScopeVersionRow | null>;
+  findRecurringScopeVersionById(id: string): Promise<RecurringScopeVersionRow | null>;
+  insertRecurringScopeVersion(row: NewRecurringScopeVersionRow): Promise<RecurringScopeVersionRow>;
+  supersedeRecurringScopeVersion(id: string): Promise<void>;
+  updateRecurringScopeVersionStatus(id: string, status: RecurringScopeVersionStatus): Promise<RecurringScopeVersionRow | null>;
+
+  // -- service_visit_pricing (Customer Portal V1) --------------------------
+  findServiceVisitPricingByVisitId(serviceVisitId: string): Promise<ServiceVisitPricingRow | null>;
+  /** Insert-or-overwrite the pricing/estimate fields for a visit (never touches paymentStatus/confirmedAt/confirmedBy). */
+  upsertServiceVisitPricing(row: NewServiceVisitPricingRow): Promise<ServiceVisitPricingRow>;
+  /** Admin confirms the current estimate as final: priceStatus -> 'confirmed', previouslyApprovedAmount -> totalAmount, paymentStatus -> 'awaiting_completion' if amountDueFromCustomer > 0 else left as 'not_applicable'. */
+  confirmServiceVisitPricing(serviceVisitId: string, confirmedBy: string): Promise<ServiceVisitPricingRow | null>;
+  updateServiceVisitPricingPaymentStatus(
+    serviceVisitId: string,
+    paymentStatus: ServiceVisitPricingPaymentStatus
+  ): Promise<ServiceVisitPricingRow | null>;
 }

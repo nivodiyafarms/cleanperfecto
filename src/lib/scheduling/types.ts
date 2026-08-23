@@ -10,6 +10,27 @@ export type RecurringScheduleStatus = "active" | "paused" | "superseded" | "canc
 
 export type PackageVisitPlanStatus = "planned" | "linked";
 
+/** Same values as PackageVisitPlanStatus but kept as its own type — recurring_visit_plans is a separate, universal table (see its migration), deliberately not coupled to package-specific naming. */
+export type RecurringVisitPlanStatus = "planned" | "linked";
+
+export type RecurringVisitPlanHistoryChangeReason =
+  | "initial_plan"
+  | "manual_single_move"
+  | "cadence_regeneration"
+  | "linked_to_visit"
+  | "replenishment";
+
+export type RecurringScopeVersionStatus = "pending_customer_approval" | "active" | "superseded" | "rejected";
+
+export type ServiceVisitPricingPriceStatus = "estimated" | "pending_customer_approval" | "confirmed";
+
+export type ServiceVisitPricingPaymentStatus =
+  | "not_applicable"
+  | "awaiting_completion"
+  | "awaiting_payment"
+  | "paid"
+  | "payment_failed";
+
 export type FeeType = "reschedule" | "cancellation" | "no_access";
 
 export type FeeAssessmentState = "assessed" | "waived" | "paid" | "void";

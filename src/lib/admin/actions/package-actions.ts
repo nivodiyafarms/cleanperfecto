@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { resolvePackageSchedulingContext } from "@/lib/admin/queries/visit-scope";
+import { activatePrepaidPackageCalendar } from "@/lib/scheduling/activate-prepaid-package-calendar";
 import { applyPackageAmendment } from "@/lib/scheduling/apply-package-amendment";
 import { createPackageAmendment } from "@/lib/scheduling/create-package-amendment";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
-import { planPackageVisitDates } from "@/lib/scheduling/plan-package-visit-dates";
 import { replanPackageCadence } from "@/lib/scheduling/replan-package-cadence";
 import { replanPackageVisit } from "@/lib/scheduling/replan-package-visit";
 import { schedulePackageVisitPlan } from "@/lib/scheduling/schedule-package-visit-plan";
@@ -25,7 +25,14 @@ function isValidCadence(value: string): value is RecurringCadence {
   return (CADENCES as string[]).includes(value);
 }
 
-/** Plans all of a package's intended visit dates — never creates fake service_visits (see plan-package-visit-dates.ts). A distinct, later, explicit action from purchase itself. */
+/**
+ * Plans all of a package's intended visit dates and, in the same step,
+ * seeds the universal recurring_visit_plans calendar and links each pair
+ * by visit_number — see activate-prepaid-package-calendar.ts, the real
+ * server-authoritative event for a prepaid package (the payment webhook
+ * itself has no first date/time to use). Never creates fake service_visits.
+ * A distinct, later, explicit action from purchase itself.
+ */
 export async function planPackageVisitDatesAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   await requireAdmin();
   const prepaidPackageId = String(formData.get("prepaidPackageId") ?? "");
@@ -41,13 +48,18 @@ export async function planPackageVisitDatesAction(_prevState: ActionResult | nul
   if (!context) return actionError("Could not resolve this package's originating booking.");
 
   const repo = createSupabaseSchedulingRepository();
-  await planPackageVisitDates(repo, {
-    prepaidPackageId,
-    customerId: context.customerId,
-    cadence,
-    firstDate,
-    firstStartTime,
-  });
+  try {
+    await activatePrepaidPackageCalendar(repo, {
+      prepaidPackageId,
+      customerId: context.customerId,
+      cadence,
+      firstDate,
+      firstStartTime,
+    });
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
 
   revalidatePackagePaths(prepaidPackageId);
   return actionOk("Visit dates planned.");

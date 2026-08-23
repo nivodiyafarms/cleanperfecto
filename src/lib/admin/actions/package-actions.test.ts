@@ -72,6 +72,7 @@ function seedPackage(remainingVisitCount = 4) {
         remainingVisitCount,
         effectivePricePerVisit: 100,
         status: "active",
+        purchasedAt: new Date("2026-01-01T00:00:00Z"),
       },
     ],
   });

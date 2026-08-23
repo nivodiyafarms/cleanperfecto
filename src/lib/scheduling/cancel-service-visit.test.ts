@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { cancelServiceVisit } from "./cancel-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
 import { createRequestedVisitFromBooking } from "./create-requested-visit-from-booking";
+import { planRecurringVisitDates } from "./plan-recurring-visit-dates";
+import { scheduleRecurringVisitPlan } from "./schedule-recurring-visit-plan";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
 
 const DURATION_INPUT = { cleaningType: "standard" as const, sizeTier: "2br_2ba" as const, condition: "light" as const };
@@ -69,6 +71,44 @@ describe("cancelServiceVisit", () => {
     const visitId = await seedScheduledVisit(repo);
     await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-25T00:00:00Z") });
     expect(state.assignments.filter((a) => a.serviceVisitId === visitId && a.unassignedAt === null).length).toBe(0);
+  });
+
+  it("replenishes the universal recurring horizon back to six when an occurrence is cancelled, without consuming a package credit", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const schedule = await repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "weekly",
+      preferredDayOfWeek: 1,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-08-24",
+      supersedesId: null,
+    });
+    const plans = await planRecurringVisitDates(repo, {
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      cadence: "weekly",
+      firstDate: "2026-08-24",
+      firstStartTime: "10:00",
+    });
+    const { visitId } = await scheduleRecurringVisitPlan(repo, {
+      recurringVisitPlanId: plans[0].id,
+      customerId: "customer-1",
+      cleaningType: "standard",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+
+    await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-01T00:00:00Z") });
+
+    expect(state.recurringVisitPlansById.size).toBe(7);
+    expect(state.packageVisitUsages.size).toBe(0);
   });
 
   it("is a safe no-op when the visit is already cancelled", async () => {

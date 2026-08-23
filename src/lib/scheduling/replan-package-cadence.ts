@@ -1,6 +1,7 @@
 import { dayOfWeekForDate, generateCadenceDates } from "./recurrence-dates";
 import type { SchedulingRepository } from "./repository";
 import type { PackageVisitPlanRow } from "./domain-types";
+import { syncRecurringPlanFromPackagePlan } from "./sync-linked-recurring-package-plan";
 import type { CalendarDate, RecurringCadence, TimeOfDay } from "./types";
 
 export interface ReplanPackageCadenceInput {
@@ -74,12 +75,14 @@ export async function replanPackageCadence(
       packageAmendmentId: input.packageAmendmentId ?? null,
     });
 
-    updated.push({
+    const updatedPlan: PackageVisitPlanRow = {
       ...plan,
       plannedDate: newDate,
       plannedStartTime: input.newFirstStartTime,
       generatedFromRecurringScheduleId: newScheduleId ?? plan.generatedFromRecurringScheduleId,
-    });
+    };
+    await syncRecurringPlanFromPackagePlan(repo, updatedPlan, "cadence_regeneration");
+    updated.push(updatedPlan);
   }
 
   return updated;

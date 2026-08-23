@@ -1,4 +1,4 @@
-import type { CleaningType, FrequencyId } from "@/lib/pricing/types";
+import type { AddOnId, CalculationInput, CleaningType, FrequencyId } from "@/lib/pricing/types";
 import type {
   CalendarDate,
   FeeAssessmentState,
@@ -8,6 +8,11 @@ import type {
   PackageVisitPlanStatus,
   RecurringCadence,
   RecurringScheduleStatus,
+  RecurringScopeVersionStatus,
+  RecurringVisitPlanHistoryChangeReason,
+  RecurringVisitPlanStatus,
+  ServiceVisitPricingPaymentStatus,
+  ServiceVisitPricingPriceStatus,
   ServiceVisitStatus,
   TimeOfDay,
 } from "./types";
@@ -135,6 +140,8 @@ export interface PackageVisitPlanRow {
   status: PackageVisitPlanStatus;
   serviceVisitId: string | null;
   generatedFromRecurringScheduleId: string | null;
+  /** Nullable, unique link to this visit's row in the universal recurring_visit_plans calendar — see sync-linked-recurring-package-plan.ts. Null for packages scheduled before this linkage existed. */
+  recurringVisitPlanId: string | null;
 }
 
 export interface NewPackageVisitPlanRow {
@@ -155,6 +162,8 @@ export interface PrepaidPackageRow {
   /** The actual per-visit price charged at purchase (prepaid_packages.effective_price_per_visit) — a historical fact, used as the basis for a package amendment's "old value," never re-derived from the pricing engine (which could drift from what was actually paid if config changed since purchase). */
   effectivePricePerVisit: number;
   status: "active" | "completed" | "cancelled";
+  /** Used to pick the oldest active package first when resolving which package a newly-scheduled recurring visit should draw a credit from (see findActivePrepaidPackageForCustomer / schedule-recurring-visit-plan.ts). */
+  purchasedAt: Date;
 }
 
 export interface ServiceFeeAssessmentRow {
@@ -181,6 +190,7 @@ export interface ServiceVisitEventRow {
     | "requested"
     | "confirmed"
     | "rescheduled"
+    | "reschedule_requested"
     | "cleaner_assigned"
     | "cleaner_reassigned"
     | "cleaner_unassigned"
@@ -245,4 +255,89 @@ export interface NewServiceVisitNotificationRow {
   channel: "email" | "sms";
   scheduledSendAt: Date;
   idempotencyKey: string;
+}
+
+// -- Customer Portal V1: universal recurring_visit_plans -------------------
+
+export interface RecurringVisitPlanRow {
+  id: string;
+  recurringScheduleId: string;
+  customerId: string;
+  visitNumber: number;
+  plannedDate: CalendarDate;
+  plannedStartTime: TimeOfDay;
+  status: RecurringVisitPlanStatus;
+  serviceVisitId: string | null;
+}
+
+export interface NewRecurringVisitPlanRow {
+  recurringScheduleId: string;
+  customerId: string;
+  visitNumber: number;
+  plannedDate: CalendarDate;
+  plannedStartTime: TimeOfDay;
+}
+
+export interface NewRecurringVisitPlanHistoryRow {
+  recurringVisitPlanId: string;
+  recurringScheduleId: string;
+  visitNumber: number;
+  previousPlannedDate: CalendarDate | null;
+  previousPlannedStartTime: TimeOfDay | null;
+  previousStatus: RecurringVisitPlanStatus | null;
+  newPlannedDate: CalendarDate;
+  newPlannedStartTime: TimeOfDay;
+  newStatus: RecurringVisitPlanStatus;
+  changeReason: RecurringVisitPlanHistoryChangeReason;
+}
+
+// -- Customer Portal V1: recurring_scope_versions ---------------------------
+
+export interface RecurringScopeVersionRow {
+  id: string;
+  recurringScheduleId: string;
+  customerId: string;
+  baseCalculationInput: CalculationInput;
+  approvedBaseAmount: number | null;
+  pricingSnapshot: unknown | null;
+  status: RecurringScopeVersionStatus;
+  effectiveFromVisitNumber: number;
+  supersedesId: string | null;
+  requestedBy: string | null;
+  reason: string | null;
+}
+
+export interface NewRecurringScopeVersionRow {
+  recurringScheduleId: string;
+  customerId: string;
+  baseCalculationInput: CalculationInput;
+  approvedBaseAmount: number | null;
+  pricingSnapshot: unknown | null;
+  effectiveFromVisitNumber: number;
+  supersedesId: string | null;
+  requestedBy: string | null;
+  reason: string | null;
+}
+
+// -- Customer Portal V1: service_visit_pricing ------------------------------
+
+export interface NewServiceVisitPricingRow {
+  serviceVisitId: string;
+  pricingVersion: string;
+  pricingSnapshot: unknown;
+  baseAmount: number;
+  addOnIds: AddOnId[];
+  addOnAmount: number;
+  totalAmount: number;
+  amountDueFromCustomer: number;
+  priceStatus: ServiceVisitPricingPriceStatus;
+  requiresCustomerApproval: boolean;
+  previouslyApprovedAmount: number | null;
+}
+
+export interface ServiceVisitPricingRow extends NewServiceVisitPricingRow {
+  id: string;
+  paymentStatus: ServiceVisitPricingPaymentStatus;
+  confirmedAt: Date | null;
+  confirmedBy: string | null;
 }

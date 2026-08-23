@@ -10,15 +10,22 @@ import type {
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
   NewRecurringScheduleRow,
+  NewRecurringScopeVersionRow,
+  NewRecurringVisitPlanHistoryRow,
+  NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
   RecurringScheduleRow,
+  RecurringScopeVersionRow,
+  RecurringVisitPlanRow,
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
+  ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
 import { SchedulingConflictError } from "./errors";
@@ -82,6 +89,7 @@ function toPackageVisitPlanRow(row: Record<string, unknown>): PackageVisitPlanRo
     status: row.status as PackageVisitPlanRow["status"],
     serviceVisitId: (row.service_visit_id as string | null) ?? null,
     generatedFromRecurringScheduleId: (row.generated_from_recurring_schedule_id as string | null) ?? null,
+    recurringVisitPlanId: (row.recurring_visit_plan_id as string | null) ?? null,
   };
 }
 
@@ -95,6 +103,56 @@ function toPrepaidPackageRow(row: Record<string, unknown>): PrepaidPackageRow {
     remainingVisitCount: row.remaining_visit_count as number,
     effectivePricePerVisit: Number(row.effective_price_per_visit),
     status: row.status as PrepaidPackageRow["status"],
+    purchasedAt: new Date(row.purchased_at as string),
+  };
+}
+
+function toRecurringVisitPlanRow(row: Record<string, unknown>): RecurringVisitPlanRow {
+  return {
+    id: row.id as string,
+    recurringScheduleId: row.recurring_schedule_id as string,
+    customerId: row.customer_id as string,
+    visitNumber: row.visit_number as number,
+    plannedDate: row.planned_date as string,
+    plannedStartTime: row.planned_start_time as string,
+    status: row.status as RecurringVisitPlanRow["status"],
+    serviceVisitId: (row.service_visit_id as string | null) ?? null,
+  };
+}
+
+function toRecurringScopeVersionRow(row: Record<string, unknown>): RecurringScopeVersionRow {
+  return {
+    id: row.id as string,
+    recurringScheduleId: row.recurring_schedule_id as string,
+    customerId: row.customer_id as string,
+    baseCalculationInput: row.base_calculation_input as RecurringScopeVersionRow["baseCalculationInput"],
+    approvedBaseAmount: row.approved_base_amount === null ? null : Number(row.approved_base_amount),
+    pricingSnapshot: row.pricing_snapshot ?? null,
+    status: row.status as RecurringScopeVersionRow["status"],
+    effectiveFromVisitNumber: row.effective_from_visit_number as number,
+    supersedesId: (row.supersedes_id as string | null) ?? null,
+    requestedBy: (row.requested_by as string | null) ?? null,
+    reason: (row.reason as string | null) ?? null,
+  };
+}
+
+function toServiceVisitPricingRow(row: Record<string, unknown>): ServiceVisitPricingRow {
+  return {
+    id: row.id as string,
+    serviceVisitId: row.service_visit_id as string,
+    pricingVersion: row.pricing_version as string,
+    pricingSnapshot: row.pricing_snapshot,
+    baseAmount: Number(row.base_amount),
+    addOnIds: (row.add_on_ids as ServiceVisitPricingRow["addOnIds"]) ?? [],
+    addOnAmount: Number(row.add_on_amount),
+    totalAmount: Number(row.total_amount),
+    amountDueFromCustomer: Number(row.amount_due_from_customer),
+    priceStatus: row.price_status as ServiceVisitPricingRow["priceStatus"],
+    paymentStatus: row.payment_status as ServiceVisitPricingRow["paymentStatus"],
+    previouslyApprovedAmount: row.previously_approved_amount === null ? null : Number(row.previously_approved_amount),
+    requiresCustomerApproval: row.requires_customer_approval as boolean,
+    confirmedAt: row.confirmed_at ? new Date(row.confirmed_at as string) : null,
+    confirmedBy: (row.confirmed_by as string | null) ?? null,
   };
 }
 
@@ -235,6 +293,16 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return data ? toServiceVisitRow(data) : null;
     },
 
+    async listServiceVisitsForCustomer(customerId) {
+      const { data, error } = await supabase
+        .from("service_visits")
+        .select()
+        .eq("customer_id", customerId)
+        .order("created_at", { ascending: false });
+      if (error) throw new Error(`[scheduling] service_visits lookup for customer failed: ${error.message}`);
+      return (data ?? []).map(toServiceVisitRow);
+    },
+
     async insertServiceVisit(row: NewServiceVisitRow) {
       const { data, error } = await supabase
         .from("service_visits")
@@ -260,6 +328,14 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .single();
       if (error || !data) throw new Error(`[scheduling] service_visits insert failed: ${error?.message ?? "no row returned"}`);
       return toServiceVisitRow(data);
+    },
+
+    async updateServiceVisitRequestedStart(serviceVisitId, requestedStartAt) {
+      const { error } = await supabase
+        .from("service_visits")
+        .update({ requested_start_at: requestedStartAt.toISOString() })
+        .eq("id", serviceVisitId);
+      if (error) throw new Error(`[scheduling] service_visits requested_start_at update failed: ${error.message}`);
     },
 
     async setServiceVisitSchedule(params) {
@@ -471,11 +547,39 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     async findPrepaidPackageById(id) {
       const { data, error } = await supabase
         .from("prepaid_packages")
-        .select("id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,effective_price_per_visit,status")
+        .select(
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,effective_price_per_visit,status,purchased_at"
+        )
         .eq("id", id)
         .maybeSingle();
       if (error) throw new Error(`[scheduling] prepaid_packages lookup failed: ${error.message}`);
       return data ? toPrepaidPackageRow(data) : null;
+    },
+
+    async findActivePrepaidPackageForCustomer(customerId) {
+      const { data, error } = await supabase
+        .from("prepaid_packages")
+        .select(
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,effective_price_per_visit,status,purchased_at"
+        )
+        .eq("customer_id", customerId)
+        .eq("status", "active")
+        .gt("remaining_visit_count", 0)
+        .order("purchased_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] active prepaid_packages lookup for customer failed: ${error.message}`);
+      return data ? toPrepaidPackageRow(data) : null;
+    },
+
+    async listActiveRecurringSchedulesForCustomer(customerId) {
+      const { data, error } = await supabase
+        .from("recurring_schedules")
+        .select()
+        .eq("customer_id", customerId)
+        .eq("status", "active");
+      if (error) throw new Error(`[scheduling] active recurring_schedules lookup for customer failed: ${error.message}`);
+      return (data ?? []).map(toRecurringScheduleRow);
     },
 
     async listPackageVisitPlans(prepaidPackageId) {
@@ -491,6 +595,16 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     async findPackageVisitPlanById(id) {
       const { data, error } = await supabase.from("package_visit_plans").select().eq("id", id).maybeSingle();
       if (error) throw new Error(`[scheduling] package_visit_plans lookup by id failed: ${error.message}`);
+      return data ? toPackageVisitPlanRow(data) : null;
+    },
+
+    async findPackageVisitPlanByRecurringVisitPlanId(recurringVisitPlanId) {
+      const { data, error } = await supabase
+        .from("package_visit_plans")
+        .select()
+        .eq("recurring_visit_plan_id", recurringVisitPlanId)
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] package_visit_plans lookup by recurring_visit_plan_id failed: ${error.message}`);
       return data ? toPackageVisitPlanRow(data) : null;
     },
 
@@ -531,6 +645,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       if (patch.plannedStartTime !== undefined) dbPatch.planned_start_time = patch.plannedStartTime;
       if (patch.status !== undefined) dbPatch.status = patch.status;
       if (patch.serviceVisitId !== undefined) dbPatch.service_visit_id = patch.serviceVisitId;
+      if (patch.recurringVisitPlanId !== undefined) dbPatch.recurring_visit_plan_id = patch.recurringVisitPlanId;
       const { error } = await supabase.from("package_visit_plans").update(dbPatch).eq("id", id);
       if (error) throw new Error(`[scheduling] package_visit_plans update failed: ${error.message}`);
     },
@@ -591,6 +706,202 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase.from("package_amendments").update(dbPatch).eq("id", id).select().maybeSingle();
       if (error) throw new Error(`[scheduling] package_amendments state update failed: ${error.message}`);
       return data ? toPackageAmendmentRow(data) : null;
+    },
+
+    async listRecurringVisitPlans(recurringScheduleId) {
+      const { data, error } = await supabase
+        .from("recurring_visit_plans")
+        .select()
+        .eq("recurring_schedule_id", recurringScheduleId)
+        .order("visit_number", { ascending: true });
+      if (error) throw new Error(`[scheduling] recurring_visit_plans lookup failed: ${error.message}`);
+      return (data ?? []).map(toRecurringVisitPlanRow);
+    },
+
+    async findRecurringVisitPlanById(id) {
+      const { data, error } = await supabase.from("recurring_visit_plans").select().eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] recurring_visit_plans lookup by id failed: ${error.message}`);
+      return data ? toRecurringVisitPlanRow(data) : null;
+    },
+
+    async insertRecurringVisitPlan(row: NewRecurringVisitPlanRow) {
+      const { data: inserted, error: insertError } = await supabase
+        .from("recurring_visit_plans")
+        .upsert(
+          {
+            recurring_schedule_id: row.recurringScheduleId,
+            customer_id: row.customerId,
+            visit_number: row.visitNumber,
+            planned_date: row.plannedDate,
+            planned_start_time: row.plannedStartTime,
+          },
+          { onConflict: "recurring_schedule_id,visit_number", ignoreDuplicates: true }
+        )
+        .select()
+        .maybeSingle();
+      if (insertError) throw new Error(`[scheduling] recurring_visit_plans insert failed: ${insertError.message}`);
+      if (inserted) {
+        return { plan: toRecurringVisitPlanRow(inserted), inserted: true };
+      }
+      const { data: existing, error: fetchError } = await supabase
+        .from("recurring_visit_plans")
+        .select()
+        .eq("recurring_schedule_id", row.recurringScheduleId)
+        .eq("visit_number", row.visitNumber)
+        .single();
+      if (fetchError || !existing) {
+        throw new Error(`[scheduling] recurring_visit_plans fetch-after-conflict failed: ${fetchError?.message ?? "no row found"}`);
+      }
+      return { plan: toRecurringVisitPlanRow(existing), inserted: false };
+    },
+
+    async updateRecurringVisitPlan(id, patch) {
+      const dbPatch: Record<string, unknown> = {};
+      if (patch.plannedDate !== undefined) dbPatch.planned_date = patch.plannedDate;
+      if (patch.plannedStartTime !== undefined) dbPatch.planned_start_time = patch.plannedStartTime;
+      if (patch.status !== undefined) dbPatch.status = patch.status;
+      if (patch.serviceVisitId !== undefined) dbPatch.service_visit_id = patch.serviceVisitId;
+      if (patch.recurringScheduleId !== undefined) dbPatch.recurring_schedule_id = patch.recurringScheduleId;
+      const { error } = await supabase.from("recurring_visit_plans").update(dbPatch).eq("id", id);
+      if (error) throw new Error(`[scheduling] recurring_visit_plans update failed: ${error.message}`);
+    },
+
+    async insertRecurringVisitPlanHistory(row: NewRecurringVisitPlanHistoryRow) {
+      const { error } = await supabase.from("recurring_visit_plan_history").insert({
+        recurring_visit_plan_id: row.recurringVisitPlanId,
+        recurring_schedule_id: row.recurringScheduleId,
+        visit_number: row.visitNumber,
+        previous_planned_date: row.previousPlannedDate,
+        previous_planned_start_time: row.previousPlannedStartTime,
+        previous_status: row.previousStatus,
+        new_planned_date: row.newPlannedDate,
+        new_planned_start_time: row.newPlannedStartTime,
+        new_status: row.newStatus,
+        change_reason: row.changeReason,
+      });
+      if (error) throw new Error(`[scheduling] recurring_visit_plan_history insert failed: ${error.message}`);
+    },
+
+    async findActiveRecurringScopeVersion(recurringScheduleId) {
+      const { data, error } = await supabase
+        .from("recurring_scope_versions")
+        .select()
+        .eq("recurring_schedule_id", recurringScheduleId)
+        .eq("status", "active")
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] active recurring_scope_versions lookup failed: ${error.message}`);
+      return data ? toRecurringScopeVersionRow(data) : null;
+    },
+
+    async findRecurringScopeVersionById(id) {
+      const { data, error } = await supabase.from("recurring_scope_versions").select().eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] recurring_scope_versions lookup by id failed: ${error.message}`);
+      return data ? toRecurringScopeVersionRow(data) : null;
+    },
+
+    async insertRecurringScopeVersion(row: NewRecurringScopeVersionRow) {
+      const { data, error } = await supabase
+        .from("recurring_scope_versions")
+        .insert({
+          recurring_schedule_id: row.recurringScheduleId,
+          customer_id: row.customerId,
+          base_calculation_input: row.baseCalculationInput,
+          approved_base_amount: row.approvedBaseAmount,
+          pricing_snapshot: row.pricingSnapshot,
+          effective_from_visit_number: row.effectiveFromVisitNumber,
+          supersedes_id: row.supersedesId,
+          requested_by: row.requestedBy,
+          reason: row.reason,
+        })
+        .select()
+        .single();
+      if (error || !data) throw new Error(`[scheduling] recurring_scope_versions insert failed: ${error?.message ?? "no row returned"}`);
+      return toRecurringScopeVersionRow(data);
+    },
+
+    async supersedeRecurringScopeVersion(id) {
+      const { error } = await supabase.from("recurring_scope_versions").update({ status: "superseded" }).eq("id", id);
+      if (error) throw new Error(`[scheduling] superseding recurring_scope_versions failed: ${error.message}`);
+    },
+
+    async updateRecurringScopeVersionStatus(id, status) {
+      const { data, error } = await supabase.from("recurring_scope_versions").update({ status }).eq("id", id).select().maybeSingle();
+      if (error) throw new Error(`[scheduling] recurring_scope_versions status update failed: ${error.message}`);
+      return data ? toRecurringScopeVersionRow(data) : null;
+    },
+
+    async findServiceVisitPricingByVisitId(serviceVisitId) {
+      const { data, error } = await supabase
+        .from("service_visit_pricing")
+        .select()
+        .eq("service_visit_id", serviceVisitId)
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_pricing lookup failed: ${error.message}`);
+      return data ? toServiceVisitPricingRow(data) : null;
+    },
+
+    async upsertServiceVisitPricing(row: NewServiceVisitPricingRow) {
+      const { data, error } = await supabase
+        .from("service_visit_pricing")
+        .upsert(
+          {
+            service_visit_id: row.serviceVisitId,
+            pricing_version: row.pricingVersion,
+            pricing_snapshot: row.pricingSnapshot,
+            base_amount: row.baseAmount,
+            add_on_ids: row.addOnIds,
+            add_on_amount: row.addOnAmount,
+            total_amount: row.totalAmount,
+            amount_due_from_customer: row.amountDueFromCustomer,
+            price_status: row.priceStatus,
+            requires_customer_approval: row.requiresCustomerApproval,
+            previously_approved_amount: row.previouslyApprovedAmount,
+          },
+          { onConflict: "service_visit_id" }
+        )
+        .select()
+        .single();
+      if (error || !data) throw new Error(`[scheduling] service_visit_pricing upsert failed: ${error?.message ?? "no row returned"}`);
+      return toServiceVisitPricingRow(data);
+    },
+
+    async confirmServiceVisitPricing(serviceVisitId, confirmedBy) {
+      const { data: existing, error: fetchError } = await supabase
+        .from("service_visit_pricing")
+        .select()
+        .eq("service_visit_id", serviceVisitId)
+        .maybeSingle();
+      if (fetchError) throw new Error(`[scheduling] service_visit_pricing lookup before confirm failed: ${fetchError.message}`);
+      if (!existing) return null;
+
+      const nextPaymentStatus = Number(existing.amount_due_from_customer) > 0 ? "awaiting_completion" : "not_applicable";
+
+      const { data, error } = await supabase
+        .from("service_visit_pricing")
+        .update({
+          price_status: "confirmed",
+          previously_approved_amount: existing.total_amount,
+          requires_customer_approval: false,
+          payment_status: nextPaymentStatus,
+          confirmed_at: new Date().toISOString(),
+          confirmed_by: confirmedBy,
+        })
+        .eq("service_visit_id", serviceVisitId)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_pricing confirm failed: ${error.message}`);
+      return data ? toServiceVisitPricingRow(data) : null;
+    },
+
+    async updateServiceVisitPricingPaymentStatus(serviceVisitId, paymentStatus) {
+      const { data, error } = await supabase
+        .from("service_visit_pricing")
+        .update({ payment_status: paymentStatus })
+        .eq("service_visit_id", serviceVisitId)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_pricing payment_status update failed: ${error.message}`);
+      return data ? toServiceVisitPricingRow(data) : null;
     },
   };
 }

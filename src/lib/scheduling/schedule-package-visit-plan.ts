@@ -1,6 +1,7 @@
 import type { CleaningType } from "@/lib/pricing/types";
 import { InvalidVisitStateError } from "./errors";
 import type { SchedulingRepository } from "./repository";
+import { syncRecurringPlanFromPackagePlan } from "./sync-linked-recurring-package-plan";
 import { zonedDateTimeToUtc } from "./timezone";
 
 const DEFAULT_TIMEZONE = "America/Chicago";
@@ -82,6 +83,12 @@ export async function schedulePackageVisitPlan(
     newState: { requestedStartAt: requestedStartAt.toISOString(), packageVisitPlanId: plan.id },
     notes: null,
   });
+
+  await syncRecurringPlanFromPackagePlan(
+    repo,
+    { ...plan, status: "linked", serviceVisitId: visit.id },
+    "linked_to_visit"
+  );
 
   return { visitId: visit.id, alreadyLinked: false };
 }

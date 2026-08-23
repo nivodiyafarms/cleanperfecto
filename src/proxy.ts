@@ -28,6 +28,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Same reasoning for the customer portal: /my/login must never redirect
+  // to itself, and /my/auth/callback is the magic-link exchange route
+  // itself (unauthenticated by definition until it runs) — neither can be
+  // gated by the same check they're meant to satisfy.
+  if (pathname === "/my/login" || pathname.startsWith("/my/login/") || pathname.startsWith("/my/auth/callback")) {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({ request });
 
   const { supabaseUrl, supabasePublishableKey } = getSupabasePublicConfig();
@@ -55,12 +63,13 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.redirect(new URL("/admin/login", request.url));
+    const loginPath = pathname.startsWith("/my") ? "/my/login" : "/admin/login";
+    return NextResponse.redirect(new URL(loginPath, request.url));
   }
 
   return response;
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/my/:path*"],
 };

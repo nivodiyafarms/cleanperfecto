@@ -1,6 +1,8 @@
 import type Stripe from "stripe";
+import { bootstrapRecurringVisitPlansFromDirectVisit } from "@/lib/scheduling/bootstrap-recurring-visit-plans-from-direct-visit";
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
+import type { RecurringCadence } from "@/lib/scheduling/types";
 import { sendNormalBookingConfirmationEmails } from "../email/send-normal-booking-confirmation-emails";
 import { sendPrepaidPackageSuccessEmails } from "../email/send-prepaid-package-success-emails";
 import type { BookingRepository } from "../repository";
@@ -65,7 +67,7 @@ async function handleSetupSessionCompleted(
   if (schedulingRepo) {
     const bookingOrder = await repo.findBookingOrderById(bookingOrderId);
     if (bookingOrder && bookingOrder.bookingType === "normal" && bookingOrder.requestedDate && bookingOrder.requestedStartTime) {
-      await createRequestedVisitFromBooking(schedulingRepo, {
+      const { visitId, recurringScheduleId } = await createRequestedVisitFromBooking(schedulingRepo, {
         bookingOrderId: bookingOrder.id,
         customerId: bookingOrder.customerId,
         quoteRequestId: bookingOrder.quoteRequestId,
@@ -79,6 +81,23 @@ async function handleSetupSessionCompleted(
         serviceState: bookingOrder.serviceState,
         serviceAddressIdentity: bookingOrder.serviceAddressIdentity,
       });
+
+      // Recurring frequency only — one_time bookings get no recurring_schedule
+      // at all (createRequestedVisitFromBooking returns null for those), so
+      // there is no universal next-six calendar to seed. Seeds the
+      // customer/admin calendar's first six slots (slot #1 already 'linked'
+      // to the direct visit just created above) — never creates any
+      // additional real service_visits.
+      if (recurringScheduleId) {
+        await bootstrapRecurringVisitPlansFromDirectVisit(schedulingRepo, {
+          recurringScheduleId,
+          customerId: bookingOrder.customerId,
+          cadence: bookingOrder.frequency as RecurringCadence,
+          firstDate: bookingOrder.requestedDate,
+          firstStartTime: bookingOrder.requestedStartTime,
+          directServiceVisitId: visitId,
+        });
+      }
     }
   }
 

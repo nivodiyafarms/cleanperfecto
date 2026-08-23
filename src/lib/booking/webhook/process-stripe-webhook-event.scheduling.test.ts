@@ -17,7 +17,7 @@ function fakeStripe(): Stripe {
   } as unknown as Stripe;
 }
 
-function normalBookingOrderInput(): NewBookingOrderRow {
+function normalBookingOrderInput(overrides: Partial<NewBookingOrderRow> = {}): NewBookingOrderRow {
   return {
     customerId: "customer_1",
     quoteRequestId: "quote_1",
@@ -46,6 +46,7 @@ function normalBookingOrderInput(): NewBookingOrderRow {
     requestedTimeWindow: null,
     requestedStartTime: "09:00",
     cancellationPolicyVersion: "2026-08-19b",
+    ...overrides,
   };
 }
 
@@ -141,5 +142,58 @@ describe("processStripeWebhookEvent — scheduling integration (setup mode)", ()
     );
 
     expect(schedulingState.serviceVisitsById.size).toBe(0);
+  });
+
+  it("seeds exactly six universal recurring_visit_plans for a recurring (weekly) Pay Per Cleaning booking, slot #1 already linked to the direct visit", async () => {
+    const { repo } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(normalBookingOrderInput({ frequency: "weekly" }));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
+    const { repo: schedulingRepo, state: schedulingState } = createFakeSchedulingRepository();
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      repo,
+      setupSessionEvent({ id: "cs_setup_6", mode: "setup", setup_intent: "seti_6", metadata: { booking_order_id: bookingOrder.id } }),
+      schedulingRepo
+    );
+
+    // Exactly one direct service_visit — never six fake ones.
+    expect(schedulingState.serviceVisitsById.size).toBe(1);
+    const directVisit = [...schedulingState.serviceVisitsById.values()][0];
+
+    expect(schedulingState.recurringVisitPlansById.size).toBe(6);
+    const plans = [...schedulingState.recurringVisitPlansById.values()].sort((a, b) => a.visitNumber - b.visitNumber);
+    expect(plans.map((p) => p.status)).toEqual(["linked", "planned", "planned", "planned", "planned", "planned"]);
+    expect(plans[0].serviceVisitId).toBe(directVisit.id);
+  });
+
+  it("does not seed recurring_visit_plans at all for a one_time booking", async () => {
+    const { repo } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(normalBookingOrderInput({ frequency: "one_time" }));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
+    const { repo: schedulingRepo, state: schedulingState } = createFakeSchedulingRepository();
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      repo,
+      setupSessionEvent({ id: "cs_setup_7", mode: "setup", setup_intent: "seti_7", metadata: { booking_order_id: bookingOrder.id } }),
+      schedulingRepo
+    );
+
+    expect(schedulingState.recurringVisitPlansById.size).toBe(0);
+  });
+
+  it("does not duplicate the universal calendar on a redelivered/retried webhook event", async () => {
+    const { repo } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(normalBookingOrderInput({ frequency: "biweekly" }));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
+    const { repo: schedulingRepo, state: schedulingState } = createFakeSchedulingRepository();
+
+    const event = setupSessionEvent({ id: "cs_setup_8", mode: "setup", setup_intent: "seti_8", metadata: { booking_order_id: bookingOrder.id } });
+    await processStripeWebhookEvent(fakeStripe(), repo, event, schedulingRepo);
+    await processStripeWebhookEvent(fakeStripe(), repo, event, schedulingRepo);
+
+    expect(schedulingState.serviceVisitsById.size).toBe(1);
+    expect(schedulingState.recurringVisitPlansById.size).toBe(6);
   });
 });

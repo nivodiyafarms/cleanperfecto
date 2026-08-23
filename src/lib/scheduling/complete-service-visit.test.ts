@@ -4,6 +4,8 @@ import { confirmServiceVisit } from "./confirm-service-visit";
 import { createRequestedVisitFromBooking } from "./create-requested-visit-from-booking";
 import { schedulePackageVisitPlan } from "./schedule-package-visit-plan";
 import { planPackageVisitDates } from "./plan-package-visit-dates";
+import { planRecurringVisitDates } from "./plan-recurring-visit-dates";
+import { scheduleRecurringVisitPlan } from "./schedule-recurring-visit-plan";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
 
 const DURATION_INPUT = { cleaningType: "standard" as const, sizeTier: "2br_2ba" as const, condition: "light" as const };
@@ -21,6 +23,7 @@ async function seedScheduledPackageVisit(prepaidPackageId: string) {
         remainingVisitCount: 6,
         effectivePricePerVisit: 130,
         status: "active",
+        purchasedAt: new Date("2026-01-01T00:00:00Z"),
       },
     ],
   });
@@ -92,6 +95,7 @@ describe("completeServiceVisit", () => {
           remainingVisitCount: 0,
           effectivePricePerVisit: 130,
           status: "active",
+          purchasedAt: new Date("2026-01-01T00:00:00Z"),
         },
       ],
     });
@@ -115,6 +119,43 @@ describe("completeServiceVisit", () => {
     await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
     await completeServiceVisit(repo, visitId);
     expect(state.prepaidPackagesById.get("pkg-zero")?.remainingVisitCount).toBe(0);
+  });
+
+  it("replenishes the universal recurring horizon back to six when a Pay Per Cleaning occurrence completes", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const schedule = await repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "weekly",
+      preferredDayOfWeek: 1,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-08-24",
+      supersedesId: null,
+    });
+    const plans = await planRecurringVisitDates(repo, {
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      cadence: "weekly",
+      firstDate: "2026-08-24",
+      firstStartTime: "10:00",
+    });
+    const { visitId } = await scheduleRecurringVisitPlan(repo, {
+      recurringVisitPlanId: plans[0].id,
+      customerId: "customer-1",
+      cleaningType: "standard",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+
+    expect(state.recurringVisitPlansById.size).toBe(6);
+    await completeServiceVisit(repo, visitId);
+    expect(state.recurringVisitPlansById.size).toBe(7);
   });
 
   it("does not decrement any package for a non-package (normal booking) visit", async () => {

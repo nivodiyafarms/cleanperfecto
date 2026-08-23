@@ -8,16 +8,23 @@ import type {
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
   NewRecurringScheduleRow,
+  NewRecurringScopeVersionRow,
+  NewRecurringVisitPlanHistoryRow,
+  NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
   RecurringScheduleRow,
+  RecurringScopeVersionRow,
+  RecurringVisitPlanRow,
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
+  ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "../domain-types";
 import { SchedulingConflictError } from "../errors";
@@ -87,6 +94,11 @@ export function createFakeSchedulingRepository(
   // Mirrors package_visit_usages.service_visit_id UNIQUE.
   const packageVisitUsages = new Set<string>();
 
+  const recurringVisitPlansById = new Map<string, RecurringVisitPlanRow>();
+  const recurringVisitPlanHistory: NewRecurringVisitPlanHistoryRow[] = [];
+  const recurringScopeVersionsById = new Map<string, RecurringScopeVersionRow>();
+  const servicePricingByVisitId = new Map<string, ServiceVisitPricingRow>();
+
   const repo: SchedulingRepository = {
     async listActiveCleaners() {
       return cleaners.filter((c) => c.active);
@@ -125,6 +137,9 @@ export function createFakeSchedulingRepository(
       }
       return null;
     },
+    async listServiceVisitsForCustomer(customerId) {
+      return [...serviceVisitsById.values()].filter((v) => v.customerId === customerId).reverse();
+    },
     async insertServiceVisit(row: NewServiceVisitRow) {
       const id = randomUUID();
       const created: ServiceVisitRow = {
@@ -157,6 +172,12 @@ export function createFakeSchedulingRepository(
       };
       serviceVisitsById.set(id, created);
       return created;
+    },
+
+    async updateServiceVisitRequestedStart(serviceVisitId, requestedStartAt) {
+      const visit = serviceVisitsById.get(serviceVisitId);
+      if (!visit) return;
+      serviceVisitsById.set(serviceVisitId, { ...visit, requestedStartAt });
     },
 
     async setServiceVisitSchedule(params) {
@@ -318,6 +339,15 @@ export function createFakeSchedulingRepository(
     async findPrepaidPackageById(id) {
       return prepaidPackagesById.get(id) ?? null;
     },
+    async findActivePrepaidPackageForCustomer(customerId) {
+      const candidates = [...prepaidPackagesById.values()]
+        .filter((p) => p.customerId === customerId && p.status === "active" && p.remainingVisitCount > 0)
+        .sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
+      return candidates[0] ?? null;
+    },
+    async listActiveRecurringSchedulesForCustomer(customerId) {
+      return [...recurringSchedulesById.values()].filter((r) => r.customerId === customerId && r.status === "active");
+    },
     async listPackageVisitPlans(prepaidPackageId) {
       return [...packageVisitPlansById.values()]
         .filter((p) => p.prepaidPackageId === prepaidPackageId)
@@ -325,6 +355,12 @@ export function createFakeSchedulingRepository(
     },
     async findPackageVisitPlanById(id) {
       return packageVisitPlansById.get(id) ?? null;
+    },
+    async findPackageVisitPlanByRecurringVisitPlanId(recurringVisitPlanId) {
+      for (const p of packageVisitPlansById.values()) {
+        if (p.recurringVisitPlanId === recurringVisitPlanId) return p;
+      }
+      return null;
     },
     async insertPackageVisitPlan(row: NewPackageVisitPlanRow) {
       const existing = [...packageVisitPlansById.values()].find(
@@ -343,6 +379,7 @@ export function createFakeSchedulingRepository(
         status: "planned",
         serviceVisitId: null,
         generatedFromRecurringScheduleId: row.generatedFromRecurringScheduleId,
+        recurringVisitPlanId: null,
       };
       packageVisitPlansById.set(id, created);
       return { plan: created, inserted: true };
@@ -356,6 +393,7 @@ export function createFakeSchedulingRepository(
         plannedStartTime: patch.plannedStartTime ?? existing.plannedStartTime,
         status: patch.status ?? existing.status,
         serviceVisitId: patch.serviceVisitId ?? existing.serviceVisitId,
+        recurringVisitPlanId: patch.recurringVisitPlanId ?? existing.recurringVisitPlanId,
       });
     },
     async insertPackageVisitPlanHistory(row) {
@@ -389,6 +427,126 @@ export function createFakeSchedulingRepository(
       packageAmendmentsById.set(id, updated);
       return updated;
     },
+
+    async listRecurringVisitPlans(recurringScheduleId) {
+      return [...recurringVisitPlansById.values()]
+        .filter((p) => p.recurringScheduleId === recurringScheduleId)
+        .sort((a, b) => a.visitNumber - b.visitNumber);
+    },
+    async findRecurringVisitPlanById(id) {
+      return recurringVisitPlansById.get(id) ?? null;
+    },
+    async insertRecurringVisitPlan(row: NewRecurringVisitPlanRow) {
+      const existing = [...recurringVisitPlansById.values()].find(
+        (p) => p.recurringScheduleId === row.recurringScheduleId && p.visitNumber === row.visitNumber
+      );
+      if (existing) {
+        return { plan: existing, inserted: false };
+      }
+      const id = randomUUID();
+      const created: RecurringVisitPlanRow = {
+        id,
+        recurringScheduleId: row.recurringScheduleId,
+        customerId: row.customerId,
+        visitNumber: row.visitNumber,
+        plannedDate: row.plannedDate,
+        plannedStartTime: row.plannedStartTime,
+        status: "planned",
+        serviceVisitId: null,
+      };
+      recurringVisitPlansById.set(id, created);
+      return { plan: created, inserted: true };
+    },
+    async updateRecurringVisitPlan(id, patch) {
+      const existing = recurringVisitPlansById.get(id);
+      if (!existing) return;
+      recurringVisitPlansById.set(id, {
+        ...existing,
+        plannedDate: patch.plannedDate ?? existing.plannedDate,
+        plannedStartTime: patch.plannedStartTime ?? existing.plannedStartTime,
+        status: patch.status ?? existing.status,
+        serviceVisitId: patch.serviceVisitId ?? existing.serviceVisitId,
+        recurringScheduleId: patch.recurringScheduleId ?? existing.recurringScheduleId,
+      });
+    },
+    async insertRecurringVisitPlanHistory(row) {
+      recurringVisitPlanHistory.push(row);
+    },
+
+    async findActiveRecurringScopeVersion(recurringScheduleId) {
+      for (const v of recurringScopeVersionsById.values()) {
+        if (v.recurringScheduleId === recurringScheduleId && v.status === "active") return v;
+      }
+      return null;
+    },
+    async findRecurringScopeVersionById(id) {
+      return recurringScopeVersionsById.get(id) ?? null;
+    },
+    async insertRecurringScopeVersion(row: NewRecurringScopeVersionRow) {
+      const id = randomUUID();
+      const created: RecurringScopeVersionRow = { id, status: "pending_customer_approval", ...row };
+      recurringScopeVersionsById.set(id, created);
+      return created;
+    },
+    async supersedeRecurringScopeVersion(id) {
+      const existing = recurringScopeVersionsById.get(id);
+      if (existing) recurringScopeVersionsById.set(id, { ...existing, status: "superseded" });
+    },
+    async updateRecurringScopeVersionStatus(id, status) {
+      const existing = recurringScopeVersionsById.get(id);
+      if (!existing) return null;
+      const updated = { ...existing, status };
+      recurringScopeVersionsById.set(id, updated);
+      return updated;
+    },
+
+    async findServiceVisitPricingByVisitId(serviceVisitId) {
+      return servicePricingByVisitId.get(serviceVisitId) ?? null;
+    },
+    async upsertServiceVisitPricing(row: NewServiceVisitPricingRow) {
+      const existing = servicePricingByVisitId.get(row.serviceVisitId);
+      const updated: ServiceVisitPricingRow = {
+        id: existing?.id ?? randomUUID(),
+        serviceVisitId: row.serviceVisitId,
+        pricingVersion: row.pricingVersion,
+        pricingSnapshot: row.pricingSnapshot,
+        baseAmount: row.baseAmount,
+        addOnIds: row.addOnIds,
+        addOnAmount: row.addOnAmount,
+        totalAmount: row.totalAmount,
+        amountDueFromCustomer: row.amountDueFromCustomer,
+        priceStatus: row.priceStatus,
+        requiresCustomerApproval: row.requiresCustomerApproval,
+        previouslyApprovedAmount: row.previouslyApprovedAmount,
+        paymentStatus: existing?.paymentStatus ?? "not_applicable",
+        confirmedAt: existing?.confirmedAt ?? null,
+        confirmedBy: existing?.confirmedBy ?? null,
+      };
+      servicePricingByVisitId.set(row.serviceVisitId, updated);
+      return updated;
+    },
+    async confirmServiceVisitPricing(serviceVisitId, confirmedBy) {
+      const existing = servicePricingByVisitId.get(serviceVisitId);
+      if (!existing) return null;
+      const updated: ServiceVisitPricingRow = {
+        ...existing,
+        priceStatus: "confirmed",
+        previouslyApprovedAmount: existing.totalAmount,
+        requiresCustomerApproval: false,
+        paymentStatus: existing.amountDueFromCustomer > 0 ? "awaiting_completion" : "not_applicable",
+        confirmedAt: new Date(),
+        confirmedBy,
+      };
+      servicePricingByVisitId.set(serviceVisitId, updated);
+      return updated;
+    },
+    async updateServiceVisitPricingPaymentStatus(serviceVisitId, paymentStatus) {
+      const existing = servicePricingByVisitId.get(serviceVisitId);
+      if (!existing) return null;
+      const updated = { ...existing, paymentStatus };
+      servicePricingByVisitId.set(serviceVisitId, updated);
+      return updated;
+    },
   };
 
   return {
@@ -409,6 +567,10 @@ export function createFakeSchedulingRepository(
       packageAmendmentsById,
       prepaidPackagesById,
       packageVisitUsages,
+      recurringVisitPlansById,
+      recurringVisitPlanHistory,
+      recurringScopeVersionsById,
+      servicePricingByVisitId,
     },
   };
 }

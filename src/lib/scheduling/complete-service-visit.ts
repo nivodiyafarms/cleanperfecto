@@ -1,3 +1,4 @@
+import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 import type { SchedulingRepository } from "./repository";
 
@@ -27,6 +28,16 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
       notes: null,
     });
     await cancelPendingReminder(repo, serviceVisitId);
+
+    // Maintain the customer's rolling six-cleaning horizon (owner-approved):
+    // a completed occurrence under an active recurring relationship no
+    // longer occupies a horizon slot, so top it back up. A no-op for a
+    // one-off visit (recurringScheduleId null) or a schedule that isn't
+    // 'active' (paused/superseded/cancelled) — see
+    // replenish-recurring-visit-plans.ts.
+    if (after?.recurringScheduleId) {
+      await replenishRecurringVisitPlans(repo, after.recurringScheduleId);
+    }
   }
 
   return changed;

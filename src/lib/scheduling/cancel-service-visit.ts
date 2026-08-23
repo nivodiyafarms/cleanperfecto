@@ -1,5 +1,6 @@
 import { assessFee, type FeeAssessmentResult } from "./assess-cancellation-fee";
 import { InvalidVisitStateError } from "./errors";
+import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import type { SchedulingRepository } from "./repository";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 
@@ -65,6 +66,15 @@ export async function cancelServiceVisit(repo: SchedulingRepository, input: Canc
   });
 
   await cancelPendingReminder(repo, input.serviceVisitId);
+
+  // Same rolling-horizon maintenance as completion (owner-approved): a
+  // cancelled occurrence under an active recurring relationship no longer
+  // occupies a horizon slot either, regardless of whether it was ever
+  // confirmed. Never consumes a package credit — that only ever happens in
+  // complete_service_visit().
+  if (visit.recurringScheduleId) {
+    await replenishRecurringVisitPlans(repo, visit.recurringScheduleId);
+  }
 
   return { changed: true, fee };
 }
