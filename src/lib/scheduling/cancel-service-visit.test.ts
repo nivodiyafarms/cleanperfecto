@@ -178,4 +178,32 @@ describe("cancelServiceVisit", () => {
     const second = await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date() });
     expect(second.changed).toBe(false);
   });
+
+  it("enqueues exactly one pending cancelled notice and cancels the pending reminder", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedScheduledVisit(repo);
+    const reminderBefore = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "reminder_24h" && n.state === "pending"
+    );
+    expect(reminderBefore.length).toBe(1);
+
+    await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-25T00:00:00Z") });
+
+    const cancelledNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "cancelled");
+    expect(cancelledNotices.length).toBe(1);
+    expect(cancelledNotices[0].state).toBe("pending");
+
+    const remindersAfter = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "reminder_24h");
+    expect(remindersAfter.every((n) => n.state === "cancelled")).toBe(true);
+  });
+
+  it("does not enqueue a customer-facing cancelled notice for a dispatched/no-access cancellation", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedScheduledVisit(repo);
+
+    await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-25T00:00:00Z"), noAccess: true });
+
+    const cancelledNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "cancelled");
+    expect(cancelledNotices.length).toBe(0);
+  });
 });

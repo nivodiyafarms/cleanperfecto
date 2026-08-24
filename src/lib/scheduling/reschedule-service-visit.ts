@@ -1,3 +1,4 @@
+import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { assessFee, type FeeAssessmentResult } from "./assess-cancellation-fee";
 import { DEFAULT_TURNAROUND_BUFFER_MINUTES } from "./config";
 import { estimateDuration, type DurationEstimateInput } from "./duration-engine";
@@ -79,8 +80,19 @@ export async function rescheduleServiceVisit(
     notes: feeResult.amount > 0 ? `Late-reschedule fee assessed: $${feeResult.amount}` : null,
   });
 
+  await enqueueNotification(repo, {
+    serviceVisitId: input.serviceVisitId,
+    customerId: visit.customerId,
+    notificationType: "rescheduled",
+    channel: "email",
+    scheduledSendAt: new Date(),
+    versionKey: confirmedStartAt.toISOString(),
+  });
+
+  // Cancel-then-reschedule: the stale reminder's idempotency key is tied to
+  // the OLD confirmed_start_at and would otherwise fire at the wrong time.
   await cancelPendingReminder(repo, input.serviceVisitId);
-  await scheduleVisitReminder(repo, input.serviceVisitId, confirmedStartAt);
+  await scheduleVisitReminder(repo, input.serviceVisitId, visit.customerId, confirmedStartAt);
 
   return feeResult.amount > 0 ? feeResult : null;
 }

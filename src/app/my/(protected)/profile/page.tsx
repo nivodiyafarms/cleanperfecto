@@ -1,13 +1,19 @@
+import ActionForm from "@/components/admin/ActionForm";
 import { signOutAction } from "@/lib/customer-portal/actions/auth-actions";
+import { setSmsOptInAction } from "@/lib/customer-portal/actions/notification-preferences-actions";
 import { getCustomerProfile, getMostRecentServiceAddress } from "@/lib/customer-portal/queries";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
+import { createSupabaseCustomerNotificationPreferencesRepository } from "@/lib/notifications/customer-notification-preferences-repository";
 
 export default async function MyProfilePage() {
   const session = await requireCustomer();
-  const [profile, address] = await Promise.all([
+  const preferencesRepo = createSupabaseCustomerNotificationPreferencesRepository();
+  const [profile, address, preferences] = await Promise.all([
     getCustomerProfile(session.customerId),
     getMostRecentServiceAddress(session.customerId),
+    preferencesRepo.findByCustomerId(session.customerId),
   ]);
+  const smsOptIn = preferences?.smsOptIn ?? false;
 
   return (
     <div className="max-w-md space-y-6">
@@ -34,6 +40,17 @@ export default async function MyProfilePage() {
         <p className="text-sm text-foreground">
           {address?.line1 ? `${address.line1}${address.line2 ? `, ${address.line2}` : ""}, ${address.city}, ${address.state}` : "—"}
         </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted">Text message updates</p>
+        <p className="mt-1 text-sm text-foreground">{smsOptIn ? "On" : "Off"}</p>
+        <ActionForm action={setSmsOptInAction} className="mt-2">
+          <input type="hidden" name="optIn" value={(!smsOptIn).toString()} />
+          <button type="submit" className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-background-alt">
+            {smsOptIn ? "Turn off text updates" : "Turn on text updates"}
+          </button>
+        </ActionForm>
       </div>
 
       <form action={signOutAction}>

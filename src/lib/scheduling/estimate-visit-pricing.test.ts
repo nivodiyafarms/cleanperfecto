@@ -220,4 +220,37 @@ describe("estimateVisitPricing", () => {
     const third = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
     expect(third.requiresCustomerApproval).toBe(false);
   });
+
+  it("enqueues a pending pricing_approval_required notice when a re-estimate exceeds the previously confirmed amount", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { visit } = await seedPpcVisitWithApprovedScope(repo);
+
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
+    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
+
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+
+    const notices = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visit.id && n.notificationType === "pricing_approval_required"
+    );
+    expect(notices.length).toBe(1);
+    expect(notices[0].state).toBe("pending");
+  });
+
+  it("does not enqueue a pricing_approval_required notice when a re-estimate is the same or lower than the previously confirmed amount", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { visit } = await seedPpcVisitWithApprovedScope(repo);
+
+    const first = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
+    expect(first.requiresCustomerApproval).toBe(false);
+
+    // Re-estimate with no add-ons — total drops back to base only, strictly lower.
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
+
+    const notices = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visit.id && n.notificationType === "pricing_approval_required"
+    );
+    expect(notices.length).toBe(0);
+  });
 });

@@ -23,6 +23,7 @@ import type {
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
+  ServiceVisitNotificationRow,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
@@ -82,8 +83,20 @@ export interface SchedulingRepository {
   insertServiceFeeAssessment(row: NewServiceFeeAssessmentRow): Promise<ServiceFeeAssessmentRow>;
   /** Workflow-state transition only (assessed -> waived/paid/void) — never touches amount/feeType/policyVersion, which stay a frozen record of what was actually assessed. reasonAppend, if given, is appended to the existing reason (e.g. why a fee was waived) rather than overwriting the original assessment reason. */
   updateServiceFeeAssessmentState(id: string, state: FeeAssessmentState, reasonAppend?: string): Promise<ServiceFeeAssessmentRow | null>;
+  /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
+  /** Every notification row for a visit, newest scheduled first — admin display only, never consumed by a domain workflow. */
+  listServiceVisitNotifications(serviceVisitId: string): Promise<ServiceVisitNotificationRow[]>;
+  findServiceVisitNotificationById(id: string): Promise<ServiceVisitNotificationRow | null>;
+  /** Atomic claim via claim_due_service_visit_notifications() (see the migration) — claims due-pending rows AND stale-'sending' rows (a prior claim whose worker never finished) in one statement, FOR UPDATE SKIP LOCKED so concurrent dispatcher invocations never claim the same row twice. */
+  claimDueServiceVisitNotifications(limit: number, staleMinutes: number): Promise<ServiceVisitNotificationRow[]>;
+  markServiceVisitNotificationSent(id: string, providerMessageId: string | null): Promise<void>;
+  /** A failed attempt that hasn't hit the retry cap: increments retry_count, records failure_reason, returns to 'pending' at a backed-off scheduled_send_at, clears claimed_at. Never silently converts an uncertain provider result into sent. */
+  markServiceVisitNotificationRetry(id: string, params: { failureReason: string; nextScheduledSendAt: Date }): Promise<void>;
+  markServiceVisitNotificationFailedTerminal(id: string, failureReason: string): Promise<void>;
+  /** Admin manual retry: terminal 'failed' -> 'pending' with a fresh attempt budget (retry_count reset to 0) and scheduled_send_at = now(), eligible for the next dispatch tick. A no-op guard (state='failed' in the WHERE clause) — never touches a row that isn't actually terminal. */
+  retryFailedServiceVisitNotification(id: string): Promise<void>;
 
   // -- recurring schedules -----------------------------------------------
   insertRecurringSchedule(row: NewRecurringScheduleRow): Promise<RecurringScheduleRow>;

@@ -33,6 +33,18 @@ export type ServiceVisitPricingPaymentStatus =
 
 export type FeeType = "reschedule" | "cancellation" | "no_access";
 
+export type ServiceVisitNotificationType =
+  | "reminder_24h"
+  | "appointment_confirmed"
+  | "rescheduled"
+  | "cancelled"
+  | "completed"
+  | "pricing_approval_required";
+
+export type ServiceVisitNotificationChannel = "email" | "sms";
+
+export type ServiceVisitNotificationState = "pending" | "sending" | "sent" | "cancelled" | "failed";
+
 export type FeeAssessmentState = "assessed" | "waived" | "paid" | "void";
 
 export type PackageAmendmentApprovalState = "pending_customer_approval" | "approved" | "rejected";

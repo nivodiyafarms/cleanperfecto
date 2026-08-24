@@ -25,6 +25,7 @@ import type {
   RecurringVisitPlanRow,
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
+  ServiceVisitNotificationRow,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
@@ -59,6 +60,24 @@ function toServiceVisitRow(row: Record<string, unknown>): ServiceVisitRow {
     serviceCity: (row.service_city as string | null) ?? null,
     serviceState: (row.service_state as string | null) ?? null,
     serviceAddressIdentity: (row.service_address_identity as string | null) ?? null,
+  };
+}
+
+function toServiceVisitNotificationRow(row: Record<string, unknown>): ServiceVisitNotificationRow {
+  return {
+    id: row.id as string,
+    serviceVisitId: row.service_visit_id as string,
+    customerId: row.customer_id as string,
+    notificationType: row.notification_type as ServiceVisitNotificationRow["notificationType"],
+    channel: row.channel as ServiceVisitNotificationRow["channel"],
+    scheduledSendAt: new Date(row.scheduled_send_at as string),
+    idempotencyKey: row.idempotency_key as string,
+    state: row.state as ServiceVisitNotificationRow["state"],
+    sentAt: row.sent_at ? new Date(row.sent_at as string) : null,
+    failureReason: (row.failure_reason as string | null) ?? null,
+    retryCount: row.retry_count as number,
+    providerMessageId: (row.provider_message_id as string | null) ?? null,
+    claimedAt: row.claimed_at ? new Date(row.claimed_at as string) : null,
   };
 }
 
@@ -466,6 +485,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .upsert(
           {
             service_visit_id: row.serviceVisitId,
+            customer_id: row.customerId,
             notification_type: row.notificationType,
             channel: row.channel,
             scheduled_send_at: row.scheduledSendAt.toISOString(),
@@ -480,12 +500,97 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     },
 
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
+      // Scoped to reminder_24h specifically (matches this function's actual
+      // intent, "cancel the stale pending REMINDER") — must never collide
+      // with a same-visit, same-moment one-off notice like
+      // appointment_confirmed/rescheduled enqueued in the same call, which
+      // is a real, wanted pending row, not a stale reminder to discard.
       const { error } = await supabase
         .from("service_visit_notifications")
         .update({ state: "cancelled" })
         .eq("service_visit_id", serviceVisitId)
+        .eq("notification_type", "reminder_24h")
         .eq("state", "pending");
       if (error) throw new Error(`[scheduling] cancelling pending notifications failed: ${error.message}`);
+    },
+
+    async listServiceVisitNotifications(serviceVisitId) {
+      const { data, error } = await supabase
+        .from("service_visit_notifications")
+        .select()
+        .eq("service_visit_id", serviceVisitId)
+        .order("scheduled_send_at", { ascending: false });
+      if (error) throw new Error(`[scheduling] service_visit_notifications lookup failed: ${error.message}`);
+      return (data ?? []).map(toServiceVisitNotificationRow);
+    },
+
+    async findServiceVisitNotificationById(id) {
+      const { data, error } = await supabase.from("service_visit_notifications").select().eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_notifications lookup by id failed: ${error.message}`);
+      return data ? toServiceVisitNotificationRow(data) : null;
+    },
+
+    async claimDueServiceVisitNotifications(limit, staleMinutes) {
+      const { data, error } = await supabase.rpc("claim_due_service_visit_notifications", {
+        p_limit: limit,
+        p_stale_minutes: staleMinutes,
+      });
+      if (error) throw new Error(`[scheduling] claim_due_service_visit_notifications failed: ${error.message}`);
+      return ((data ?? []) as Record<string, unknown>[]).map(toServiceVisitNotificationRow);
+    },
+
+    async markServiceVisitNotificationSent(id, providerMessageId) {
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "sent", sent_at: new Date().toISOString(), provider_message_id: providerMessageId, claimed_at: null })
+        .eq("id", id)
+        .eq("state", "sending");
+      if (error) throw new Error(`[scheduling] marking service_visit_notification sent failed: ${error.message}`);
+    },
+
+    async markServiceVisitNotificationRetry(id, params) {
+      const { data: current, error: fetchError } = await supabase
+        .from("service_visit_notifications")
+        .select("retry_count")
+        .eq("id", id)
+        .single();
+      if (fetchError || !current) throw new Error(`[scheduling] service_visit_notifications lookup before retry failed: ${fetchError?.message}`);
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({
+          state: "pending",
+          retry_count: (current.retry_count as number) + 1,
+          failure_reason: params.failureReason,
+          scheduled_send_at: params.nextScheduledSendAt.toISOString(),
+          claimed_at: null,
+        })
+        .eq("id", id)
+        .eq("state", "sending");
+      if (error) throw new Error(`[scheduling] marking service_visit_notification retry failed: ${error.message}`);
+    },
+
+    async markServiceVisitNotificationFailedTerminal(id, failureReason) {
+      const { data: current, error: fetchError } = await supabase
+        .from("service_visit_notifications")
+        .select("retry_count")
+        .eq("id", id)
+        .single();
+      if (fetchError || !current) throw new Error(`[scheduling] service_visit_notifications lookup before terminal failure failed: ${fetchError?.message}`);
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "failed", retry_count: (current.retry_count as number) + 1, failure_reason: failureReason, claimed_at: null })
+        .eq("id", id)
+        .eq("state", "sending");
+      if (error) throw new Error(`[scheduling] marking service_visit_notification failed (terminal) failed: ${error.message}`);
+    },
+
+    async retryFailedServiceVisitNotification(id) {
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "pending", retry_count: 0, scheduled_send_at: new Date().toISOString(), claimed_at: null })
+        .eq("id", id)
+        .eq("state", "failed");
+      if (error) throw new Error(`[scheduling] retrying failed service_visit_notification failed: ${error.message}`);
     },
 
     async insertRecurringSchedule(row: NewRecurringScheduleRow) {

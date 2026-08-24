@@ -1,3 +1,4 @@
+import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { assessFee, type FeeAssessmentResult } from "./assess-cancellation-fee";
 import { InvalidVisitStateError } from "./errors";
 import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
@@ -64,6 +65,20 @@ export async function cancelServiceVisit(repo: SchedulingRepository, input: Canc
     newState: { status: "cancelled" },
     notes: input.reason ?? null,
   });
+
+  // Only a genuine customer-facing cancellation gets a "cancelled" notice —
+  // a dispatched/no-access event is an operational/ops concern, not
+  // something to email the customer as if THEY cancelled.
+  if (!input.noAccess) {
+    await enqueueNotification(repo, {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      notificationType: "cancelled",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: "v1",
+    });
+  }
 
   await cancelPendingReminder(repo, input.serviceVisitId);
 

@@ -11,6 +11,9 @@ import type {
   RecurringScopeVersionStatus,
   RecurringVisitPlanHistoryChangeReason,
   RecurringVisitPlanStatus,
+  ServiceVisitNotificationChannel,
+  ServiceVisitNotificationState,
+  ServiceVisitNotificationType,
   ServiceVisitPricingPaymentStatus,
   ServiceVisitPricingPriceStatus,
   ServiceVisitStatus,
@@ -251,11 +254,23 @@ export interface NewPackageVisitPlanHistoryRow {
 
 export interface NewServiceVisitNotificationRow {
   serviceVisitId: string;
-  notificationType: "reminder_24h";
-  channel: "email" | "sms";
+  customerId: string;
+  notificationType: ServiceVisitNotificationType;
+  channel: ServiceVisitNotificationChannel;
   scheduledSendAt: Date;
   idempotencyKey: string;
 }
+
+export interface ServiceVisitNotificationRow extends NewServiceVisitNotificationRow {
+  id: string;
+  state: ServiceVisitNotificationState;
+  sentAt: Date | null;
+  failureReason: string | null;
+  retryCount: number;
+  providerMessageId: string | null;
+  claimedAt: Date | null;
+}
+
 
 // -- Customer Portal V1: universal recurring_visit_plans -------------------
 

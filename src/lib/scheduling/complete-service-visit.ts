@@ -1,3 +1,4 @@
+import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 import type { SchedulingRepository } from "./repository";
@@ -28,6 +29,15 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
       notes: null,
     });
     await cancelPendingReminder(repo, serviceVisitId);
+
+    await enqueueNotification(repo, {
+      serviceVisitId,
+      customerId: before.customerId,
+      notificationType: "completed",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: "v1",
+    });
 
     // Maintain the customer's rolling six-cleaning horizon (owner-approved):
     // a completed occurrence under an active recurring relationship no

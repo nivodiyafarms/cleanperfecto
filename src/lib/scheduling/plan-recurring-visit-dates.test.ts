@@ -115,4 +115,17 @@ describe("planRecurringVisitDates", () => {
     });
     expect(plans.length).toBe(6);
   });
+
+  it("creates zero service_visit_notifications rows — a still-'planned' slot with no real service_visit is never reminded", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const schedule = await seedActiveSchedule(repo);
+    await planRecurringVisitDates(repo, {
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      cadence: "weekly",
+      firstDate: "2026-08-24",
+      firstStartTime: "10:00",
+    });
+    expect(state.notifications.size).toBe(0);
+  });
 });

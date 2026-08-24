@@ -1,0 +1,218 @@
+import { describe, expect, it } from "vitest";
+import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
+import { dispatchDueNotifications } from "./dispatch-due-notifications";
+import { enqueueNotification } from "./enqueue-notification";
+import { createFakeCustomerNotificationPreferencesRepository } from "./test-support/fake-customer-notification-preferences-repository";
+import { createFakeEmailSender } from "./test-support/fake-email-sender";
+import { createFakeSmsSender } from "./test-support/fake-sms-sender";
+
+const CONTACT = { name: "Jane Doe", email: "jane@example.com", phone: "+14695551234" };
+const contactLookup = async () => CONTACT;
+
+async function seedVisit(repo: ReturnType<typeof createFakeSchedulingRepository>["repo"]) {
+  return repo.insertServiceVisit({
+    customerId: "customer-1",
+    quoteRequestId: null,
+    bookingOrderId: "booking-1",
+    prepaidPackageId: null,
+    recurringScheduleId: null,
+    visitNumber: null,
+    cleaningType: "standard",
+    frequency: "one_time",
+    requestedStartAt: null,
+    timezone: "America/Chicago",
+    serviceAddressLine1: null,
+    serviceAddressLine2: null,
+    serviceCity: null,
+    serviceState: null,
+    serviceAddressIdentity: null,
+  });
+}
+
+describe("dispatchDueNotifications", () => {
+  it("sends a due-pending email notification and marks it sent", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "appointment_confirmed",
+      channel: "email",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email, state: emailState } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"));
+
+    expect(result).toEqual({ claimed: 1, sent: 1, retried: 0, failedTerminal: 0 });
+    expect(emailState.sentEmails.length).toBe(1);
+    expect(emailState.sentEmails[0].to).toBe(CONTACT.email);
+  });
+
+  it("does not claim a pending row whose scheduled_send_at is still in the future", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "email",
+      scheduledSendAt: new Date("2026-09-01T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T00:00:00Z"));
+    expect(result.claimed).toBe(0);
+  });
+
+  it("a failed send under the retry cap increments retry_count and returns to pending with a later scheduled_send_at", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "cancelled",
+      channel: "email",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email } = createFakeEmailSender({ behavior: () => ({ sent: false, failureReason: "provider timeout" }) });
+    const { sender: sms } = createFakeSmsSender();
+
+    const now = new Date("2026-08-24T01:00:00Z");
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, now);
+
+    expect(result).toEqual({ claimed: 1, sent: 0, retried: 1, failedTerminal: 0 });
+    const notification = [...state.notifications.values()][0];
+    expect(notification.state).toBe("pending");
+    expect(notification.retryCount).toBe(1);
+    expect(notification.failureReason).toBe("provider timeout");
+    expect(notification.scheduledSendAt.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it("reaching the retry cap (5 total attempts) marks the row terminal 'failed', never retried again", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "cancelled",
+      channel: "email",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email } = createFakeEmailSender({ behavior: () => ({ sent: false, failureReason: "provider down" }) });
+    const { sender: sms } = createFakeSmsSender();
+
+    // Each dispatch call claims the row again (its scheduled_send_at was
+    // pushed into the future, but we advance `now` past it each time,
+    // simulating successive cron ticks).
+    let now = new Date("2026-08-24T01:00:00Z");
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, now);
+      now = new Date(now.getTime() + 15 * 60_000);
+    }
+
+    const notification = [...state.notifications.values()][0];
+    expect(notification.state).toBe("failed");
+    expect(notification.retryCount).toBe(5);
+
+    // A 6th tick must not touch it again — it's terminal.
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, now);
+    expect(result.claimed).toBe(0);
+  });
+
+  it("a stale 'sending' row (past the lease window) is reclaimed and processed on the next dispatch", async () => {
+    // The real claim RPC evaluates staleness against Postgres's own now()
+    // (see claim_due_service_visit_notifications() and its fake mirror,
+    // which correspondingly uses the real wall clock, not the `now`
+    // parameter passed to dispatchDueNotifications — that parameter only
+    // ever affects retry-backoff scheduling math). So this test simulates
+    // staleness with REAL relative offsets from Date.now(), not fixed
+    // calendar dates.
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "cancelled",
+      channel: "email",
+      scheduledSendAt: new Date(Date.now() - 60 * 60_000),
+      versionKey: "v1",
+    });
+    // Simulate a worker that claimed the row and then died before recording any outcome.
+    const notification = [...state.notifications.values()][0];
+    notification.state = "sending";
+    notification.claimedAt = new Date(Date.now() - 5 * 60_000); // 5 minutes ago
+
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email, state: emailState } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    // Claimed only 5 minutes ago — still within the 10-minute lease, must NOT be reclaimed.
+    const tooSoon = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup);
+    expect(tooSoon.claimed).toBe(0);
+    expect(emailState.sentEmails.length).toBe(0);
+
+    // Push the claim 15 minutes into the past — now past the 10-minute lease, must be reclaimed and sent.
+    notification.claimedAt = new Date(Date.now() - 15 * 60_000);
+    const reclaimed = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup);
+    expect(reclaimed.claimed).toBe(1);
+    expect(reclaimed.sent).toBe(1);
+    expect(emailState.sentEmails.length).toBe(1);
+  });
+
+  it("an sms-channel row is never sent without sms_opt_in — marked failed immediately, no real send attempted", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "sms",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository({ "customer-1": false });
+    const { sender: email } = createFakeEmailSender();
+    const { sender: sms, state: smsState } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"));
+
+    expect(result.failedTerminal).toBe(1);
+    expect(smsState.sentSms.length).toBe(0);
+    const notification = [...state.notifications.values()][0];
+    expect(notification.state).toBe("failed");
+    expect(notification.failureReason).toBe("sms_opt_in not granted");
+  });
+
+  it("an sms-channel row IS sent via the fake sender once the customer has opted in", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "sms",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository({ "customer-1": true });
+    const { sender: email } = createFakeEmailSender();
+    const { sender: sms, state: smsState } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"));
+
+    expect(result.sent).toBe(1);
+    expect(smsState.sentSms.length).toBe(1);
+    expect(smsState.sentSms[0].to).toBe(CONTACT.phone);
+  });
+});

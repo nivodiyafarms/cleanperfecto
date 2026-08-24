@@ -228,4 +228,14 @@ describe("completeServiceVisit", () => {
     expect(state.serviceVisitsById.get(visitId)?.status).toBe("completed");
     expect(state.packageVisitUsages.size).toBe(0);
   });
+
+  it("enqueues exactly one pending completed notice, once, even on an idempotent retry", async () => {
+    const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+    await completeServiceVisit(repo, visitId);
+    await completeServiceVisit(repo, visitId); // idempotent retry — must not duplicate
+
+    const completedNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "completed");
+    expect(completedNotices.length).toBe(1);
+    expect(completedNotices[0].state).toBe("pending");
+  });
 });

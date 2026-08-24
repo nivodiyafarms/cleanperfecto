@@ -1,24 +1,20 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
+import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
 /**
  * Exchanges the Supabase magic-link `code` for a session and hands off to
  * /my/activate, which does the actual customer_accounts linking. Also the
- * intended future landing point for secure links from reminder emails/SMS
- * (see the `next` param below) — no redesign needed when that ships, just
- * a different `emailRedirectTo`/link target pointing back here.
+ * landing point for links from notification emails/SMS (see
+ * src/lib/notifications/portal-link.ts) — those are plain
+ * /my/login?next=<path> links through this exact same flow, not a
+ * separately pre-generated magic link.
  *
  * `next` is validated against an allowlist of internal /my/... paths only
- * — never trusted as an open redirect target.
+ * (see sanitizeNextPath) — never trusted as an open redirect target.
  */
-function sanitizeNextPath(raw: string | null): string {
-  if (!raw) return "/my";
-  if (raw !== "/my" && !raw.startsWith("/my/")) return "/my";
-  return raw;
-}
-
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");

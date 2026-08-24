@@ -8,6 +8,7 @@ import { findServiceVisitDetail, listServiceFeeAssessments, listServiceVisitEven
 import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
 import { cancelVisitAction, completeVisitAction, reassignCleanersAction, rescheduleVisitAction, waiveFeeAction } from "@/lib/admin/actions/schedule-actions";
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
+import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
@@ -33,11 +34,14 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const visit = await findServiceVisitDetail(visitId);
   if (!visit) notFound();
 
-  const [events, fees, cleaners, durationInput] = await Promise.all([
+  const schedulingRepo = createSupabaseSchedulingRepository();
+
+  const [events, fees, cleaners, durationInput, notifications] = await Promise.all([
     listServiceVisitEvents(visitId),
     listServiceFeeAssessments(visitId),
     listCleaners(),
     resolveDurationInputForVisit(visit),
+    schedulingRepo.listServiceVisitNotifications(visitId),
   ]);
   const cleanerNameById = new Map(cleaners.map((c) => [c.id, c.name]));
 
@@ -45,8 +49,6 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const rescheduleDate = query.date || (visit.confirmedStartAt ? localDateOf(visit.confirmedStartAt) : "");
   const rescheduleStartTime = query.startTime || (visit.confirmedStartAt ? localTimeOf(visit.confirmedStartAt) : "");
   const duration = durationInput ? estimateDuration(durationInput) : null;
-
-  const schedulingRepo = createSupabaseSchedulingRepository();
 
   const availableCleaners =
     canManage && duration && rescheduleDate && rescheduleStartTime
@@ -343,6 +345,35 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               </button>
             </ActionForm>
           </div>
+        </div>
+      )}
+
+      {notifications.length > 0 && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <h2 className="text-sm font-semibold text-foreground">Notifications</h2>
+          <ul className="mt-3 space-y-2 text-sm">
+            {notifications.map((n) => (
+              <li key={n.id} className="rounded-lg border border-border p-3">
+                <p className="text-foreground">
+                  <span className="font-medium">{n.notificationType.replace(/_/g, " ")}</span> · {n.channel} · {n.state}
+                </p>
+                <p className="text-xs text-muted">
+                  Scheduled {formatInstant(n.scheduledSendAt.toISOString())}
+                  {n.sentAt ? ` · Sent ${formatInstant(n.sentAt.toISOString())}` : ""}
+                  {n.retryCount > 0 ? ` · ${n.retryCount} attempt${n.retryCount === 1 ? "" : "s"}` : ""}
+                </p>
+                {n.failureReason && <p className="text-xs text-red-600">{n.failureReason}</p>}
+                {n.state === "failed" && (
+                  <ActionForm action={retryNotificationAction} className="mt-2">
+                    <input type="hidden" name="notificationId" value={n.id} />
+                    <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                      Retry
+                    </button>
+                  </ActionForm>
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

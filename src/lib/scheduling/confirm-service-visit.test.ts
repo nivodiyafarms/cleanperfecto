@@ -54,8 +54,32 @@ describe("confirmServiceVisit", () => {
     const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
     const visitId = await seedRequestedVisit(repo);
     await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
-    const pending = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.state === "pending");
+    const pending = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "reminder_24h" && n.state === "pending"
+    );
     expect(pending.length).toBe(1);
+  });
+
+  it("enqueues exactly one pending appointment_confirmed notice on a genuine requested -> scheduled confirmation", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedRequestedVisit(repo);
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+    const confirmedNotices = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "appointment_confirmed"
+    );
+    expect(confirmedNotices.length).toBe(1);
+    expect(confirmedNotices[0].state).toBe("pending");
+  });
+
+  it("does not enqueue a second appointment_confirmed notice when re-confirming an already-scheduled visit", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedRequestedVisit(repo);
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+    const confirmedNotices = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "appointment_confirmed"
+    );
+    expect(confirmedNotices.length).toBe(1);
   });
 
   it("rejects a double-booking: two visits confirmed to overlap for the same cleaner", async () => {

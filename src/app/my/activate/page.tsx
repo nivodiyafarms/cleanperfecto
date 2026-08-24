@@ -2,14 +2,9 @@ import { redirect } from "next/navigation";
 import { signOutAction } from "@/lib/customer-portal/actions/auth-actions";
 import { activateCustomerAccount } from "@/lib/customer-portal/activate-customer-account";
 import { createSupabaseCustomerAccountRepository } from "@/lib/customer-portal/customer-account-repository";
+import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { normalizeEmail } from "@/lib/instant-quote/normalize-email";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-
-function sanitizeNextPath(raw: string | undefined): string {
-  if (!raw) return "/my";
-  if (raw !== "/my" && !raw.startsWith("/my/")) return "/my";
-  return raw;
-}
 
 /**
  * Runs immediately after a successful magic-link/OTP verification, for an

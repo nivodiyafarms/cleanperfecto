@@ -100,8 +100,10 @@ describe("rescheduleServiceVisit", () => {
   it("replaces the stale pending reminder with a fresh one for the new time", async () => {
     const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
     const visitId = await seedScheduledVisit(repo);
-    const pendingBefore = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.state === "pending");
-    expect(pendingBefore.length).toBe(1);
+    const reminderBefore = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "reminder_24h" && n.state === "pending"
+    );
+    expect(reminderBefore.length).toBe(1);
 
     await rescheduleServiceVisit(repo, {
       serviceVisitId: visitId,
@@ -112,10 +114,28 @@ describe("rescheduleServiceVisit", () => {
       now: new Date("2026-08-25T00:00:00Z"),
     });
 
-    const allForVisit = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId);
-    const pendingAfter = allForVisit.filter((n) => n.state === "pending");
-    const cancelledAfter = allForVisit.filter((n) => n.state === "cancelled");
-    expect(pendingAfter.length).toBe(1);
-    expect(cancelledAfter.length).toBe(1);
+    const remindersForVisit = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "reminder_24h");
+    const pendingReminders = remindersForVisit.filter((n) => n.state === "pending");
+    const cancelledReminders = remindersForVisit.filter((n) => n.state === "cancelled");
+    expect(pendingReminders.length).toBe(1);
+    expect(cancelledReminders.length).toBe(1);
+  });
+
+  it("enqueues exactly one pending rescheduled notice", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedScheduledVisit(repo);
+
+    await rescheduleServiceVisit(repo, {
+      serviceVisitId: visitId,
+      date: "2026-08-31",
+      startTime: "12:00",
+      cleanerIds: ["cleaner-1"],
+      durationInput: DURATION_INPUT,
+      now: new Date("2026-08-25T00:00:00Z"),
+    });
+
+    const rescheduledNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "rescheduled");
+    expect(rescheduledNotices.length).toBe(1);
+    expect(rescheduledNotices[0].state).toBe("pending");
   });
 });

@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
 /**
@@ -63,8 +64,18 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    const loginPath = pathname.startsWith("/my") ? "/my/login" : "/admin/login";
-    return NextResponse.redirect(new URL(loginPath, request.url));
+    // For the customer portal, carry the originally-requested path through
+    // as ?next= so a plain notification link (e.g. /my/cleanings) that hits
+    // an expired/absent session still lands the customer back where they
+    // intended after signing in — see /my/login and /my/activate, which
+    // already read and forward this same param. Admin's bare redirect is
+    // unchanged (no admin notification-link use case exists).
+    if (pathname.startsWith("/my")) {
+      const loginUrl = new URL("/my/login", request.url);
+      loginUrl.searchParams.set("next", sanitizeNextPath(pathname));
+      return NextResponse.redirect(loginUrl);
+    }
+    return NextResponse.redirect(new URL("/admin/login", request.url));
   }
 
   return response;

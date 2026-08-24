@@ -24,6 +24,7 @@ import type {
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
+  ServiceVisitNotificationRow,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "../domain-types";
@@ -40,11 +41,7 @@ interface FakeAssignment {
   turnaroundBufferMinutes: number;
 }
 
-interface FakeNotification {
-  idempotencyKey: string;
-  serviceVisitId: string;
-  state: "pending" | "cancelled";
-}
+type FakeNotification = ServiceVisitNotificationRow;
 
 /** One-sided-buffer overlap check, mirroring service_visit_assignments_no_overlap's buffered_range math (see the migration). */
 function occupancyOverlap(existing: FakeAssignment, candidateStart: Date, candidateEnd: Date, candidateBufferMinutes: number): boolean {
@@ -301,12 +298,98 @@ export function createFakeSchedulingRepository(
       if (notifications.has(row.idempotencyKey)) {
         return { inserted: false };
       }
-      notifications.set(row.idempotencyKey, { idempotencyKey: row.idempotencyKey, serviceVisitId: row.serviceVisitId, state: "pending" });
+      notifications.set(row.idempotencyKey, {
+        id: randomUUID(),
+        serviceVisitId: row.serviceVisitId,
+        customerId: row.customerId,
+        notificationType: row.notificationType,
+        channel: row.channel,
+        scheduledSendAt: row.scheduledSendAt,
+        idempotencyKey: row.idempotencyKey,
+        state: "pending",
+        sentAt: null,
+        failureReason: null,
+        retryCount: 0,
+        providerMessageId: null,
+        claimedAt: null,
+      });
       return { inserted: true };
     },
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
+      // Scoped to reminder_24h only — see the matching comment in
+      // supabase-scheduling-repository.ts.
       for (const n of notifications.values()) {
-        if (n.serviceVisitId === serviceVisitId && n.state === "pending") n.state = "cancelled";
+        if (n.serviceVisitId === serviceVisitId && n.notificationType === "reminder_24h" && n.state === "pending") n.state = "cancelled";
+      }
+    },
+    async listServiceVisitNotifications(serviceVisitId) {
+      return [...notifications.values()]
+        .filter((n) => n.serviceVisitId === serviceVisitId)
+        .sort((a, b) => b.scheduledSendAt.getTime() - a.scheduledSendAt.getTime());
+    },
+    async findServiceVisitNotificationById(id) {
+      for (const n of notifications.values()) {
+        if (n.id === id) return n;
+      }
+      return null;
+    },
+    async claimDueServiceVisitNotifications(limit, staleMinutes) {
+      const now = Date.now();
+      const staleMs = staleMinutes * 60_000;
+      const claimable = [...notifications.values()]
+        .filter(
+          (n) =>
+            (n.state === "pending" && n.scheduledSendAt.getTime() <= now) ||
+            (n.state === "sending" && n.claimedAt !== null && now - n.claimedAt.getTime() > staleMs)
+        )
+        .sort((a, b) => a.scheduledSendAt.getTime() - b.scheduledSendAt.getTime())
+        .slice(0, limit);
+      const claimedAt = new Date();
+      for (const n of claimable) {
+        n.state = "sending";
+        n.claimedAt = claimedAt;
+      }
+      return claimable;
+    },
+    async markServiceVisitNotificationSent(id, providerMessageId) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "sending") {
+          n.state = "sent";
+          n.sentAt = new Date();
+          n.providerMessageId = providerMessageId;
+          n.claimedAt = null;
+        }
+      }
+    },
+    async markServiceVisitNotificationRetry(id, params) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "sending") {
+          n.state = "pending";
+          n.retryCount += 1;
+          n.failureReason = params.failureReason;
+          n.scheduledSendAt = params.nextScheduledSendAt;
+          n.claimedAt = null;
+        }
+      }
+    },
+    async markServiceVisitNotificationFailedTerminal(id, failureReason) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "sending") {
+          n.state = "failed";
+          n.retryCount += 1;
+          n.failureReason = failureReason;
+          n.claimedAt = null;
+        }
+      }
+    },
+    async retryFailedServiceVisitNotification(id) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "failed") {
+          n.state = "pending";
+          n.retryCount = 0;
+          n.scheduledSendAt = new Date();
+          n.claimedAt = null;
+        }
       }
     },
 

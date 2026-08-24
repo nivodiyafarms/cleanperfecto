@@ -1,6 +1,7 @@
 import { PRICING_VERSION } from "@/lib/pricing/config";
 import { roundToCents } from "@/lib/pricing/money";
 import type { AddOnId } from "@/lib/pricing/types";
+import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import type { ServiceVisitPricingRow } from "./domain-types";
 import { InvalidVisitStateError } from "./errors";
 import type { SchedulingRepository } from "./repository";
@@ -71,6 +72,23 @@ export async function estimateVisitPricing(
   const existing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const previouslyApprovedAmount = existing?.previouslyApprovedAmount ?? null;
   const requiresCustomerApproval = previouslyApprovedAmount !== null && totalAmount > previouslyApprovedAmount;
+
+  // Only a genuine INCREASE over the last customer-approved amount ever
+  // needs a notice — a same-or-lower re-estimate proceeds automatically
+  // under the existing business rule and must never notify. versionKey is
+  // the new total itself, so re-estimating to the SAME over-threshold
+  // amount again (e.g. an idempotent retry) never duplicates the notice,
+  // while a DIFFERENT (higher) amount correctly mints a fresh one.
+  if (requiresCustomerApproval) {
+    await enqueueNotification(repo, {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      notificationType: "pricing_approval_required",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: totalAmount.toFixed(2),
+    });
+  }
 
   return repo.upsertServiceVisitPricing({
     serviceVisitId: input.serviceVisitId,

@@ -1,3 +1,4 @@
+import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { DEFAULT_TURNAROUND_BUFFER_MINUTES } from "./config";
 import type { DurationEstimateInput } from "./duration-engine";
 import { estimateDuration } from "./duration-engine";
@@ -62,6 +63,22 @@ export async function confirmServiceVisit(repo: SchedulingRepository, input: Con
     notes: null,
   });
 
+  // A genuine NEW confirmation (requested -> scheduled) tells the customer
+  // "you're booked." Re-confirming an already-'scheduled' visit (e.g. an
+  // in-place cleaner-assignment fix via this same RPC) is not a new
+  // business event and must not re-notify — see reschedule-service-visit.ts
+  // for the actual "your time changed" notice.
+  if (visit.status === "requested") {
+    await enqueueNotification(repo, {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      notificationType: "appointment_confirmed",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: confirmedStartAt.toISOString(),
+    });
+  }
+
   await cancelPendingReminder(repo, input.serviceVisitId);
-  await scheduleVisitReminder(repo, input.serviceVisitId, confirmedStartAt);
+  await scheduleVisitReminder(repo, input.serviceVisitId, visit.customerId, confirmedStartAt);
 }
