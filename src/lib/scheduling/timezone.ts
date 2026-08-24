@@ -1,7 +1,14 @@
 import type { CalendarDate, TimeOfDay } from "./types";
 
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+// Tolerates an optional trailing :SS (ignored) — a `time` column read back
+// from Postgres via PostgREST is always serialized with seconds (e.g.
+// "10:00:00") regardless of the precision it was originally inserted with,
+// even though every write path in this codebase only ever produces/expects
+// minute-precision "HH:MM". Rejecting that real-world DB round-trip shape
+// would break any function that reads a stored time value back and feeds
+// it here — this widens acceptance, it never narrows what's valid.
+const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
 
 function partsToUtcMillis(year: number, month: number, day: number, hour: number, minute: number): number {
   return Date.UTC(year, month - 1, day, hour, minute, 0, 0);

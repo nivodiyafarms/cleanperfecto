@@ -16,6 +16,16 @@ describe("timeToMinutes / minutesToTime", () => {
     expect(() => timeToMinutes("not-a-time")).toThrow();
   });
 
+  it("tolerates the :SS suffix Postgres always includes when a time column round-trips through PostgREST", () => {
+    // Every write path in this codebase only ever produces "HH:MM", but a
+    // real `time` column (recurring_visit_plans.planned_start_time,
+    // cleaner_availability_rules.start_time, etc.) always comes back with
+    // seconds — this must not break parsing of a freshly-read DB row.
+    expect(timeToMinutes("08:00:00")).toBe(480);
+    expect(timeToMinutes("17:30:45")).toBe(1050);
+    expect(() => timeToMinutes("08:00:60")).toThrow(); // still rejects a genuinely invalid seconds component
+  });
+
   it("normalizes minutes past midnight when formatting", () => {
     expect(minutesToTime(1440)).toBe("00:00");
     expect(minutesToTime(1500)).toBe("01:00");

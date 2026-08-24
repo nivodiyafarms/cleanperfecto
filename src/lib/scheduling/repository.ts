@@ -126,6 +126,8 @@ export interface SchedulingRepository {
   // -- recurring_visit_plans (universal calendar, Customer Portal V1) -----
   listRecurringVisitPlans(recurringScheduleId: string): Promise<RecurringVisitPlanRow[]>;
   findRecurringVisitPlanById(id: string): Promise<RecurringVisitPlanRow | null>;
+  /** The recurring_visit_plans row linked to a given real service_visit, if any — needed because the FIRST (direct) visit of a normal booking always has service_visits.recurring_schedule_id = null by design (see service_visits_one_direct_visit_per_booking_order), even when its universal calendar slot #1 is linked to it. Callers that need "which schedule does this visit belong to, for replenishment purposes" must fall back to this when service_visits.recurringScheduleId is null. */
+  findRecurringVisitPlanByServiceVisitId(serviceVisitId: string): Promise<RecurringVisitPlanRow | null>;
   insertRecurringVisitPlan(row: NewRecurringVisitPlanRow): Promise<{ plan: RecurringVisitPlanRow; inserted: boolean }>;
   updateRecurringVisitPlan(
     id: string,

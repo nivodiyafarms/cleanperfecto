@@ -8,6 +8,14 @@ describe("zonedDateTimeToUtc / utcToZonedDateTime", () => {
     expect(utcToZonedDateTime(instant, "UTC")).toEqual({ date: "2026-08-24", time: "14:30" });
   });
 
+  it("tolerates the :SS suffix Postgres always includes when a time column round-trips through PostgREST", () => {
+    // recurring_visit_plans.planned_start_time / package_visit_plans.planned_start_time
+    // etc. always come back from a real `time` column as "HH:MM:SS" — a
+    // domain function reading a freshly-fetched plan row must not choke on it.
+    const instant = zonedDateTimeToUtc("2026-08-24", "10:00:00", "America/Chicago");
+    expect(instant.toISOString()).toBe("2026-08-24T15:00:00.000Z");
+  });
+
   it("converts America/Chicago wall time to UTC correctly during CDT (summer, UTC-5)", () => {
     const instant = zonedDateTimeToUtc("2026-08-24", "10:00", "America/Chicago");
     expect(instant.toISOString()).toBe("2026-08-24T15:00:00.000Z");

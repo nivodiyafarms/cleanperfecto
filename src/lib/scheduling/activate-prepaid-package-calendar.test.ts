@@ -68,6 +68,23 @@ describe("activatePrepaidPackageCalendar", () => {
     }
   });
 
+  it("returns the LINKED package plans, not a stale pre-link snapshot", async () => {
+    const { repo } = seedActivePackage("pkg-1");
+    const { packagePlans, recurringPlans } = await activatePrepaidPackageCalendar(repo, {
+      prepaidPackageId: "pkg-1",
+      customerId: "customer-1",
+      cadence: "weekly",
+      firstDate: "2026-08-24",
+      firstStartTime: "10:00",
+    });
+
+    for (const packagePlan of packagePlans) {
+      expect(packagePlan.recurringVisitPlanId).not.toBeNull();
+      const match = recurringPlans.find((p) => p.visitNumber === packagePlan.visitNumber);
+      expect(packagePlan.recurringVisitPlanId).toBe(match?.id);
+    }
+  });
+
   it("is idempotent — calling twice does not duplicate either calendar or re-link", async () => {
     const { repo, state } = seedActivePackage("pkg-1");
     const input = {

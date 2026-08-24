@@ -32,11 +32,18 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
     // Maintain the customer's rolling six-cleaning horizon (owner-approved):
     // a completed occurrence under an active recurring relationship no
     // longer occupies a horizon slot, so top it back up. A no-op for a
-    // one-off visit (recurringScheduleId null) or a schedule that isn't
-    // 'active' (paused/superseded/cancelled) — see
-    // replenish-recurring-visit-plans.ts.
-    if (after?.recurringScheduleId) {
-      await replenishRecurringVisitPlans(repo, after.recurringScheduleId);
+    // genuinely one-off visit or a schedule that isn't 'active'
+    // (paused/superseded/cancelled) — see replenish-recurring-visit-plans.ts.
+    //
+    // service_visits.recurring_schedule_id is null for the FIRST (direct)
+    // visit of a normal booking by design (service_visits_one_direct_visit_
+    // per_booking_order) even though its universal calendar slot #1 is
+    // linked to it — fall back to the linked recurring_visit_plans row's
+    // own recurringScheduleId so completing that very first visit still
+    // replenishes the horizon.
+    const recurringScheduleId = after?.recurringScheduleId ?? (await repo.findRecurringVisitPlanByServiceVisitId(serviceVisitId))?.recurringScheduleId ?? null;
+    if (recurringScheduleId) {
+      await replenishRecurringVisitPlans(repo, recurringScheduleId);
     }
   }
 

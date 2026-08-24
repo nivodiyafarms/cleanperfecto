@@ -83,13 +83,19 @@ export async function activatePrepaidPackageCalendar(
     firstStartTime: input.firstStartTime,
   });
 
-  for (const packagePlan of packagePlans) {
-    if (packagePlan.recurringVisitPlanId) continue;
-    const match = recurringPlans.find((p) => p.visitNumber === packagePlan.visitNumber);
-    if (match) {
+  // Returns the LINKED rows, not the pre-link snapshot from
+  // planPackageVisitDates above — a caller inspecting the returned
+  // packagePlans (e.g. to read recurringVisitPlanId) must see the state
+  // that was actually just persisted, not a stale in-memory copy.
+  const linkedPackagePlans = await Promise.all(
+    packagePlans.map(async (packagePlan) => {
+      if (packagePlan.recurringVisitPlanId) return packagePlan;
+      const match = recurringPlans.find((p) => p.visitNumber === packagePlan.visitNumber);
+      if (!match) return packagePlan;
       await repo.updatePackageVisitPlan(packagePlan.id, { recurringVisitPlanId: match.id });
-    }
-  }
+      return { ...packagePlan, recurringVisitPlanId: match.id };
+    })
+  );
 
-  return { packagePlans, recurringPlans };
+  return { packagePlans: linkedPackagePlans, recurringPlans };
 }

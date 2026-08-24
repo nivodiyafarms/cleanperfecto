@@ -724,6 +724,12 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return data ? toRecurringVisitPlanRow(data) : null;
     },
 
+    async findRecurringVisitPlanByServiceVisitId(serviceVisitId) {
+      const { data, error } = await supabase.from("recurring_visit_plans").select().eq("service_visit_id", serviceVisitId).maybeSingle();
+      if (error) throw new Error(`[scheduling] recurring_visit_plans lookup by service_visit_id failed: ${error.message}`);
+      return data ? toRecurringVisitPlanRow(data) : null;
+    },
+
     async insertRecurringVisitPlan(row: NewRecurringVisitPlanRow) {
       const { data: inserted, error: insertError } = await supabase
         .from("recurring_visit_plans")

@@ -436,6 +436,12 @@ export function createFakeSchedulingRepository(
     async findRecurringVisitPlanById(id) {
       return recurringVisitPlansById.get(id) ?? null;
     },
+    async findRecurringVisitPlanByServiceVisitId(serviceVisitId) {
+      for (const p of recurringVisitPlansById.values()) {
+        if (p.serviceVisitId === serviceVisitId) return p;
+      }
+      return null;
+    },
     async insertRecurringVisitPlan(row: NewRecurringVisitPlanRow) {
       const existing = [...recurringVisitPlansById.values()].find(
         (p) => p.recurringScheduleId === row.recurringScheduleId && p.visitNumber === row.visitNumber

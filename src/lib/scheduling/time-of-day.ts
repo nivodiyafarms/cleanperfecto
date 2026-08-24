@@ -1,6 +1,9 @@
 import type { TimeOfDay } from "./types";
 
-const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+// Tolerates an optional trailing :SS (ignored) — see timezone.ts's own note:
+// a `time` column read back from Postgres is always serialized with
+// seconds, even though every write path here only produces "HH:MM".
+const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
 
 /** Parses "HH:MM" (24-hour) into minutes since midnight. Throws on malformed input — every caller in this module works with already-validated config/DB values. */
 export function timeToMinutes(time: TimeOfDay): number {

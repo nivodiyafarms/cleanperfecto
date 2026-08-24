@@ -72,8 +72,13 @@ export async function cancelServiceVisit(repo: SchedulingRepository, input: Canc
   // occupies a horizon slot either, regardless of whether it was ever
   // confirmed. Never consumes a package credit — that only ever happens in
   // complete_service_visit().
-  if (visit.recurringScheduleId) {
-    await replenishRecurringVisitPlans(repo, visit.recurringScheduleId);
+  //
+  // Same direct-visit fallback as completeServiceVisit: the FIRST visit of
+  // a normal booking always has recurring_schedule_id null even when its
+  // universal calendar slot #1 is linked to it.
+  const recurringScheduleId = visit.recurringScheduleId ?? (await repo.findRecurringVisitPlanByServiceVisitId(input.serviceVisitId))?.recurringScheduleId ?? null;
+  if (recurringScheduleId) {
+    await replenishRecurringVisitPlans(repo, recurringScheduleId);
   }
 
   return { changed: true, fee };

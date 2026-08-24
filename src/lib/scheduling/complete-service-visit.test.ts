@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { bootstrapRecurringVisitPlansFromDirectVisit } from "./bootstrap-recurring-visit-plans-from-direct-visit";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
 import { createRequestedVisitFromBooking } from "./create-requested-visit-from-booking";
@@ -155,6 +156,54 @@ describe("completeServiceVisit", () => {
 
     expect(state.recurringVisitPlansById.size).toBe(6);
     await completeServiceVisit(repo, visitId);
+    expect(state.recurringVisitPlansById.size).toBe(7);
+  });
+
+  it("replenishes the horizon when the DIRECT (first) visit of a Pay Per Cleaning booking completes, even though its recurring_schedule_id is null by design", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const schedule = await repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "weekly",
+      preferredDayOfWeek: 1,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-08-24",
+      supersedesId: null,
+    });
+    const { visitId } = await createRequestedVisitFromBooking(repo, {
+      bookingOrderId: "booking-1",
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      cleaningType: "standard",
+      frequency: "weekly",
+      requestedDate: "2026-08-24",
+      requestedStartTime: "10:00",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    // The direct visit's recurring_schedule_id is null by design (see
+    // service_visits_one_direct_visit_per_booking_order) even though its
+    // universal calendar slot #1 is linked to it.
+    expect(state.serviceVisitsById.get(visitId)?.recurringScheduleId).toBeNull();
+
+    await bootstrapRecurringVisitPlansFromDirectVisit(repo, {
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      cadence: "weekly",
+      firstDate: "2026-08-24",
+      firstStartTime: "10:00",
+      directServiceVisitId: visitId,
+    });
+    expect(state.recurringVisitPlansById.size).toBe(6);
+
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+    await completeServiceVisit(repo, visitId);
+
     expect(state.recurringVisitPlansById.size).toBe(7);
   });
 
