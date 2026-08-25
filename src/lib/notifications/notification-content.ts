@@ -1,11 +1,12 @@
 import { utcToZonedDateTime } from "@/lib/scheduling/timezone";
 import type { ServiceVisitNotificationType } from "@/lib/scheduling/types";
 import { buildPortalLink } from "./portal-link";
+import { getGoogleReviewUrl } from "./google-review-url";
 
 export interface NotificationContentInput {
   notificationType: ServiceVisitNotificationType;
   customerName: string;
-  /** The visit's confirmed start instant, UTC — null when not yet/no longer available (renders a generic "your upcoming cleaning" phrase instead of a specific date/time). */
+  /** The visit's confirmed start instant, UTC — null when not yet/no longer available (renders a generic "your upcoming cleaning" phrase instead of a specific date/time). Also null for consent_required, which is never visit-specific. */
   visitStartAtUtc: Date | null;
   /** The visit's OWN timezone (service_visits.timezone) — never hardcoded, per the DFW-today-but-not-forever requirement. */
   timezone: string;
@@ -18,13 +19,17 @@ export interface NotificationContent {
   smsBody: string;
 }
 
-const PORTAL_PATH_BY_TYPE: Record<ServiceVisitNotificationType, string> = {
+const PORTAL_PATH_BY_TYPE: Partial<Record<ServiceVisitNotificationType, string>> = {
   reminder_24h: "/my/cleanings",
   appointment_confirmed: "/my/cleanings",
   rescheduled: "/my/cleanings",
   cancelled: "/my/cleanings",
   completed: "/my/cleanings",
   pricing_approval_required: "/my/payments",
+  consent_required: "/my/consent",
+  consent_reminder: "/my/consent",
+  // review_request deliberately absent — its link is the external Google
+  // review URL (see getGoogleReviewUrl), never a portal path.
 };
 
 const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line: (when: string) => string }> = {
@@ -37,6 +42,18 @@ const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line
     subject: "Action needed: approve your updated price",
     line: () => "Your cleaning's price has increased and needs your approval before it can be confirmed.",
   },
+  consent_required: {
+    subject: "Action needed: sign your CleanPerfecto service authorization",
+    line: () => "Please review and sign your CleanPerfecto service authorization before your first cleaning.",
+  },
+  consent_reminder: {
+    subject: "Reminder: your service authorization is still unsigned",
+    line: () => "Your cleaning is coming up and your CleanPerfecto service authorization is still unsigned.",
+  },
+  review_request: {
+    subject: "How did we do?",
+    line: () => "Thank you for choosing CleanPerfecto! If you have a moment, we'd really appreciate a quick review.",
+  },
 };
 
 function formatVisitWhen(visitStartAtUtc: Date | null, timezone: string): string {
@@ -45,18 +62,39 @@ function formatVisitWhen(visitStartAtUtc: Date | null, timezone: string): string
   return `${date} at ${time}`;
 }
 
-/** Builds all channel content for one notification — pure/deterministic given its input, no I/O. */
+/**
+ * Builds all channel content for one notification. Deterministic given its
+ * input for every type EXCEPT review_request, which also reads the
+ * configured Google review URL (see getGoogleReviewUrl) — mirrors
+ * buildPortalLink's own existing convention of reading site configuration
+ * internally rather than threading it through every caller. Throws if
+ * review_request content is requested with no URL configured, so the
+ * dispatcher's existing try/catch routes it through the normal failed/
+ * retry path rather than ever sending a broken or missing link.
+ */
 export function buildNotificationContent(input: NotificationContentInput): NotificationContent {
   const when = formatVisitWhen(input.visitStartAtUtc, input.timezone);
-  const link = buildPortalLink(PORTAL_PATH_BY_TYPE[input.notificationType]);
   const { subject, line: buildLine } = COPY_BY_TYPE[input.notificationType];
   const line = buildLine(when);
   const greeting = `Hi ${input.customerName},`;
 
+  let link: string;
+  if (input.notificationType === "review_request") {
+    const googleReviewUrl = getGoogleReviewUrl();
+    if (!googleReviewUrl) {
+      throw new Error("GOOGLE_REVIEW_URL is not configured — refusing to build review_request content with no destination.");
+    }
+    link = googleReviewUrl;
+  } else {
+    link = buildPortalLink(PORTAL_PATH_BY_TYPE[input.notificationType] ?? "/my");
+  }
+
+  const linkLabel = input.notificationType === "review_request" ? "Leave a review" : "View details";
+
   return {
     subject,
-    text: `${greeting}\n\n${line}\n\nView details: ${link}`,
-    html: `<p>${greeting}</p><p>${line}</p><p><a href="${link}">View details</a></p>`,
+    text: `${greeting}\n\n${line}\n\n${linkLabel}: ${link}`,
+    html: `<p>${greeting}</p><p>${line}</p><p><a href="${link}">${linkLabel}</a></p>`,
     smsBody: `CleanPerfecto: ${line} ${link}`,
   };
 }

@@ -18,9 +18,31 @@ describe("enqueueNotification", () => {
 
     expect(result.inserted).toBe(true);
     const notification = [...state.notifications.values()][0];
-    expect(notification.idempotencyKey).toBe("visit-1:appointment_confirmed:email:2026-09-01T10:00:00.000Z");
+    expect(notification.idempotencyKey).toBe("customer-1:visit-1:appointment_confirmed:email:2026-09-01T10:00:00.000Z");
     expect(notification.state).toBe("pending");
     expect(notification.customerId).toBe("customer-1");
+  });
+
+  it("uses customerId (not just serviceVisitId) in the key, so two customers' null-serviceVisitId requests never collide", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    await enqueueNotification(repo, {
+      serviceVisitId: null,
+      customerId: "customer-a",
+      notificationType: "consent_required",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: "version-1",
+    });
+    await enqueueNotification(repo, {
+      serviceVisitId: null,
+      customerId: "customer-b",
+      notificationType: "consent_required",
+      channel: "email",
+      scheduledSendAt: new Date(),
+      versionKey: "version-1",
+    });
+
+    expect(state.notifications.size).toBe(2);
   });
 
   it("is idempotent — a repeated call with the same inputs never creates a duplicate row", async () => {

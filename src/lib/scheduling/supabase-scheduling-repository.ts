@@ -60,13 +60,14 @@ function toServiceVisitRow(row: Record<string, unknown>): ServiceVisitRow {
     serviceCity: (row.service_city as string | null) ?? null,
     serviceState: (row.service_state as string | null) ?? null,
     serviceAddressIdentity: (row.service_address_identity as string | null) ?? null,
+    reviewRequestSuppressed: (row.review_request_suppressed as boolean | null) ?? false,
   };
 }
 
 function toServiceVisitNotificationRow(row: Record<string, unknown>): ServiceVisitNotificationRow {
   return {
     id: row.id as string,
-    serviceVisitId: row.service_visit_id as string,
+    serviceVisitId: (row.service_visit_id as string | null) ?? null,
     customerId: row.customer_id as string,
     notificationType: row.notification_type as ServiceVisitNotificationRow["notificationType"],
     channel: row.channel as ServiceVisitNotificationRow["channel"],
@@ -399,6 +400,11 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return changed;
     },
 
+    async setReviewRequestSuppressed(serviceVisitId, suppressed) {
+      const { error } = await supabase.from("service_visits").update({ review_request_suppressed: suppressed }).eq("id", serviceVisitId);
+      if (error) throw new Error(`[scheduling] setting review_request_suppressed failed: ${error.message}`);
+    },
+
     async updateServiceFeeAssessmentState(id, state, reasonAppend) {
       if (reasonAppend) {
         const { data: existing, error: fetchError } = await supabase
@@ -591,6 +597,40 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .eq("id", id)
         .eq("state", "failed");
       if (error) throw new Error(`[scheduling] retrying failed service_visit_notification failed: ${error.message}`);
+    },
+
+    async cancelPendingConsentReminderForVisit(serviceVisitId) {
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "cancelled" })
+        .eq("service_visit_id", serviceVisitId)
+        .eq("notification_type", "consent_reminder")
+        .eq("state", "pending");
+      if (error) throw new Error(`[scheduling] cancelling pending consent_reminder for visit failed: ${error.message}`);
+    },
+
+    async cancelPendingConsentRemindersForCustomer(customerId) {
+      const { error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "cancelled" })
+        .eq("customer_id", customerId)
+        .eq("notification_type", "consent_reminder")
+        .eq("state", "pending");
+      if (error) throw new Error(`[scheduling] cancelling pending consent_reminders for customer failed: ${error.message}`);
+    },
+
+    async findMostRecentSentReviewRequestAt(customerId) {
+      const { data, error } = await supabase
+        .from("service_visit_notifications")
+        .select("sent_at")
+        .eq("customer_id", customerId)
+        .eq("notification_type", "review_request")
+        .eq("state", "sent")
+        .order("sent_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] most-recent-sent review_request lookup failed: ${error.message}`);
+      return data?.sent_at ? new Date(data.sent_at as string) : null;
     },
 
     async insertRecurringSchedule(row: NewRecurringScheduleRow) {

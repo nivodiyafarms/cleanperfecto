@@ -2,6 +2,7 @@ import { getStripeClient } from "@/lib/booking/stripe/client";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { claimWebhookEvent } from "@/lib/booking/webhook/claim-webhook-event";
 import { processStripeWebhookEvent } from "@/lib/booking/webhook/process-stripe-webhook-event";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 
 // Stripe's Node SDK needs the Node.js runtime (not Edge).
@@ -38,6 +39,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const repo = createSupabaseBookingRepository();
   const schedulingRepo = createSupabaseSchedulingRepository();
+  const consentRepo = createSupabaseConsentRepository();
   const claim = await claimWebhookEvent(repo, event.id, event.type, event as unknown as Record<string, unknown>);
 
   if (!claim.shouldProcess) {
@@ -47,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    await processStripeWebhookEvent(stripe, repo, event, schedulingRepo);
+    await processStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo);
     await repo.markWebhookEventProcessed(claim.eventRowId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown processing error";

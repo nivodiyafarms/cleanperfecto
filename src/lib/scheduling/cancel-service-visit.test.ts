@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createFakeConsentRepository } from "@/lib/consent/test-support/fake-consent-repository";
 import { bootstrapRecurringVisitPlansFromDirectVisit } from "./bootstrap-recurring-visit-plans-from-direct-visit";
 import { cancelServiceVisit } from "./cancel-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
@@ -205,5 +206,38 @@ describe("cancelServiceVisit", () => {
 
     const cancelledNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "cancelled");
     expect(cancelledNotices.length).toBe(0);
+  });
+
+  it("cancels pending consent_reminder rows tied to this visit, preserving consent's own customer-level history", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const { repo: consentRepo } = createFakeConsentRepository();
+    const { visitId } = await createRequestedVisitFromBooking(repo, {
+      bookingOrderId: "booking-1",
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedDate: "2026-08-30",
+      requestedStartTime: "10:00",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-30", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT, consentRepo });
+
+    const beforeReminders = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "consent_reminder");
+    expect(beforeReminders.length).toBe(1);
+    expect(beforeReminders[0].state).toBe("pending");
+
+    await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-25T00:00:00Z") });
+
+    const afterReminders = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "consent_reminder");
+    expect(afterReminders.every((n) => n.state === "cancelled")).toBe(true);
+
+    // Consent itself is customer-level, never invalidated by this one visit's cancellation.
+    const consentRecord = await consentRepo.findByCustomerAndVersion("customer-1", "version-1");
+    expect(consentRecord).toBeNull(); // never sent in this test — the point is cancellation never touches consent state either way
   });
 });

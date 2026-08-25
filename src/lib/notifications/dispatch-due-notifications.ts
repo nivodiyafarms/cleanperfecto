@@ -99,7 +99,10 @@ export async function dispatchDueNotifications(
         }
       }
 
-      const [contact, visit] = await Promise.all([contactLookup(notification.customerId), repo.findServiceVisitById(notification.serviceVisitId)]);
+      const [contact, visit] = await Promise.all([
+        contactLookup(notification.customerId),
+        notification.serviceVisitId ? repo.findServiceVisitById(notification.serviceVisitId) : Promise.resolve(null),
+      ]);
 
       const content = buildNotificationContent({
         notificationType: notification.notificationType,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createFakeConsentRepository } from "@/lib/consent/test-support/fake-consent-repository";
 import { confirmServiceVisit } from "./confirm-service-visit";
 import { createRequestedVisitFromBooking } from "./create-requested-visit-from-booking";
 import { rescheduleServiceVisit } from "./reschedule-service-visit";
@@ -137,5 +138,84 @@ describe("rescheduleServiceVisit", () => {
     const rescheduledNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "rescheduled");
     expect(rescheduledNotices.length).toBe(1);
     expect(rescheduledNotices[0].state).toBe("pending");
+  });
+
+  it("cancels the old pending consent_reminder and enqueues a new one only if consent remains unsigned", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const { repo: consentRepo } = createFakeConsentRepository();
+    const { visitId } = await createRequestedVisitFromBooking(repo, {
+      bookingOrderId: "booking-1",
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedDate: "2026-08-30",
+      requestedStartTime: "10:00",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-30", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT, consentRepo });
+
+    const beforeReminders = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "consent_reminder");
+    expect(beforeReminders.length).toBe(1);
+    expect(beforeReminders[0].state).toBe("pending");
+
+    await rescheduleServiceVisit(repo, {
+      serviceVisitId: visitId,
+      date: "2026-09-02",
+      startTime: "12:00",
+      cleanerIds: ["cleaner-1"],
+      durationInput: DURATION_INPUT,
+      now: new Date("2026-08-25T00:00:00Z"),
+      consentRepo,
+    });
+
+    const allReminders = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "consent_reminder");
+    expect(allReminders.filter((n) => n.state === "cancelled").length).toBe(1);
+    expect(allReminders.filter((n) => n.state === "pending").length).toBe(1);
+  });
+
+  it("does not re-enqueue a consent_reminder on reschedule once the customer has already signed", async () => {
+    const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const { repo: consentRepo } = createFakeConsentRepository();
+    const { visitId } = await createRequestedVisitFromBooking(repo, {
+      bookingOrderId: "booking-1",
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedDate: "2026-08-30",
+      requestedStartTime: "10:00",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+    await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-30", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT, consentRepo });
+    await consentRepo.sign((await consentRepo.insertSentRequest({ customerId: "customer-1", consentVersionId: "version-1", serviceVisitId: null })).record.id, {
+      signedName: "Jane Doe",
+      acceptedTextSnapshot: "text",
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    await rescheduleServiceVisit(repo, {
+      serviceVisitId: visitId,
+      date: "2026-09-02",
+      startTime: "12:00",
+      cleanerIds: ["cleaner-1"],
+      durationInput: DURATION_INPUT,
+      now: new Date("2026-08-25T00:00:00Z"),
+      consentRepo,
+    });
+
+    const pendingReminders = [...state.notifications.values()].filter(
+      (n) => n.serviceVisitId === visitId && n.notificationType === "consent_reminder" && n.state === "pending"
+    );
+    expect(pendingReminders.length).toBe(0);
   });
 });

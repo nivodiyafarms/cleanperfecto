@@ -2,7 +2,8 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceVisitNotificationChannel, ServiceVisitNotificationType } from "@/lib/scheduling/types";
 
 export interface EnqueueNotificationInput {
-  serviceVisitId: string;
+  /** Null only for notificationType='consent_required' — see NewServiceVisitNotificationRow's own doc comment. */
+  serviceVisitId: string | null;
   customerId: string;
   notificationType: ServiceVisitNotificationType;
   channel: ServiceVisitNotificationChannel;
@@ -15,24 +16,27 @@ export interface EnqueueNotificationInput {
    * higher-than-before price needing approval) naturally mints a new key.
    * Convention: the confirmed_start_at ISO string for anything tied to a
    * specific appointment time; the newly computed total amount for a
-   * pricing-approval notice; a fixed literal ("v1") for a type that only
-   * ever fires once per visit regardless of any changing value (cancelled,
-   * completed).
+   * pricing-approval notice; the active consent_version_id for
+   * consent_required/consent_reminder; a fixed literal ("v1") for a type
+   * that only ever fires once per visit regardless of any changing value
+   * (cancelled, completed, review_request).
    */
   versionKey: string;
 }
 
 /**
  * The one server-authoritative enqueue path every notification trigger
- * point goes through (the existing 24h reminder via schedule-visit-
- * reminder.ts, and every new V1 type). idempotency_key =
- * "{serviceVisitId}:{notificationType}:{channel}:{versionKey}" — the
- * unique DB constraint on service_visit_notifications.idempotency_key
- * (see its migration) makes a duplicate enqueue attempt a safe no-op,
- * never a duplicate row, regardless of which caller retries.
+ * point goes through. idempotency_key =
+ * "{customerId}:{serviceVisitId ?? 'none'}:{notificationType}:{channel}:{versionKey}"
+ * — customerId leads the key (not just serviceVisitId) because
+ * consent_required can have a null serviceVisitId, and two different
+ * customers' null-visit requests must never collide into the same key. The
+ * unique DB constraint on service_visit_notifications.idempotency_key (see
+ * its migration) makes a duplicate enqueue attempt a safe no-op, never a
+ * duplicate row, regardless of which caller retries.
  */
 export async function enqueueNotification(repo: SchedulingRepository, input: EnqueueNotificationInput): Promise<{ inserted: boolean }> {
-  const idempotencyKey = `${input.serviceVisitId}:${input.notificationType}:${input.channel}:${input.versionKey}`;
+  const idempotencyKey = `${input.customerId}:${input.serviceVisitId ?? "none"}:${input.notificationType}:${input.channel}:${input.versionKey}`;
   return repo.insertServiceVisitNotification({
     serviceVisitId: input.serviceVisitId,
     customerId: input.customerId,

@@ -82,6 +82,12 @@ export async function cancelServiceVisit(repo: SchedulingRepository, input: Canc
 
   await cancelPendingReminder(repo, input.serviceVisitId);
 
+  // Consent is customer-level and is never invalidated by one visit being
+  // cancelled — only the pending reminder TIED TO THIS VISIT is cancelled;
+  // sent/signed/declined history is untouched (no consentRepo needed here,
+  // this is a pure cancel, never a re-decision about signed status).
+  await repo.cancelPendingConsentReminderForVisit(input.serviceVisitId);
+
   // Same rolling-horizon maintenance as completion (owner-approved): a
   // cancelled occurrence under an active recurring relationship no longer
   // occupies a horizon slot either, regardless of whether it was ever

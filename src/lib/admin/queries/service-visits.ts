@@ -147,9 +147,10 @@ export interface AdminServiceVisitDetail extends AdminScheduleVisit {
   serviceAddressLine2: string | null;
   quoteRequestId: string | null;
   recurringScheduleId: string | null;
+  reviewRequestSuppressed: boolean;
 }
 
-const VISIT_DETAIL_SELECT = `${VISIT_SELECT},timezone,estimated_labor_minutes,recommended_cleaner_count,turnaround_buffer_minutes,service_address_line1,service_address_line2,quote_request_id,recurring_schedule_id`;
+const VISIT_DETAIL_SELECT = `${VISIT_SELECT},timezone,estimated_labor_minutes,recommended_cleaner_count,turnaround_buffer_minutes,service_address_line1,service_address_line2,quote_request_id,recurring_schedule_id,review_request_suppressed`;
 
 export async function findServiceVisitDetail(visitId: string): Promise<AdminServiceVisitDetail | null> {
   const supabase = createSupabaseAdminClient();
@@ -170,6 +171,7 @@ export async function findServiceVisitDetail(visitId: string): Promise<AdminServ
     service_address_line2: string | null;
     quote_request_id: string | null;
     recurring_schedule_id: string | null;
+    review_request_suppressed: boolean;
   };
   return {
     ...mapped,
@@ -181,6 +183,7 @@ export async function findServiceVisitDetail(visitId: string): Promise<AdminServ
     serviceAddressLine2: raw.service_address_line2,
     quoteRequestId: raw.quote_request_id,
     recurringScheduleId: raw.recurring_schedule_id,
+    reviewRequestSuppressed: raw.review_request_suppressed,
   };
 }
 

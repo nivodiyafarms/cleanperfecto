@@ -87,6 +87,8 @@ export interface ServiceVisitRow {
   serviceCity: string | null;
   serviceState: string | null;
   serviceAddressIdentity: string | null;
+  /** Admin override: when true, completing this visit never enqueues a review_request. Never set automatically. */
+  reviewRequestSuppressed: boolean;
 }
 
 export interface NewServiceVisitRow {
@@ -253,7 +255,8 @@ export interface NewPackageVisitPlanHistoryRow {
 }
 
 export interface NewServiceVisitNotificationRow {
-  serviceVisitId: string;
+  /** Null only for notificationType='consent_required' (consent is customer-level and can fire before any real service_visit exists, e.g. a prepaid package before its first visit is scheduled) — see service_visit_notifications_visit_required_unless_consent_request. */
+  serviceVisitId: string | null;
   customerId: string;
   notificationType: ServiceVisitNotificationType;
   channel: ServiceVisitNotificationChannel;

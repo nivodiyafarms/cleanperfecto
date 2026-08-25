@@ -77,6 +77,8 @@ export interface SchedulingRepository {
   /** Atomic completion + package-credit consumption via the complete_service_visit() Postgres function. */
   completeServiceVisitRpc(serviceVisitId: string): Promise<void>;
   cancelServiceVisit(serviceVisitId: string): Promise<boolean>;
+  /** Admin toggle — never set automatically. See enqueue-review-request.ts. */
+  setReviewRequestSuppressed(serviceVisitId: string, suppressed: boolean): Promise<void>;
 
   // -- events / fees / reminders ---------------------------------------
   insertServiceVisitEvent(row: ServiceVisitEventRow): Promise<void>;
@@ -97,6 +99,12 @@ export interface SchedulingRepository {
   markServiceVisitNotificationFailedTerminal(id: string, failureReason: string): Promise<void>;
   /** Admin manual retry: terminal 'failed' -> 'pending' with a fresh attempt budget (retry_count reset to 0) and scheduled_send_at = now(), eligible for the next dispatch tick. A no-op guard (state='failed' in the WHERE clause) — never touches a row that isn't actually terminal. */
   retryFailedServiceVisitNotification(id: string): Promise<void>;
+  /** Cancels pending consent_reminder rows tied to ONE visit (its old confirmed time) — used by reschedule/cancel hooks, mirrors the existing reminder_24h cancel-by-visit pattern. */
+  cancelPendingConsentReminderForVisit(serviceVisitId: string): Promise<void>;
+  /** Cancels ALL of a customer's pending consent_reminder rows across every visit — used once the customer signs, since consent is customer-level and satisfies every outstanding reminder regardless of which visit prompted it. */
+  cancelPendingConsentRemindersForCustomer(customerId: string): Promise<void>;
+  /** Most recent sent_at among this customer's SENT review_request rows, or null if none — the 180-day cooldown check. Deliberately scoped to state='sent' only: a merely pending/queued or failed/cancelled attempt never started the cooldown (see enqueue-review-request.ts). */
+  findMostRecentSentReviewRequestAt(customerId: string): Promise<Date | null>;
 
   // -- recurring schedules -----------------------------------------------
   insertRecurringSchedule(row: NewRecurringScheduleRow): Promise<RecurringScheduleRow>;

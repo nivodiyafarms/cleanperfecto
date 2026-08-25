@@ -3,6 +3,8 @@ import { bootstrapRecurringVisitPlansFromDirectVisit } from "@/lib/scheduling/bo
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { RecurringCadence } from "@/lib/scheduling/types";
+import { enqueueConsentRequest } from "@/lib/consent/enqueue-consent-request";
+import type { ConsentRepository } from "@/lib/consent/consent-repository";
 import { sendNormalBookingConfirmationEmails } from "../email/send-normal-booking-confirmation-emails";
 import { sendPrepaidPackageSuccessEmails } from "../email/send-prepaid-package-success-emails";
 import type { BookingRepository } from "../repository";
@@ -46,7 +48,8 @@ async function handleSetupSessionCompleted(
   repo: BookingRepository,
   session: Stripe.Checkout.Session,
   bookingOrderId: string,
-  schedulingRepo?: SchedulingRepository
+  schedulingRepo?: SchedulingRepository,
+  consentRepo?: ConsentRepository
 ): Promise<void> {
   const setupIntentId = intentIdOf(session.setup_intent);
   if (!setupIntentId) return;
@@ -64,9 +67,13 @@ async function handleSetupSessionCompleted(
     stripeSetupIntentId: setupIntentId,
   });
 
+  let customerId: string | null = null;
+  let directVisitId: string | null = null;
+
   if (schedulingRepo) {
     const bookingOrder = await repo.findBookingOrderById(bookingOrderId);
     if (bookingOrder && bookingOrder.bookingType === "normal" && bookingOrder.requestedDate && bookingOrder.requestedStartTime) {
+      customerId = bookingOrder.customerId;
       const { visitId, recurringScheduleId } = await createRequestedVisitFromBooking(schedulingRepo, {
         bookingOrderId: bookingOrder.id,
         customerId: bookingOrder.customerId,
@@ -81,6 +88,7 @@ async function handleSetupSessionCompleted(
         serviceState: bookingOrder.serviceState,
         serviceAddressIdentity: bookingOrder.serviceAddressIdentity,
       });
+      directVisitId = visitId;
 
       // Recurring frequency only — one_time bookings get no recurring_schedule
       // at all (createRequestedVisitFromBooking returns null for those), so
@@ -107,6 +115,14 @@ async function handleSetupSessionCompleted(
     // rejection here must never turn a successful setup into a failed
     // webhook delivery / Stripe retry loop).
     await sendNormalBookingConfirmationEmails(repo, bookingOrderId).catch(() => {});
+
+    // Consent request — "send after booking confirmation," using the real
+    // direct visit as its informational link. Idempotent via
+    // customer_consents' own unique constraint, so a Stripe retry (this
+    // whole branch re-running) can never create a duplicate request.
+    if (schedulingRepo && consentRepo && customerId) {
+      await enqueueConsentRequest(consentRepo, schedulingRepo, { customerId, serviceVisitId: directVisitId }).catch(() => {});
+    }
   }
 }
 
@@ -121,7 +137,9 @@ async function finalizeVerifiedPayment(
   stripe: Stripe,
   repo: BookingRepository,
   session: Stripe.Checkout.Session,
-  bookingOrderId: string
+  bookingOrderId: string,
+  schedulingRepo?: SchedulingRepository,
+  consentRepo?: ConsentRepository
 ): Promise<void> {
   const paymentIntentId = intentIdOf(session.payment_intent);
   if (paymentIntentId) {
@@ -159,6 +177,15 @@ async function finalizeVerifiedPayment(
 
   if (inserted && changed) {
     await sendPrepaidPackageSuccessEmails(repo, bookingOrderId).catch(() => {});
+
+    // Consent request — no real service_visit exists yet for a package at
+    // this point (package visit slots start 'planned', not 'linked', until
+    // each is individually scheduled later), so this is the one case
+    // consent_required is enqueued with serviceVisitId=null. Idempotent via
+    // customer_consents' own unique constraint.
+    if (schedulingRepo && consentRepo) {
+      await enqueueConsentRequest(consentRepo, schedulingRepo, { customerId: bookingOrder.customerId, serviceVisitId: null }).catch(() => {});
+    }
   }
 }
 
@@ -166,7 +193,9 @@ async function handlePaymentSessionCompleted(
   stripe: Stripe,
   repo: BookingRepository,
   session: Stripe.Checkout.Session,
-  bookingOrderId: string
+  bookingOrderId: string,
+  schedulingRepo?: SchedulingRepository,
+  consentRepo?: ConsentRepository
 ): Promise<void> {
   if (session.payment_status !== "paid") {
     // Delayed/async payment method still settling — do not activate yet.
@@ -174,7 +203,7 @@ async function handlePaymentSessionCompleted(
     await repo.updatePaymentAttemptBySessionId(session.id, { status: "processing" });
     return;
   }
-  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId);
+  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
 }
 
 /**
@@ -190,7 +219,8 @@ export async function processStripeWebhookEvent(
   stripe: Stripe,
   repo: BookingRepository,
   event: Stripe.Event,
-  schedulingRepo?: SchedulingRepository
+  schedulingRepo?: SchedulingRepository,
+  consentRepo?: ConsentRepository
 ): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed": {
@@ -199,9 +229,9 @@ export async function processStripeWebhookEvent(
       if (!bookingOrderId) return;
 
       if (session.mode === "setup") {
-        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo);
+        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
       } else if (session.mode === "payment") {
-        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId);
+        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
       }
       return;
     }
@@ -210,7 +240,7 @@ export async function processStripeWebhookEvent(
       const session = event.data.object;
       const bookingOrderId = bookingOrderIdFromSession(session);
       if (!bookingOrderId || session.payment_status !== "paid") return;
-      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId);
+      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
       return;
     }
 

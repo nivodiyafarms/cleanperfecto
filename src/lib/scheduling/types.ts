@@ -39,7 +39,10 @@ export type ServiceVisitNotificationType =
   | "rescheduled"
   | "cancelled"
   | "completed"
-  | "pricing_approval_required";
+  | "pricing_approval_required"
+  | "consent_required"
+  | "consent_reminder"
+  | "review_request";
 
 export type ServiceVisitNotificationChannel = "email" | "sms";
 

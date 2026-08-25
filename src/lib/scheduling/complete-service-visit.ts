@@ -1,4 +1,5 @@
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import { enqueueReviewRequest } from "@/lib/review/enqueue-review-request";
 import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 import type { SchedulingRepository } from "./repository";
@@ -38,6 +39,22 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
       scheduledSendAt: new Date(),
       versionKey: "v1",
     });
+
+    // Review automation: only after this GENUINE completion (this whole
+    // block only runs on the transition that actually completed), never
+    // for a cancelled/no-access visit (those code paths never reach here
+    // at all). enqueueReviewRequest itself checks suppression, the 180-day
+    // cooldown, and GOOGLE_REVIEW_URL configuration — never touches
+    // package credit, pricing, or payment state.
+    if (after) {
+      await enqueueReviewRequest(repo, {
+        serviceVisitId,
+        customerId: before.customerId,
+        completedAtUtc: after.completedAt ?? new Date(),
+        timezone: after.timezone,
+        reviewRequestSuppressed: after.reviewRequestSuppressed,
+      });
+    }
 
     // Maintain the customer's rolling six-cleaning horizon (owner-approved):
     // a completed occurrence under an active recurring relationship no

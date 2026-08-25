@@ -9,11 +9,13 @@ import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
 import { cancelVisitAction, completeVisitAction, reassignCleanersAction, rescheduleVisitAction, waiveFeeAction } from "@/lib/admin/actions/schedule-actions";
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
+import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
 import { findAvailableCleaners } from "@/lib/scheduling/find-available-cleaners";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 
 const PRICED_ADD_ONS = Object.values(ADD_ON_CATALOG).filter((a) => a.kind !== "manual_quote");
 const RECURRING_CADENCE_OPTIONS = [
@@ -73,6 +75,10 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const isPayPerCleaningRecurringVisit =
     !visit.prepaidPackageId && Boolean(visit.recurringScheduleId) && (visit.status === "requested" || visit.status === "scheduled");
   const visitPricing = isPayPerCleaningRecurringVisit ? await schedulingRepo.findServiceVisitPricingByVisitId(visitId) : null;
+
+  const consentRepo = createSupabaseConsentRepository();
+  const activeConsentVersion = await consentRepo.findActiveVersion();
+  const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(visit.customerId, activeConsentVersion.id) : null;
 
   return (
     <div className="max-w-3xl">
@@ -347,6 +353,81 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
           </div>
         </div>
       )}
+
+      {activeConsentVersion && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <h2 className="text-sm font-semibold text-foreground">Consent</h2>
+          {consentRecord ? (
+            <>
+              <p className="mt-2 text-sm text-foreground">
+                {consentRecord.state === "signed" ? (
+                  <span className="font-medium text-emerald-700">Signed</span>
+                ) : (
+                  <span className="font-medium text-amber-700">Action Required — {consentRecord.state}</span>
+                )}
+                {" · "}version {activeConsentVersion.versionLabel}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Sent {formatInstant(consentRecord.sentAt.toISOString())}
+                {consentRecord.viewedAt ? ` · Viewed ${formatInstant(consentRecord.viewedAt.toISOString())}` : ""}
+                {consentRecord.declinedAt ? ` · Declined ${formatInstant(consentRecord.declinedAt.toISOString())}` : ""}
+                {consentRecord.signedAt ? ` · Signed ${formatInstant(consentRecord.signedAt.toISOString())}` : ""}
+              </p>
+              {consentRecord.state === "signed" && (
+                <div className="mt-3 space-y-2">
+                  <details className="rounded-lg border border-border p-3 text-xs text-foreground">
+                    <summary className="cursor-pointer font-medium">View Signed Consent</summary>
+                    <p className="mt-2 whitespace-pre-wrap text-muted">Signed by: {consentRecord.signedName}</p>
+                    <p className="mt-2 whitespace-pre-wrap">{consentRecord.acceptedTextSnapshot}</p>
+                  </details>
+                  {consentRecord.signedDocumentPath ? (
+                    <a
+                      href={`/admin/consent/${consentRecord.id}/document`}
+                      className="inline-block rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt"
+                    >
+                      Download Signed PDF
+                    </a>
+                  ) : (
+                    <ActionForm action={retrySignedConsentDocumentAction}>
+                      <input type="hidden" name="consentId" value={consentRecord.id} />
+                      <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                        Generate signed document
+                      </button>
+                    </ActionForm>
+                  )}
+                </div>
+              )}
+              {consentRecord.state !== "signed" && (
+                <ActionForm action={resendConsentRequestAction} className="mt-3">
+                  <input type="hidden" name="customerId" value={visit.customerId} />
+                  <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                    Resend consent request
+                  </button>
+                </ActionForm>
+              )}
+            </>
+          ) : (
+            <p className="mt-2 text-sm text-amber-700">Action Required — not sent</p>
+          )}
+        </div>
+      )}
+
+      <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+        <h2 className="text-sm font-semibold text-foreground">Review request</h2>
+        <p className="mt-1 text-xs text-muted">
+          {visit.status === "completed"
+            ? "Suppress the automated review request for this specific visit (e.g. a problem/unhappy cleaning)."
+            : "Available once this visit is completed."}
+        </p>
+        <ActionForm action={setReviewRequestSuppressedAction} className="mt-2">
+          <input type="hidden" name="serviceVisitId" value={visitId} />
+          <input type="hidden" name="suppressed" value={(!visit.reviewRequestSuppressed).toString()} />
+          <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+            {visit.reviewRequestSuppressed ? "Remove suppression" : "Suppress review request"}
+          </button>
+        </ActionForm>
+        {visit.reviewRequestSuppressed && <p className="mt-1 text-xs text-red-600">Currently suppressed.</p>}
+      </div>
 
       {notifications.length > 0 && (
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5">

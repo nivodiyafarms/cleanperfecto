@@ -1,4 +1,6 @@
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import type { ConsentRepository } from "@/lib/consent/consent-repository";
+import { scheduleConsentReminderIfUnsigned } from "@/lib/consent/schedule-consent-reminder";
 import { DEFAULT_TURNAROUND_BUFFER_MINUTES } from "./config";
 import type { DurationEstimateInput } from "./duration-engine";
 import { estimateDuration } from "./duration-engine";
@@ -15,6 +17,8 @@ export interface ConfirmServiceVisitInput {
   cleanerIds: string[];
   durationInput: DurationEstimateInput;
   actor?: string;
+  /** Optional so every existing/new test that doesn't care about consent is unaffected — production call sites always supply it. Omitted entirely means no consent_reminder is scheduled (never a case of silently guessing signed status). */
+  consentRepo?: ConsentRepository;
 }
 
 /**
@@ -81,4 +85,13 @@ export async function confirmServiceVisit(repo: SchedulingRepository, input: Con
 
   await cancelPendingReminder(repo, input.serviceVisitId);
   await scheduleVisitReminder(repo, input.serviceVisitId, visit.customerId, confirmedStartAt);
+
+  if (input.consentRepo) {
+    await repo.cancelPendingConsentReminderForVisit(input.serviceVisitId);
+    await scheduleConsentReminderIfUnsigned(repo, input.consentRepo, {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      confirmedStartAt,
+    });
+  }
 }

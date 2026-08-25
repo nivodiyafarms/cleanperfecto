@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bootstrapRecurringVisitPlansFromDirectVisit } from "./bootstrap-recurring-visit-plans-from-direct-visit";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
@@ -237,5 +237,75 @@ describe("completeServiceVisit", () => {
     const completedNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "completed");
     expect(completedNotices.length).toBe(1);
     expect(completedNotices[0].state).toBe("pending");
+  });
+
+  describe("review_request", () => {
+    beforeEach(() => {
+      process.env.GOOGLE_REVIEW_URL = "https://example.com/leave-a-review";
+    });
+    afterEach(() => {
+      delete process.env.GOOGLE_REVIEW_URL;
+    });
+
+    it("enqueues exactly one review_request only after a genuine completion", async () => {
+      const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+      expect([...state.notifications.values()].filter((n) => n.notificationType === "review_request").length).toBe(0);
+
+      await completeServiceVisit(repo, visitId);
+
+      const reviewNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "review_request");
+      expect(reviewNotices.length).toBe(1);
+      expect(reviewNotices[0].state).toBe("pending");
+    });
+
+    it("a completion retry does not duplicate the review_request", async () => {
+      const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+      await completeServiceVisit(repo, visitId);
+      await completeServiceVisit(repo, visitId); // idempotent retry
+
+      expect([...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "review_request").length).toBe(1);
+    });
+
+    it("never enqueues a review_request for a cancelled visit", async () => {
+      const { repo, state } = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+      const { visitId } = await createRequestedVisitFromBooking(repo, {
+        bookingOrderId: "booking-1",
+        customerId: "customer-1",
+        quoteRequestId: "quote-1",
+        cleaningType: "standard",
+        frequency: "one_time",
+        requestedDate: "2026-08-24",
+        requestedStartTime: "10:00",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      });
+      await confirmServiceVisit(repo, { serviceVisitId: visitId, date: "2026-08-24", startTime: "10:00", cleanerIds: ["cleaner-1"], durationInput: DURATION_INPUT });
+      const { cancelServiceVisit } = await import("./cancel-service-visit");
+      await cancelServiceVisit(repo, { serviceVisitId: visitId, now: new Date("2026-08-24T00:00:00Z") });
+
+      expect([...state.notifications.values()].filter((n) => n.notificationType === "review_request").length).toBe(0);
+    });
+
+    it("respects the visit-level review_request_suppressed flag", async () => {
+      const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+      await repo.setReviewRequestSuppressed(visitId, true);
+
+      await completeServiceVisit(repo, visitId);
+
+      expect([...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "review_request").length).toBe(0);
+    });
+
+    it("never touches package credit, pricing, or payment state", async () => {
+      const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+      const creditBefore = state.prepaidPackagesById.get("pkg-1")?.remainingVisitCount;
+
+      await completeServiceVisit(repo, visitId);
+
+      // Credit still decrements exactly once (completion's own job), unaffected by review automation running alongside it.
+      expect(state.prepaidPackagesById.get("pkg-1")?.remainingVisitCount).toBe((creditBefore ?? 0) - 1);
+    });
   });
 });

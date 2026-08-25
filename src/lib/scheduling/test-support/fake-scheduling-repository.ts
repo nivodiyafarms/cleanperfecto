@@ -166,6 +166,7 @@ export function createFakeSchedulingRepository(
         serviceCity: row.serviceCity,
         serviceState: row.serviceState,
         serviceAddressIdentity: row.serviceAddressIdentity,
+        reviewRequestSuppressed: false,
       };
       serviceVisitsById.set(id, created);
       return created;
@@ -272,6 +273,11 @@ export function createFakeSchedulingRepository(
         if (a.serviceVisitId === serviceVisitId && a.unassignedAt === null) a.unassignedAt = new Date();
       }
       return true;
+    },
+
+    async setReviewRequestSuppressed(serviceVisitId, suppressed) {
+      const visit = serviceVisitsById.get(serviceVisitId);
+      if (visit) serviceVisitsById.set(serviceVisitId, { ...visit, reviewRequestSuppressed: suppressed });
     },
 
     async insertServiceVisitEvent(row) {
@@ -391,6 +397,25 @@ export function createFakeSchedulingRepository(
           n.claimedAt = null;
         }
       }
+    },
+    async cancelPendingConsentReminderForVisit(serviceVisitId) {
+      for (const n of notifications.values()) {
+        if (n.serviceVisitId === serviceVisitId && n.notificationType === "consent_reminder" && n.state === "pending") n.state = "cancelled";
+      }
+    },
+    async cancelPendingConsentRemindersForCustomer(customerId) {
+      for (const n of notifications.values()) {
+        if (n.customerId === customerId && n.notificationType === "consent_reminder" && n.state === "pending") n.state = "cancelled";
+      }
+    },
+    async findMostRecentSentReviewRequestAt(customerId) {
+      let mostRecent: Date | null = null;
+      for (const n of notifications.values()) {
+        if (n.customerId === customerId && n.notificationType === "review_request" && n.state === "sent" && n.sentAt) {
+          if (!mostRecent || n.sentAt.getTime() > mostRecent.getTime()) mostRecent = n.sentAt;
+        }
+      }
+      return mostRecent;
     },
 
     async insertRecurringSchedule(row: NewRecurringScheduleRow) {

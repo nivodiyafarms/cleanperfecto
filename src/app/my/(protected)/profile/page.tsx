@@ -1,19 +1,25 @@
+import Link from "next/link";
 import ActionForm from "@/components/admin/ActionForm";
 import { signOutAction } from "@/lib/customer-portal/actions/auth-actions";
 import { setSmsOptInAction } from "@/lib/customer-portal/actions/notification-preferences-actions";
 import { getCustomerProfile, getMostRecentServiceAddress } from "@/lib/customer-portal/queries";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
 import { createSupabaseCustomerNotificationPreferencesRepository } from "@/lib/notifications/customer-notification-preferences-repository";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 
 export default async function MyProfilePage() {
   const session = await requireCustomer();
   const preferencesRepo = createSupabaseCustomerNotificationPreferencesRepository();
-  const [profile, address, preferences] = await Promise.all([
+  const consentRepo = createSupabaseConsentRepository();
+  const [profile, address, preferences, activeConsentVersion] = await Promise.all([
     getCustomerProfile(session.customerId),
     getMostRecentServiceAddress(session.customerId),
     preferencesRepo.findByCustomerId(session.customerId),
+    consentRepo.findActiveVersion(),
   ]);
   const smsOptIn = preferences?.smsOptIn ?? false;
+  const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(session.customerId, activeConsentVersion.id) : null;
+  const consentStatusLabel = consentRecord?.state === "signed" ? "Signed" : "Action needed";
 
   return (
     <div className="max-w-md space-y-6">
@@ -40,6 +46,14 @@ export default async function MyProfilePage() {
         <p className="text-sm text-foreground">
           {address?.line1 ? `${address.line1}${address.line2 ? `, ${address.line2}` : ""}, ${address.city}, ${address.state}` : "—"}
         </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted">Consent</p>
+        <p className={`mt-1 text-sm ${consentRecord?.state === "signed" ? "text-emerald-700" : "text-foreground"}`}>{consentStatusLabel}</p>
+        <Link href="/my/consent" className="mt-1 inline-block text-xs font-medium text-secondary hover:underline">
+          View consent →
+        </Link>
       </div>
 
       <div>

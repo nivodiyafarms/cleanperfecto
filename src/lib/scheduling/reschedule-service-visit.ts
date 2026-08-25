@@ -1,4 +1,6 @@
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import type { ConsentRepository } from "@/lib/consent/consent-repository";
+import { scheduleConsentReminderIfUnsigned } from "@/lib/consent/schedule-consent-reminder";
 import { assessFee, type FeeAssessmentResult } from "./assess-cancellation-fee";
 import { DEFAULT_TURNAROUND_BUFFER_MINUTES } from "./config";
 import { estimateDuration, type DurationEstimateInput } from "./duration-engine";
@@ -17,6 +19,8 @@ export interface RescheduleServiceVisitInput {
   /** The instant this reschedule is being requested, for fee-notice calculation — same explicit-clock pattern as calculateEstimate's asOf. */
   now: Date;
   actor?: string;
+  /** Optional, same convention as confirm-service-visit.ts — omitted means no consent_reminder re-scheduling. */
+  consentRepo?: ConsentRepository;
 }
 
 /**
@@ -93,6 +97,18 @@ export async function rescheduleServiceVisit(
   // the OLD confirmed_start_at and would otherwise fire at the wrong time.
   await cancelPendingReminder(repo, input.serviceVisitId);
   await scheduleVisitReminder(repo, input.serviceVisitId, visit.customerId, confirmedStartAt);
+
+  // Same cancel-then-reschedule shape for the consent reminder — cancel the
+  // old pending one tied to the previous confirmed time, then enqueue a new
+  // one only if consent for the active version is still unsigned.
+  if (input.consentRepo) {
+    await repo.cancelPendingConsentReminderForVisit(input.serviceVisitId);
+    await scheduleConsentReminderIfUnsigned(repo, input.consentRepo, {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      confirmedStartAt,
+    });
+  }
 
   return feeResult.amount > 0 ? feeResult : null;
 }
