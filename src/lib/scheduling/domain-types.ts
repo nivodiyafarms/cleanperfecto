@@ -6,6 +6,7 @@ import type {
   PackageAmendmentApprovalState,
   PackageAmendmentPaymentState,
   PackageVisitPlanStatus,
+  PaymentMethodType,
   RecurringCadence,
   RecurringScheduleStatus,
   RecurringScopeVersionStatus,
@@ -14,10 +15,13 @@ import type {
   ServiceVisitNotificationChannel,
   ServiceVisitNotificationState,
   ServiceVisitNotificationType,
+  ServiceVisitPaymentStatus,
   ServiceVisitPricingPaymentStatus,
   ServiceVisitPricingPriceStatus,
   ServiceVisitStatus,
+  TaxTransactionStatus,
   TimeOfDay,
+  TipSelectionType,
 } from "./types";
 
 export interface CleanerRow {
@@ -358,4 +362,102 @@ export interface ServiceVisitPricingRow extends NewServiceVisitPricingRow {
   paymentStatus: ServiceVisitPricingPaymentStatus;
   confirmedAt: Date | null;
   confirmedBy: string | null;
+}
+
+// -- Payments V1: service_visit_payments ------------------------------------
+
+export interface NewServiceVisitPaymentRow {
+  serviceVisitId: string;
+  serviceVisitPricingId: string;
+  approvedAmount: number;
+  idempotencyKey: string;
+}
+
+export interface ServiceVisitPaymentRow {
+  id: string;
+  serviceVisitId: string;
+  serviceVisitPricingId: string;
+
+  approvedAmount: number;
+  tipBasisAmount: number | null;
+  tipSelectionType: TipSelectionType | null;
+  tipPercentage: number | null;
+  tipAmount: number | null;
+  taxAmount: number | null;
+  totalAmount: number | null;
+
+  tipSelectedAt: Date | null;
+  tipConfirmedAt: Date | null;
+
+  taxLocationSnapshot: Record<string, unknown> | null;
+  currency: string;
+
+  paymentMethodType: PaymentMethodType | null;
+
+  stripeCustomerId: string | null;
+  stripePaymentMethodId: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  stripePaymentIntentId: string | null;
+
+  stripeTaxCalculationId: string | null;
+  taxCalculationExpiresAt: Date | null;
+  taxTransactionStatus: TaxTransactionStatus;
+  stripeTaxTransactionId: string | null;
+  taxTransactionFailureCode: string | null;
+  taxTransactionFailureMessage: string | null;
+  taxTransactionLastAttemptAt: Date | null;
+
+  externalPaymentReference: string | null;
+
+  status: ServiceVisitPaymentStatus;
+
+  idempotencyKey: string;
+
+  failureCode: string | null;
+  failureMessage: string | null;
+
+  refundedAmount: number;
+  refundedAt: Date | null;
+  paidAt: Date | null;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Pre-freeze tip/tax update — only valid while tipConfirmedAt is still null (enforced by the DB trigger; the repository also refuses if the row is already frozen). */
+export interface ServiceVisitPaymentTipPatch {
+  tipBasisAmount: number;
+  tipSelectionType: TipSelectionType;
+  tipPercentage: number | null;
+  tipAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  /** Null only when nothing is collectible (approvedAmount + tipAmount === 0) — no Stripe Tax Calculation is created in that case. */
+  stripeTaxCalculationId: string | null;
+  taxCalculationExpiresAt: Date | null;
+  taxLocationSnapshot: Record<string, unknown>;
+}
+
+/** Freezes the row for the stripe_card rail — sets tipConfirmedAt, so must only be called once per row (the repository enforces via the trigger + a state-guarded WHERE clause). */
+export interface ServiceVisitPaymentStripeCardFreezePatch {
+  stripeCustomerId: string;
+  stripePaymentMethodId: string;
+  cardBrand: string | null;
+  cardLast4: string | null;
+}
+
+/** Freezes the row for an external (zelle/cash) settlement — sets tipConfirmedAt (if not already set) atomically with status='paid'/paid_at, per the two-phase external-payment design (see recordExternalPayment). */
+export interface ServiceVisitPaymentExternalSettlementPatch {
+  paymentMethodType: Extract<PaymentMethodType, "zelle" | "cash">;
+  externalPaymentReference: string | null;
+}
+
+export interface ServiceVisitPaymentTaxSyncPatch {
+  taxTransactionStatus: TaxTransactionStatus;
+  stripeTaxTransactionId?: string | null;
+  stripeTaxCalculationId?: string;
+  taxCalculationExpiresAt?: Date | null;
+  taxTransactionFailureCode?: string | null;
+  taxTransactionFailureMessage?: string | null;
 }

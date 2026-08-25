@@ -15,6 +15,7 @@ import type {
   NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPaymentRow,
   NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
@@ -26,6 +27,11 @@ import type {
   SchedulingDayOverrideRow,
   ServiceFeeAssessmentRow,
   ServiceVisitNotificationRow,
+  ServiceVisitPaymentExternalSettlementPatch,
+  ServiceVisitPaymentRow,
+  ServiceVisitPaymentStripeCardFreezePatch,
+  ServiceVisitPaymentTaxSyncPatch,
+  ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
@@ -173,6 +179,48 @@ function toServiceVisitPricingRow(row: Record<string, unknown>): ServiceVisitPri
     requiresCustomerApproval: row.requires_customer_approval as boolean,
     confirmedAt: row.confirmed_at ? new Date(row.confirmed_at as string) : null,
     confirmedBy: (row.confirmed_by as string | null) ?? null,
+  };
+}
+
+function toServiceVisitPaymentRow(row: Record<string, unknown>): ServiceVisitPaymentRow {
+  return {
+    id: row.id as string,
+    serviceVisitId: row.service_visit_id as string,
+    serviceVisitPricingId: row.service_visit_pricing_id as string,
+    approvedAmount: Number(row.approved_amount),
+    tipBasisAmount: row.tip_basis_amount === null ? null : Number(row.tip_basis_amount),
+    tipSelectionType: (row.tip_selection_type as ServiceVisitPaymentRow["tipSelectionType"]) ?? null,
+    tipPercentage: row.tip_percentage === null ? null : Number(row.tip_percentage),
+    tipAmount: row.tip_amount === null ? null : Number(row.tip_amount),
+    taxAmount: row.tax_amount === null ? null : Number(row.tax_amount),
+    totalAmount: row.total_amount === null ? null : Number(row.total_amount),
+    tipSelectedAt: row.tip_selected_at ? new Date(row.tip_selected_at as string) : null,
+    tipConfirmedAt: row.tip_confirmed_at ? new Date(row.tip_confirmed_at as string) : null,
+    taxLocationSnapshot: (row.tax_location_snapshot as Record<string, unknown> | null) ?? null,
+    currency: row.currency as string,
+    paymentMethodType: (row.payment_method_type as ServiceVisitPaymentRow["paymentMethodType"]) ?? null,
+    stripeCustomerId: (row.stripe_customer_id as string | null) ?? null,
+    stripePaymentMethodId: (row.stripe_payment_method_id as string | null) ?? null,
+    cardBrand: (row.card_brand as string | null) ?? null,
+    cardLast4: (row.card_last4 as string | null) ?? null,
+    stripePaymentIntentId: (row.stripe_payment_intent_id as string | null) ?? null,
+    stripeTaxCalculationId: (row.stripe_tax_calculation_id as string | null) ?? null,
+    taxCalculationExpiresAt: row.tax_calculation_expires_at ? new Date(row.tax_calculation_expires_at as string) : null,
+    taxTransactionStatus: row.tax_transaction_status as ServiceVisitPaymentRow["taxTransactionStatus"],
+    stripeTaxTransactionId: (row.stripe_tax_transaction_id as string | null) ?? null,
+    taxTransactionFailureCode: (row.tax_transaction_failure_code as string | null) ?? null,
+    taxTransactionFailureMessage: (row.tax_transaction_failure_message as string | null) ?? null,
+    taxTransactionLastAttemptAt: row.tax_transaction_last_attempt_at ? new Date(row.tax_transaction_last_attempt_at as string) : null,
+    externalPaymentReference: (row.external_payment_reference as string | null) ?? null,
+    status: row.status as ServiceVisitPaymentRow["status"],
+    idempotencyKey: row.idempotency_key as string,
+    failureCode: (row.failure_code as string | null) ?? null,
+    failureMessage: (row.failure_message as string | null) ?? null,
+    refundedAmount: Number(row.refunded_amount),
+    refundedAt: row.refunded_at ? new Date(row.refunded_at as string) : null,
+    paidAt: row.paid_at ? new Date(row.paid_at as string) : null,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
   };
 }
 
@@ -1053,6 +1101,191 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .maybeSingle();
       if (error) throw new Error(`[scheduling] service_visit_pricing payment_status update failed: ${error.message}`);
       return data ? toServiceVisitPricingRow(data) : null;
+    },
+
+    async findServiceVisitPaymentByVisitId(serviceVisitId) {
+      const { data, error } = await supabase.from("service_visit_payments").select().eq("service_visit_id", serviceVisitId).maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments lookup failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async findServiceVisitPaymentById(id) {
+      const { data, error } = await supabase.from("service_visit_payments").select().eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments lookup by id failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async findServiceVisitPaymentByStripePaymentIntentId(stripePaymentIntentId) {
+      const { data, error } = await supabase.from("service_visit_payments").select().eq("stripe_payment_intent_id", stripePaymentIntentId).maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments lookup by PaymentIntent id failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async insertServiceVisitPaymentAttempt(row: NewServiceVisitPaymentRow) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .upsert(
+          {
+            service_visit_id: row.serviceVisitId,
+            service_visit_pricing_id: row.serviceVisitPricingId,
+            approved_amount: row.approvedAmount,
+            idempotency_key: row.idempotencyKey,
+          },
+          { onConflict: "service_visit_id", ignoreDuplicates: true }
+        )
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments insert failed: ${error.message}`);
+      if (data) return { inserted: true, record: toServiceVisitPaymentRow(data) };
+
+      const existing = await supabase.from("service_visit_payments").select().eq("service_visit_id", row.serviceVisitId).single();
+      if (existing.error || !existing.data) throw new Error(`[scheduling] service_visit_payments lookup after conflict failed: ${existing.error?.message}`);
+      return { inserted: false, record: toServiceVisitPaymentRow(existing.data) };
+    },
+
+    async updateServiceVisitPaymentTip(id: string, patch: ServiceVisitPaymentTipPatch) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({
+          tip_basis_amount: patch.tipBasisAmount,
+          tip_selection_type: patch.tipSelectionType,
+          tip_percentage: patch.tipPercentage,
+          tip_amount: patch.tipAmount,
+          tax_amount: patch.taxAmount,
+          total_amount: patch.totalAmount,
+          stripe_tax_calculation_id: patch.stripeTaxCalculationId,
+          tax_calculation_expires_at: patch.taxCalculationExpiresAt,
+          tax_location_snapshot: patch.taxLocationSnapshot,
+          tip_selected_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .is("tip_confirmed_at", null)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments tip update failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is already frozen (tip_confirmed_at is set) — cannot update tip`);
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async freezeServiceVisitPaymentForStripeCard(id: string, patch: ServiceVisitPaymentStripeCardFreezePatch) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({
+          payment_method_type: "stripe_card",
+          stripe_customer_id: patch.stripeCustomerId,
+          stripe_payment_method_id: patch.stripePaymentMethodId,
+          card_brand: patch.cardBrand,
+          card_last4: patch.cardLast4,
+          tip_confirmed_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .is("tip_confirmed_at", null)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments stripe-card freeze failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is already frozen — cannot freeze again`);
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async freezeServiceVisitPaymentAsNoPaymentDue(id: string) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({ status: "no_payment_due", tip_confirmed_at: new Date().toISOString() })
+        .eq("id", id)
+        .is("tip_confirmed_at", null)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] freezeServiceVisitPaymentAsNoPaymentDue failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is already frozen — cannot freeze again`);
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async setServiceVisitPaymentIntent(id: string, params: { stripePaymentIntentId: string; status: ServiceVisitPaymentRow["status"] }) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({ stripe_payment_intent_id: params.stripePaymentIntentId, status: params.status })
+        .eq("id", id)
+        .is("stripe_payment_intent_id", null)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments setServiceVisitPaymentIntent failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} already has a stripe_payment_intent_id`);
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async updateServiceVisitPaymentStatus(id: string, patch) {
+      const update: Record<string, unknown> = { status: patch.status };
+      if (patch.failureCode !== undefined) update.failure_code = patch.failureCode;
+      if (patch.failureMessage !== undefined) update.failure_message = patch.failureMessage;
+      if (patch.paidAt !== undefined) update.paid_at = patch.paidAt ? patch.paidAt.toISOString() : null;
+      const { data, error } = await supabase.from("service_visit_payments").update(update).eq("id", id).select().maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments status update failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch) {
+      const nowIso = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({
+          payment_method_type: patch.paymentMethodType,
+          external_payment_reference: patch.externalPaymentReference,
+          status: "paid",
+          paid_at: nowIso,
+          tax_transaction_status: "pending",
+        })
+        .eq("id", id)
+        .in("status", ["created"])
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] recordExternalServiceVisitPayment failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
+
+      // tip_confirmed_at freezes on this same settlement if a tip was
+      // already selected pre-freeze but the customer never clicked a
+      // Stripe Confirm & Pay — a second, separate update (not combined
+      // above) because the trigger only allows setting it from null, and
+      // combining both writes in one UPDATE risks the trigger seeing an
+      // already-non-null tip_confirmed_at from a stale read; a WHERE
+      // tip_confirmed_at IS NULL guard makes this safe/idempotent.
+      if (!data.tip_confirmed_at) {
+        const frozen = await supabase
+          .from("service_visit_payments")
+          .update({ tip_confirmed_at: nowIso })
+          .eq("id", id)
+          .is("tip_confirmed_at", null)
+          .select()
+          .maybeSingle();
+        if (frozen.error) throw new Error(`[scheduling] recordExternalServiceVisitPayment tip-freeze failed: ${frozen.error.message}`);
+        if (frozen.data) return toServiceVisitPaymentRow(frozen.data);
+      }
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch) {
+      const update: Record<string, unknown> = {
+        tax_transaction_status: patch.taxTransactionStatus,
+        tax_transaction_last_attempt_at: new Date().toISOString(),
+      };
+      if (patch.stripeTaxTransactionId !== undefined) update.stripe_tax_transaction_id = patch.stripeTaxTransactionId;
+      if (patch.stripeTaxCalculationId !== undefined) update.stripe_tax_calculation_id = patch.stripeTaxCalculationId;
+      if (patch.taxCalculationExpiresAt !== undefined) update.tax_calculation_expires_at = patch.taxCalculationExpiresAt ? patch.taxCalculationExpiresAt.toISOString() : null;
+      if (patch.taxTransactionFailureCode !== undefined) update.tax_transaction_failure_code = patch.taxTransactionFailureCode;
+      if (patch.taxTransactionFailureMessage !== undefined) update.tax_transaction_failure_message = patch.taxTransactionFailureMessage;
+      const { data, error } = await supabase.from("service_visit_payments").update(update).eq("id", id).select().maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments tax-sync update failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({ refunded_amount: patch.refundedAmount, refunded_at: patch.refundedAt.toISOString(), status: patch.status })
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments refund update failed: ${error.message}`);
+      return data ? toServiceVisitPaymentRow(data) : null;
     },
   };
 }

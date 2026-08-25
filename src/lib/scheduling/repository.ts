@@ -12,6 +12,7 @@ import type {
   NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPaymentRow,
   NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
@@ -24,6 +25,11 @@ import type {
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
   ServiceVisitNotificationRow,
+  ServiceVisitPaymentExternalSettlementPatch,
+  ServiceVisitPaymentRow,
+  ServiceVisitPaymentStripeCardFreezePatch,
+  ServiceVisitPaymentTaxSyncPatch,
+  ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
@@ -180,4 +186,30 @@ export interface SchedulingRepository {
     serviceVisitId: string,
     paymentStatus: ServiceVisitPricingPaymentStatus
   ): Promise<ServiceVisitPricingRow | null>;
+
+  // -- service_visit_payments (Pay-Per-Cleaning + Tipping V1) --------------
+  findServiceVisitPaymentByVisitId(serviceVisitId: string): Promise<ServiceVisitPaymentRow | null>;
+  findServiceVisitPaymentById(id: string): Promise<ServiceVisitPaymentRow | null>;
+  findServiceVisitPaymentByStripePaymentIntentId(stripePaymentIntentId: string): Promise<ServiceVisitPaymentRow | null>;
+  /** Insert-or-fetch-existing via the unique service_visit_id — same idempotent-insert convention as insertSentRequest/insertServiceVisitNotification. `inserted` tells the caller whether this call created the row. */
+  insertServiceVisitPaymentAttempt(row: NewServiceVisitPaymentRow): Promise<{ inserted: boolean; record: ServiceVisitPaymentRow }>;
+  /** Pre-freeze only — rejected by the DB trigger (and refused here first) once tipConfirmedAt is already set. Freely re-callable as the customer changes their tip selection. */
+  updateServiceVisitPaymentTip(id: string, patch: ServiceVisitPaymentTipPatch): Promise<ServiceVisitPaymentRow>;
+  /** Freezes the row (sets tipConfirmedAt) for the stripe_card rail. Refuses (throws) if already frozen. */
+  freezeServiceVisitPaymentForStripeCard(id: string, patch: ServiceVisitPaymentStripeCardFreezePatch): Promise<ServiceVisitPaymentRow>;
+  /** Freezes the row with no rail at all — the collectible total (approvedAmount + tip) resolved to exactly $0, so no PaymentIntent is ever created. status -> 'no_payment_due'. Refuses if already frozen. */
+  freezeServiceVisitPaymentAsNoPaymentDue(id: string): Promise<ServiceVisitPaymentRow>;
+  /** Settable exactly once from null (enforced by the DB trigger) — the created PaymentIntent id, alongside the attempt-level status it produced. */
+  setServiceVisitPaymentIntent(id: string, params: { stripePaymentIntentId: string; status: ServiceVisitPaymentRow["status"] }): Promise<ServiceVisitPaymentRow>;
+  /** General attempt-status transition (processing/requires_action/paid/payment_failed/no_payment_due) — never touches the frozen financial facts. */
+  updateServiceVisitPaymentStatus(
+    id: string,
+    patch: { status: ServiceVisitPaymentRow["status"]; failureCode?: string | null; failureMessage?: string | null; paidAt?: Date | null }
+  ): Promise<ServiceVisitPaymentRow | null>;
+  /** Atomic external (zelle/cash) settlement — freezes the row (if not already), sets status='paid'/paidAt, and initializes taxTransactionStatus='pending' in one write, per the two-phase external-payment design. Refuses if a tip was never selected, or the row is already settled/mid-Stripe-attempt. */
+  recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch): Promise<ServiceVisitPaymentRow>;
+  /** Tax-sync-only update — never touches status/paidAt/any frozen financial fact. Used by both the stripe_card reconciliation path and the external retry-tax-sync path. */
+  updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch): Promise<ServiceVisitPaymentRow | null>;
+  /** Refund reconciliation from charge.refunded — never touches tip/tax/total, only refund + status fields. */
+  updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }): Promise<ServiceVisitPaymentRow | null>;
 }

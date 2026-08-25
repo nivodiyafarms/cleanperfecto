@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CustomerStripeInfo, BookingRepository } from "../repository";
+import type { CustomerDefaultPaymentMethodPatch, CustomerStripeInfo, BookingRepository } from "../repository";
 import type {
   BookingOrderRow,
   BookingOrderStatus,
@@ -71,6 +71,17 @@ export function createFakeBookingRepository(
     async setCustomerStripeId(customerId: string, stripeCustomerId: string) {
       const existing = customers.get(customerId);
       if (existing) customers.set(customerId, { ...existing, stripeCustomerId });
+    },
+    async setCustomerDefaultPaymentMethod(customerId: string, patch: CustomerDefaultPaymentMethodPatch) {
+      const existing = customers.get(customerId);
+      if (existing) {
+        customers.set(customerId, {
+          ...existing,
+          stripeDefaultPaymentMethodId: patch.stripePaymentMethodId,
+          stripePaymentMethodBrand: patch.brand,
+          stripePaymentMethodLast4: patch.last4,
+        });
+      }
     },
 
     async insertBookingOrder(row: NewBookingOrderRow): Promise<BookingOrderRow> {

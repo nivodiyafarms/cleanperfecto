@@ -13,6 +13,7 @@ import type {
   NewRecurringVisitPlanRow,
   NewServiceFeeAssessmentRow,
   NewServiceVisitNotificationRow,
+  NewServiceVisitPaymentRow,
   NewServiceVisitPricingRow,
   NewServiceVisitRow,
   PackageAmendmentRow,
@@ -25,6 +26,11 @@ import type {
   ServiceFeeAssessmentRow,
   ServiceVisitEventRow,
   ServiceVisitNotificationRow,
+  ServiceVisitPaymentExternalSettlementPatch,
+  ServiceVisitPaymentRow,
+  ServiceVisitPaymentStripeCardFreezePatch,
+  ServiceVisitPaymentTaxSyncPatch,
+  ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "../domain-types";
@@ -95,6 +101,7 @@ export function createFakeSchedulingRepository(
   const recurringVisitPlanHistory: NewRecurringVisitPlanHistoryRow[] = [];
   const recurringScopeVersionsById = new Map<string, RecurringScopeVersionRow>();
   const servicePricingByVisitId = new Map<string, ServiceVisitPricingRow>();
+  const paymentsByVisitId = new Map<string, ServiceVisitPaymentRow>();
 
   const repo: SchedulingRepository = {
     async listActiveCleaners() {
@@ -661,11 +668,175 @@ export function createFakeSchedulingRepository(
       servicePricingByVisitId.set(serviceVisitId, updated);
       return updated;
     },
+
+    async findServiceVisitPaymentByVisitId(serviceVisitId) {
+      return paymentsByVisitId.get(serviceVisitId) ?? null;
+    },
+    async findServiceVisitPaymentById(id) {
+      for (const record of paymentsByVisitId.values()) if (record.id === id) return record;
+      return null;
+    },
+    async findServiceVisitPaymentByStripePaymentIntentId(stripePaymentIntentId) {
+      for (const record of paymentsByVisitId.values()) if (record.stripePaymentIntentId === stripePaymentIntentId) return record;
+      return null;
+    },
+    async insertServiceVisitPaymentAttempt(row: NewServiceVisitPaymentRow) {
+      const existing = paymentsByVisitId.get(row.serviceVisitId);
+      if (existing) return { inserted: false, record: existing };
+
+      const created: ServiceVisitPaymentRow = {
+        id: randomUUID(),
+        serviceVisitId: row.serviceVisitId,
+        serviceVisitPricingId: row.serviceVisitPricingId,
+        approvedAmount: row.approvedAmount,
+        tipBasisAmount: null,
+        tipSelectionType: null,
+        tipPercentage: null,
+        tipAmount: null,
+        taxAmount: null,
+        totalAmount: null,
+        tipSelectedAt: null,
+        tipConfirmedAt: null,
+        taxLocationSnapshot: null,
+        currency: "usd",
+        paymentMethodType: null,
+        stripeCustomerId: null,
+        stripePaymentMethodId: null,
+        cardBrand: null,
+        cardLast4: null,
+        stripePaymentIntentId: null,
+        stripeTaxCalculationId: null,
+        taxCalculationExpiresAt: null,
+        taxTransactionStatus: "not_applicable",
+        stripeTaxTransactionId: null,
+        taxTransactionFailureCode: null,
+        taxTransactionFailureMessage: null,
+        taxTransactionLastAttemptAt: null,
+        externalPaymentReference: null,
+        status: "created",
+        idempotencyKey: row.idempotencyKey,
+        failureCode: null,
+        failureMessage: null,
+        refundedAmount: 0,
+        refundedAt: null,
+        paidAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      paymentsByVisitId.set(row.serviceVisitId, created);
+      return { inserted: true, record: created };
+    },
+    async updateServiceVisitPaymentTip(id: string, patch: ServiceVisitPaymentTipPatch) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.tipConfirmedAt) throw new Error(`[fake-scheduling] service_visit_payments ${id} is already frozen (tip_confirmed_at is set) — cannot update tip`);
+      const updated: ServiceVisitPaymentRow = {
+        ...existing,
+        tipBasisAmount: patch.tipBasisAmount,
+        tipSelectionType: patch.tipSelectionType,
+        tipPercentage: patch.tipPercentage,
+        tipAmount: patch.tipAmount,
+        taxAmount: patch.taxAmount,
+        totalAmount: patch.totalAmount,
+        stripeTaxCalculationId: patch.stripeTaxCalculationId,
+        taxCalculationExpiresAt: patch.taxCalculationExpiresAt,
+        taxLocationSnapshot: patch.taxLocationSnapshot,
+        tipSelectedAt: new Date(),
+      };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async freezeServiceVisitPaymentForStripeCard(id: string, patch: ServiceVisitPaymentStripeCardFreezePatch) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.tipConfirmedAt) throw new Error(`[fake-scheduling] service_visit_payments ${id} is already frozen — cannot freeze again`);
+      const updated: ServiceVisitPaymentRow = {
+        ...existing,
+        paymentMethodType: "stripe_card",
+        stripeCustomerId: patch.stripeCustomerId,
+        stripePaymentMethodId: patch.stripePaymentMethodId,
+        cardBrand: patch.cardBrand,
+        cardLast4: patch.cardLast4,
+        tipConfirmedAt: new Date(),
+      };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async freezeServiceVisitPaymentAsNoPaymentDue(id: string) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.tipConfirmedAt) throw new Error(`[fake-scheduling] service_visit_payments ${id} is already frozen — cannot freeze again`);
+      const updated: ServiceVisitPaymentRow = { ...existing, status: "no_payment_due", tipConfirmedAt: new Date() };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async setServiceVisitPaymentIntent(id: string, params: { stripePaymentIntentId: string; status: ServiceVisitPaymentRow["status"] }) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.stripePaymentIntentId) throw new Error(`[fake-scheduling] service_visit_payments ${id} already has a stripe_payment_intent_id`);
+      const updated: ServiceVisitPaymentRow = { ...existing, stripePaymentIntentId: params.stripePaymentIntentId, status: params.status };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async updateServiceVisitPaymentStatus(id: string, patch) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) return null;
+      const updated: ServiceVisitPaymentRow = {
+        ...existing,
+        status: patch.status,
+        failureCode: patch.failureCode !== undefined ? patch.failureCode : existing.failureCode,
+        failureMessage: patch.failureMessage !== undefined ? patch.failureMessage : existing.failureMessage,
+        paidAt: patch.paidAt !== undefined ? patch.paidAt : existing.paidAt,
+      };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.status !== "created") throw new Error(`[fake-scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
+      const now = new Date();
+      const updated: ServiceVisitPaymentRow = {
+        ...existing,
+        paymentMethodType: patch.paymentMethodType,
+        externalPaymentReference: patch.externalPaymentReference,
+        status: "paid",
+        paidAt: now,
+        taxTransactionStatus: "pending",
+        tipConfirmedAt: existing.tipConfirmedAt ?? now,
+      };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) return null;
+      const updated: ServiceVisitPaymentRow = {
+        ...existing,
+        taxTransactionStatus: patch.taxTransactionStatus,
+        stripeTaxTransactionId: patch.stripeTaxTransactionId !== undefined ? patch.stripeTaxTransactionId : existing.stripeTaxTransactionId,
+        stripeTaxCalculationId: patch.stripeTaxCalculationId !== undefined ? patch.stripeTaxCalculationId : existing.stripeTaxCalculationId,
+        taxCalculationExpiresAt: patch.taxCalculationExpiresAt !== undefined ? patch.taxCalculationExpiresAt : existing.taxCalculationExpiresAt,
+        taxTransactionFailureCode: patch.taxTransactionFailureCode !== undefined ? patch.taxTransactionFailureCode : existing.taxTransactionFailureCode,
+        taxTransactionFailureMessage: patch.taxTransactionFailureMessage !== undefined ? patch.taxTransactionFailureMessage : existing.taxTransactionFailureMessage,
+        taxTransactionLastAttemptAt: new Date(),
+      };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) return null;
+      const updated: ServiceVisitPaymentRow = { ...existing, refundedAmount: patch.refundedAmount, refundedAt: patch.refundedAt, status: patch.status };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
   };
 
   return {
     repo,
     state: {
+      paymentsByVisitId,
       cleaners,
       availabilityRules,
       exceptions,

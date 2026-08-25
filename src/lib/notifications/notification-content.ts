@@ -24,10 +24,16 @@ const PORTAL_PATH_BY_TYPE: Partial<Record<ServiceVisitNotificationType, string>>
   appointment_confirmed: "/my/cleanings",
   rescheduled: "/my/cleanings",
   cancelled: "/my/cleanings",
-  completed: "/my/cleanings",
+  // Payments V1: completion always routes to the Review Charges -> Tip ->
+  // Confirm & Pay flow, never back to the plain cleanings list — every
+  // completed visit goes through this, even a $0-due prepaid tip-only case.
+  completed: "/my/payments",
   pricing_approval_required: "/my/payments",
   consent_required: "/my/consent",
   consent_reminder: "/my/consent",
+  payment_succeeded: "/my/payments",
+  payment_failed: "/my/payments",
+  payment_action_required: "/my/payments",
   // review_request deliberately absent — its link is the external Google
   // review URL (see getGoogleReviewUrl), never a portal path.
 };
@@ -37,7 +43,10 @@ const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line
   appointment_confirmed: { subject: "Your cleaning is confirmed", line: (when) => `Your cleaning is confirmed for ${when}.` },
   rescheduled: { subject: "Your cleaning has been rescheduled", line: (when) => `Your cleaning has been rescheduled to ${when}.` },
   cancelled: { subject: "Your cleaning has been cancelled", line: (when) => `Your cleaning scheduled for ${when} has been cancelled.` },
-  completed: { subject: "Your cleaning is complete", line: (when) => `Your cleaning on ${when} is complete. Thank you for choosing CleanPerfecto.` },
+  completed: {
+    subject: "Your cleaning is complete — Review & Pay",
+    line: (when) => `Your cleaning on ${when} is complete. Please review your charges and complete payment when you're ready.`,
+  },
   pricing_approval_required: {
     subject: "Action needed: approve your updated price",
     line: () => "Your cleaning's price has increased and needs your approval before it can be confirmed.",
@@ -53,6 +62,18 @@ const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line
   review_request: {
     subject: "How did we do?",
     line: () => "Thank you for choosing CleanPerfecto! If you have a moment, we'd really appreciate a quick review.",
+  },
+  payment_succeeded: {
+    subject: "Payment received",
+    line: () => "Your payment has been received. Thank you!",
+  },
+  payment_failed: {
+    subject: "Payment could not be completed",
+    line: () => "We weren't able to complete your payment. Please review and try again.",
+  },
+  payment_action_required: {
+    subject: "Payment needs your attention",
+    line: () => "Your bank requires additional verification to complete this payment. Please finish the secure authentication step.",
   },
 };
 
@@ -89,7 +110,15 @@ export function buildNotificationContent(input: NotificationContentInput): Notif
     link = buildPortalLink(PORTAL_PATH_BY_TYPE[input.notificationType] ?? "/my");
   }
 
-  const linkLabel = input.notificationType === "review_request" ? "Leave a review" : "View details";
+  const LINK_LABEL_BY_TYPE: Partial<Record<ServiceVisitNotificationType, string>> = {
+    review_request: "Leave a review",
+    completed: "Review & Pay",
+    pricing_approval_required: "Review & Pay",
+    payment_succeeded: "View payment",
+    payment_failed: "Review & Pay",
+    payment_action_required: "Review & Pay",
+  };
+  const linkLabel = LINK_LABEL_BY_TYPE[input.notificationType] ?? "View details";
 
   return {
     subject,

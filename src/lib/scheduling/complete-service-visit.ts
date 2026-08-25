@@ -31,6 +31,19 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
     });
     await cancelPendingReminder(repo, serviceVisitId);
 
+    // Payments V1: completion never charges anything itself — it only
+    // advances the pricing rollup from "an amount will be owed once this
+    // completes" to "owed and eligible for the customer's Review Charges ->
+    // Tip -> Confirm & Pay flow" (or an Admin-recorded external payment).
+    // A visit with nothing base-level due (package-covered, no extras)
+    // stays 'not_applicable' here — the payment/tip flow itself is gated on
+    // completion + confirmed pricing, not on this rollup value, so a
+    // tip-only prepaid visit still works via /my/payments regardless.
+    const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+    if (pricing?.paymentStatus === "awaiting_completion") {
+      await repo.updateServiceVisitPricingPaymentStatus(serviceVisitId, "awaiting_payment");
+    }
+
     await enqueueNotification(repo, {
       serviceVisitId,
       customerId: before.customerId,

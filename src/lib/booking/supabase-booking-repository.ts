@@ -2,7 +2,7 @@ import "server-only";
 
 import { createSupabaseInstantQuoteRepository } from "@/lib/instant-quote/supabase-repository";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import type { CustomerStripeInfo, BookingRepository } from "./repository";
+import type { CustomerDefaultPaymentMethodPatch, CustomerStripeInfo, BookingRepository } from "./repository";
 import type {
   BookingOrderRow,
   BookingOrderStatus,
@@ -123,7 +123,7 @@ export function createSupabaseBookingRepository(): BookingRepository {
     async getCustomerForStripe(customerId: string): Promise<CustomerStripeInfo | null> {
       const { data, error } = await supabase
         .from("customers")
-        .select("id,name,email,phone,stripe_customer_id")
+        .select("id,name,email,phone,stripe_customer_id,stripe_default_payment_method_id,stripe_payment_method_brand,stripe_payment_method_last4")
         .eq("id", customerId)
         .maybeSingle();
       if (error) {
@@ -138,6 +138,9 @@ export function createSupabaseBookingRepository(): BookingRepository {
         email: data.email,
         phone: data.phone,
         stripeCustomerId: data.stripe_customer_id,
+        stripeDefaultPaymentMethodId: data.stripe_default_payment_method_id,
+        stripePaymentMethodBrand: data.stripe_payment_method_brand,
+        stripePaymentMethodLast4: data.stripe_payment_method_last4,
       };
     },
 
@@ -148,6 +151,22 @@ export function createSupabaseBookingRepository(): BookingRepository {
         .eq("id", customerId);
       if (error) {
         throw new Error(`[booking] setting customers.stripe_customer_id failed: ${error.message}`);
+      }
+    },
+
+    async setCustomerDefaultPaymentMethod(customerId: string, patch: CustomerDefaultPaymentMethodPatch): Promise<void> {
+      const { error } = await supabase
+        .from("customers")
+        .update({
+          stripe_default_payment_method_id: patch.stripePaymentMethodId,
+          stripe_payment_method_brand: patch.brand,
+          stripe_payment_method_last4: patch.last4,
+          stripe_payment_method_exp_month: patch.expMonth,
+          stripe_payment_method_exp_year: patch.expYear,
+        })
+        .eq("id", customerId);
+      if (error) {
+        throw new Error(`[booking] setting customers default payment method failed: ${error.message}`);
       }
     },
 

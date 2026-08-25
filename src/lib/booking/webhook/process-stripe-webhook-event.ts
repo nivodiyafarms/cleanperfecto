@@ -9,6 +9,8 @@ import { sendNormalBookingConfirmationEmails } from "../email/send-normal-bookin
 import { sendPrepaidPackageSuccessEmails } from "../email/send-prepaid-package-success-emails";
 import type { BookingRepository } from "../repository";
 import type { PrepaidFrequency } from "../types";
+import { reconcileVisitPayment, reconcileVisitPaymentRefund } from "@/lib/payments/reconcile-visit-payment";
+import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 
 const PREPAID_FREQUENCIES = new Set<PrepaidFrequency>(["weekly", "biweekly", "every_4_weeks"]);
 
@@ -19,6 +21,55 @@ function bookingOrderIdFromSession(session: Stripe.Checkout.Session): string | n
 function intentIdOf(value: string | { id: string } | null): string | null {
   if (!value) return null;
   return typeof value === "string" ? value : value.id;
+}
+
+/**
+ * Captures which PaymentMethod a succeeded SetupIntent actually resulted
+ * in — Payments V1's fix for a gap in the original booking setup flow,
+ * which retrieved the SetupIntent but never read/persisted `.payment_method`
+ * anywhere. This is the one thing that makes a later post-completion Pay
+ * Per Cleaning charge (or Update Payment Method) possible: the authoritative
+ * saved PaymentMethod, resolved server-side from a VERIFIED succeeded
+ * SetupIntent, never from anything client-supplied. Best-effort (never
+ * throws) — a failure here must never turn a successful setup into a
+ * failed webhook delivery.
+ */
+async function capturePaymentMethodFromSetupIntent(stripe: Stripe, repo: BookingRepository, customerId: string, setupIntent: Stripe.SetupIntent): Promise<void> {
+  const paymentMethodId = intentIdOf(setupIntent.payment_method as string | { id: string } | null);
+  if (!paymentMethodId) return;
+
+  const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+  await repo.setCustomerDefaultPaymentMethod(customerId, {
+    stripePaymentMethodId: paymentMethodId,
+    brand: paymentMethod.card?.brand ?? null,
+    last4: paymentMethod.card?.last4 ?? null,
+    expMonth: paymentMethod.card?.exp_month ?? null,
+    expYear: paymentMethod.card?.exp_year ?? null,
+  });
+
+  const stripeCustomerId = intentIdOf(setupIntent.customer as string | { id: string } | null);
+  if (stripeCustomerId) {
+    await stripe.customers.update(stripeCustomerId, { invoice_settings: { default_payment_method: paymentMethodId } });
+  }
+}
+
+/**
+ * A setup-mode Checkout Session created by the customer-portal Update
+ * Payment Method flow (see src/lib/payments/create-payment-method-setup.ts)
+ * — tagged `metadata.purpose = 'update_payment_method'` specifically so
+ * this branch never requires (or looks for) a booking_order_id. Any
+ * pending visit-payment tip selection is untouched by this entirely
+ * (nothing here writes to service_visit_payments).
+ */
+async function handlePaymentMethodUpdateSetupCompleted(stripe: Stripe, repo: BookingRepository, session: Stripe.Checkout.Session): Promise<void> {
+  const setupIntentId = intentIdOf(session.setup_intent);
+  const customerId = session.metadata?.customer_id ?? null;
+  if (!setupIntentId || !customerId) return;
+
+  const setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
+  if (setupIntent.status !== "succeeded") return;
+
+  await capturePaymentMethodFromSetupIntent(stripe, repo, customerId, setupIntent);
 }
 
 /**
@@ -69,6 +120,14 @@ async function handleSetupSessionCompleted(
 
   let customerId: string | null = null;
   let directVisitId: string | null = null;
+
+  // Payments V1: capture the resulting PaymentMethod regardless of whether
+  // schedulingRepo is wired — best-effort, never blocks the existing
+  // booking-confirmation flow below.
+  const bookingOrderForPaymentMethod = await repo.findBookingOrderById(bookingOrderId);
+  if (bookingOrderForPaymentMethod) {
+    await capturePaymentMethodFromSetupIntent(stripe, repo, bookingOrderForPaymentMethod.customerId, setupIntent).catch(() => {});
+  }
 
   if (schedulingRepo) {
     const bookingOrder = await repo.findBookingOrderById(bookingOrderId);
@@ -220,11 +279,18 @@ export async function processStripeWebhookEvent(
   repo: BookingRepository,
   event: Stripe.Event,
   schedulingRepo?: SchedulingRepository,
-  consentRepo?: ConsentRepository
+  consentRepo?: ConsentRepository,
+  paymentGateway?: VisitPaymentGateway
 ): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;
+
+      if (session.mode === "setup" && session.metadata?.purpose === "update_payment_method") {
+        await handlePaymentMethodUpdateSetupCompleted(stripe, repo, session);
+        return;
+      }
+
       const bookingOrderId = bookingOrderIdFromSession(session);
       if (!bookingOrderId) return;
 
@@ -253,6 +319,40 @@ export async function processStripeWebhookEvent(
     case "checkout.session.expired": {
       const session = event.data.object;
       await repo.updatePaymentAttemptBySessionId(session.id, { status: "expired" });
+      return;
+    }
+
+    case "payment_intent.processing":
+    case "payment_intent.requires_action":
+    case "payment_intent.payment_failed":
+    case "payment_intent.succeeded": {
+      if (!schedulingRepo || !paymentGateway) return;
+      const intent = event.data.object;
+      const statusByEventType = {
+        "payment_intent.processing": "processing",
+        "payment_intent.requires_action": "requires_action",
+        "payment_intent.payment_failed": "payment_failed",
+        "payment_intent.succeeded": "paid",
+      } as const;
+      await reconcileVisitPayment(schedulingRepo, paymentGateway, {
+        stripePaymentIntentId: intent.id,
+        status: statusByEventType[event.type],
+        failureCode: intent.last_payment_error?.code ?? null,
+        failureMessage: intent.last_payment_error?.message ?? null,
+      });
+      return;
+    }
+
+    case "charge.refunded": {
+      if (!schedulingRepo) return;
+      const charge = event.data.object;
+      const paymentIntentId = intentIdOf(charge.payment_intent as string | { id: string } | null);
+      if (!paymentIntentId) return;
+      await reconcileVisitPaymentRefund(schedulingRepo, {
+        stripePaymentIntentId: paymentIntentId,
+        refundedAmountCents: charge.amount_refunded,
+        chargeAmountCents: charge.amount,
+      });
       return;
     }
 

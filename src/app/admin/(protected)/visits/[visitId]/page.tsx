@@ -10,6 +10,7 @@ import { cancelVisitAction, completeVisitAction, reassignCleanersAction, resched
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
+import { recordExternalPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
@@ -80,6 +81,8 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const activeConsentVersion = await consentRepo.findActiveVersion();
   const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(visit.customerId, activeConsentVersion.id) : null;
 
+  const visitPayment = visit.status === "completed" ? await schedulingRepo.findServiceVisitPaymentByVisitId(visitId) : null;
+
   return (
     <div className="max-w-3xl">
       <div className="flex items-center gap-3">
@@ -135,8 +138,8 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
             <h2 className="text-sm font-semibold text-foreground">Mark completed</h2>
             <p className="mt-1 text-xs text-muted">
               {visit.prepaidPackageId
-                ? "This will consume exactly one package credit."
-                : "This does not charge the customer — post-cleaning charging isn't built yet."}
+                ? "This will consume exactly one package credit. The customer is not charged automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."
+                : "This does not charge the customer automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."}
             </p>
             <ActionForm action={completeVisitAction} className="mt-3">
               <input type="hidden" name="visitId" value={visitId} />
@@ -273,6 +276,55 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               Confirm final price
             </button>
           </ActionForm>
+        </div>
+      )}
+
+      {visitPayment && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <h2 className="text-sm font-semibold text-foreground">Payment</h2>
+          <dl className="mt-2 space-y-1 text-xs text-muted">
+            <div>Approved service/extras: {formatMoney(visitPayment.approvedAmount)}</div>
+            {visitPayment.tipAmount !== null && <div>Customer tip: {formatMoney(visitPayment.tipAmount)}</div>}
+            {visitPayment.taxAmount !== null && <div>Tax: {formatMoney(visitPayment.taxAmount)}</div>}
+            {visitPayment.totalAmount !== null && <div>Total charged: {formatMoney(visitPayment.totalAmount)}</div>}
+            <div>Payment status: {visitPayment.status}</div>
+            {visitPayment.paymentMethodType && (
+              <div>
+                Method: {visitPayment.paymentMethodType === "stripe_card" ? `Card${visitPayment.cardBrand ? ` — ${visitPayment.cardBrand} •••• ${visitPayment.cardLast4}` : ""}` : visitPayment.paymentMethodType === "zelle" ? "Zelle" : "Cash"}
+              </div>
+            )}
+            {visitPayment.externalPaymentReference && <div>Reference: {visitPayment.externalPaymentReference}</div>}
+            {visitPayment.stripePaymentIntentId && <div>Stripe PaymentIntent: {visitPayment.stripePaymentIntentId}</div>}
+            {visitPayment.stripeTaxCalculationId && <div>Stripe Tax Calculation: {visitPayment.stripeTaxCalculationId}</div>}
+            {visitPayment.stripeTaxTransactionId && <div>Stripe Tax Transaction: {visitPayment.stripeTaxTransactionId}</div>}
+            <div>Tax sync status: {visitPayment.taxTransactionStatus}</div>
+            {visitPayment.taxTransactionFailureMessage && <div className="text-red-600">Tax sync issue: {visitPayment.taxTransactionFailureMessage}</div>}
+            {visitPayment.failureMessage && <div className="text-red-600">Payment failure: {visitPayment.failureMessage}</div>}
+            {visitPayment.refundedAmount > 0 && <div>Refunded: {formatMoney(visitPayment.refundedAmount)}</div>}
+          </dl>
+
+          {visitPayment.status === "created" && visitPayment.tipSelectionType && (
+            <ActionForm action={recordExternalPaymentAction} className="mt-3 flex flex-wrap items-end gap-2">
+              <input type="hidden" name="serviceVisitId" value={visitId} />
+              <select name="paymentMethodType" className="rounded-lg border border-border px-3 py-1.5 text-sm">
+                <option value="zelle">Zelle</option>
+                <option value="cash">Cash</option>
+              </select>
+              <input name="externalPaymentReference" placeholder="Reference (optional)" className="rounded-lg border border-border px-3 py-1.5 text-sm" />
+              <button type="submit" className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                Record External Payment
+              </button>
+            </ActionForm>
+          )}
+
+          {visitPayment.status === "paid" && (visitPayment.taxTransactionStatus === "pending" || visitPayment.taxTransactionStatus === "failed") && (
+            <ActionForm action={retryTaxSyncAction} className="mt-3">
+              <input type="hidden" name="serviceVisitPaymentId" value={visitPayment.id} />
+              <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                Retry Tax Sync
+              </button>
+            </ActionForm>
+          )}
         </div>
       )}
 

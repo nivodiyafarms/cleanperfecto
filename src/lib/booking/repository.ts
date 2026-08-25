@@ -17,6 +17,18 @@ export interface CustomerStripeInfo {
   email: string | null;
   phone: string | null;
   stripeCustomerId: string | null;
+  /** Resolved server-side from a succeeded SetupIntent only — never client-supplied. The authoritative payment method for a post-completion Pay Per Cleaning charge (see src/lib/payments/). */
+  stripeDefaultPaymentMethodId: string | null;
+  stripePaymentMethodBrand: string | null;
+  stripePaymentMethodLast4: string | null;
+}
+
+export interface CustomerDefaultPaymentMethodPatch {
+  stripePaymentMethodId: string;
+  brand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
 }
 
 /**
@@ -33,6 +45,8 @@ export interface BookingRepository extends CompletedServiceHistoryRepository {
 
   getCustomerForStripe(customerId: string): Promise<CustomerStripeInfo | null>;
   setCustomerStripeId(customerId: string, stripeCustomerId: string): Promise<void>;
+  /** Overwrites (never appends) — V1 has exactly one "current" saved payment method per customer. Set only from a verified succeeded SetupIntent (initial booking setup or the Update Payment Method flow). */
+  setCustomerDefaultPaymentMethod(customerId: string, patch: CustomerDefaultPaymentMethodPatch): Promise<void>;
 
   /** Insert-or-fetch by client_request_id — see booking_orders migration comments. Always returns the single authoritative row for that token, whether this call created it or a prior one did. */
   insertBookingOrder(row: NewBookingOrderRow): Promise<BookingOrderRow>;

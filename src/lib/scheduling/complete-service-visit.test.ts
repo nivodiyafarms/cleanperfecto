@@ -308,4 +308,81 @@ describe("completeServiceVisit", () => {
       expect(state.prepaidPackagesById.get("pkg-1")?.remainingVisitCount).toBe((creditBefore ?? 0) - 1);
     });
   });
+
+  describe("payments V1 — completion only advances the payment rollup, never charges", () => {
+    it("moves service_visit_pricing.payment_status from awaiting_completion to awaiting_payment on genuine completion, without ever creating a payment row or calling any gateway", async () => {
+      const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+      await repo.upsertServiceVisitPricing({
+        serviceVisitId: visitId,
+        pricingVersion: "v1",
+        pricingSnapshot: {},
+        baseAmount: 40,
+        addOnIds: [],
+        addOnAmount: 40,
+        totalAmount: 40,
+        amountDueFromCustomer: 40,
+        priceStatus: "estimated",
+        requiresCustomerApproval: false,
+        previouslyApprovedAmount: null,
+      });
+      await repo.confirmServiceVisitPricing(visitId, "admin:1");
+      expect((await repo.findServiceVisitPricingByVisitId(visitId))?.paymentStatus).toBe("awaiting_completion");
+
+      await completeServiceVisit(repo, visitId);
+
+      expect((await repo.findServiceVisitPricingByVisitId(visitId))?.paymentStatus).toBe("awaiting_payment");
+      expect(state.paymentsByVisitId.has(visitId)).toBe(false);
+    });
+
+    it("a package-covered visit with nothing due (amount_due_from_customer = 0) stays not_applicable through completion", async () => {
+      const { repo, visitId } = await seedScheduledPackageVisit("pkg-1");
+      await repo.upsertServiceVisitPricing({
+        serviceVisitId: visitId,
+        pricingVersion: "v1",
+        pricingSnapshot: {},
+        baseAmount: 0,
+        addOnIds: [],
+        addOnAmount: 0,
+        totalAmount: 0,
+        amountDueFromCustomer: 0,
+        priceStatus: "estimated",
+        requiresCustomerApproval: false,
+        previouslyApprovedAmount: null,
+      });
+      await repo.confirmServiceVisitPricing(visitId, "admin:1");
+      const before = await repo.findServiceVisitPricingByVisitId(visitId);
+      expect(before?.paymentStatus).toBe("not_applicable");
+
+      await completeServiceVisit(repo, visitId);
+
+      expect((await repo.findServiceVisitPricingByVisitId(visitId))?.paymentStatus).toBe("not_applicable");
+    });
+
+    it("an idempotent completion retry does not re-run the awaiting_payment transition or touch it again", async () => {
+      const { repo, visitId } = await seedScheduledPackageVisit("pkg-1");
+      await repo.upsertServiceVisitPricing({
+        serviceVisitId: visitId,
+        pricingVersion: "v1",
+        pricingSnapshot: {},
+        baseAmount: 40,
+        addOnIds: [],
+        addOnAmount: 40,
+        totalAmount: 40,
+        amountDueFromCustomer: 40,
+        priceStatus: "estimated",
+        requiresCustomerApproval: false,
+        previouslyApprovedAmount: null,
+      });
+      await repo.confirmServiceVisitPricing(visitId, "admin:1");
+
+      await completeServiceVisit(repo, visitId);
+      expect((await repo.findServiceVisitPricingByVisitId(visitId))?.paymentStatus).toBe("awaiting_payment");
+
+      // Simulate the payment flow having since progressed the status further —
+      // a retry of completion must never stomp back over real payment progress.
+      await repo.updateServiceVisitPricingPaymentStatus(visitId, "paid");
+      await completeServiceVisit(repo, visitId); // idempotent no-op retry
+      expect((await repo.findServiceVisitPricingByVisitId(visitId))?.paymentStatus).toBe("paid");
+    });
+  });
 });
