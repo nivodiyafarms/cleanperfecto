@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import type { CleaningType, Condition, FrequencyId } from "@/lib/pricing/types";
+import type { CleaningType, Condition, FrequencyId, MoveDirection } from "@/lib/pricing/types";
 import FirstCleaningOfferBadge from "@/components/hero/FirstCleaningOfferBadge";
 import { validateStepOne } from "./step-validation";
 import type { WizardFormState, WizardPropertyType } from "./wizard-types";
@@ -16,6 +16,11 @@ const CLEANING_OPTIONS: { id: CleaningType; label: string; blurb: string }[] = [
   { id: "standard", label: "Standard", blurb: "Routine maintenance clean" },
   { id: "deep", label: "Deep", blurb: "Built-up dirt & grime" },
   { id: "move", label: "Move-In/Move-Out", blurb: "Empty-property reset" },
+];
+
+const MOVE_DIRECTION_OPTIONS: { id: MoveDirection; label: string }[] = [
+  { id: "move_in", label: "Move-In" },
+  { id: "move_out", label: "Move-Out" },
 ];
 
 const BEDROOM_OPTIONS: { value: number; label: string }[] = [
@@ -165,6 +170,18 @@ export default function StepOneCleaning({
             })}
           </div>
         </div>
+
+        {formState.cleaningType === "move" && (
+          <div>
+            <p className="mb-2.5 text-sm font-medium text-foreground">Move-In or Move-Out?</p>
+            <OptionPills
+              options={MOVE_DIRECTION_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+              selected={formState.moveDirection}
+              onSelect={(value) => onFieldChange("moveDirection", value)}
+              ariaLabel="Move-In or Move-Out"
+            />
+          </div>
+        )}
 
         <div className="grid gap-6 sm:grid-cols-2">
           <div>

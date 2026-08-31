@@ -292,9 +292,9 @@ describe("first-cleaning offer integration", () => {
     );
     expect(result.travelCharge).toBeCloseTo(12.9); // 10% of the $129 cleaning subtotal, not discounted
     expect(result.suppliesEquipmentCharge).toBe(15);
-    expect(result.pricedAddOnsTotal).toBe(35);
+    expect(result.pricedAddOnsTotal).toBe(30);
     expect(result.firstCleaningDiscount).toBeCloseTo(129 * 0.3);
-    expect(result.preDiscountTotal).toBeCloseTo(129 + 12.9 + 15 + 35);
+    expect(result.preDiscountTotal).toBeCloseTo(129 + 12.9 + 15 + 30);
   });
 });
 
@@ -470,10 +470,10 @@ describe("6+ prepaid package", () => {
     );
     expect(result.discountProgram).toBe("prepaid_package");
 
-    // Cleaning subtotal $149 -> weekly recurring (×0.79) -> package (×0.80).
+    // Cleaning subtotal $149 -> weekly recurring (×0.79) -> package (×0.90).
     const cleaningSubtotal = 149;
     const afterRecurring = cleaningSubtotal * 0.79; // 117.71
-    const afterPackage = afterRecurring * 0.8; // 94.168 (discounted cleaning-only, per visit)
+    const afterPackage = afterRecurring * 0.9; // 105.939 (discounted cleaning-only, per visit)
     const perVisitTravel = 0;
     const perVisitSupplies = 15;
 
@@ -544,8 +544,8 @@ describe("6+ prepaid package", () => {
       }),
       TEST_OVERRIDES
     );
-    expect(withAddOnOnOneVisit.packageAddOnsTotal).toBe(35); // once, not ×6 ($210)
-    expect(withAddOnOnOneVisit.prepaidPackageTotal).toBeCloseTo(withoutAddOn.prepaidPackageTotal! + 35);
+    expect(withAddOnOnOneVisit.packageAddOnsTotal).toBe(30); // once, not ×6 ($180)
+    expect(withAddOnOnOneVisit.prepaidPackageTotal).toBeCloseTo(withoutAddOn.prepaidPackageTotal! + 30);
   });
 
   it("the same add-on selected on two different visits is counted twice", () => {
@@ -559,7 +559,7 @@ describe("6+ prepaid package", () => {
       }),
       TEST_OVERRIDES
     );
-    expect(result.packageAddOnsTotal).toBe(70); // 2 × $35
+    expect(result.packageAddOnsTotal).toBe(60); // 2 × $30
   });
 
   it("a visit with no add-ons selected contributes exactly $0", () => {
@@ -573,10 +573,10 @@ describe("6+ prepaid package", () => {
       }),
       TEST_OVERRIDES
     );
-    expect(result.packageAddOnsTotal).toBe(35);
+    expect(result.packageAddOnsTotal).toBe(30);
   });
 
-  it("owner worked example: Oven on Visit 1 + Fridge on Visit 3 + Oven & Fridge on Visit 5 totals $140, never discounted", () => {
+  it("owner worked example: Oven on Visit 1 + Fridge on Visit 3 + Oven & Fridge on Visit 5 totals $130, never discounted", () => {
     const withoutAddOns = calculateEstimate(
       baseInput({ sizeTier: "2br_2ba", frequency: "weekly", isPrepaidPackage: true, visitCount: 6 }),
       TEST_OVERRIDES
@@ -598,9 +598,9 @@ describe("6+ prepaid package", () => {
       }),
       TEST_OVERRIDES
     );
-    expect(result.packageAddOnsTotal).toBe(140);
-    // Base package ($700.01, see the dedicated rounding test below) + $140, undiscounted.
-    expect(result.prepaidPackageTotal).toBeCloseTo(withoutAddOns.prepaidPackageTotal! + 140);
+    expect(result.packageAddOnsTotal).toBe(130);
+    // Base package ($700.01, see the dedicated rounding test below) + $130, undiscounted.
+    expect(result.prepaidPackageTotal).toBeCloseTo(withoutAddOns.prepaidPackageTotal! + 130);
   });
 
   it("does not apply the recurring or package discount to add-ons", () => {
@@ -619,10 +619,10 @@ describe("6+ prepaid package", () => {
       TEST_OVERRIDES
     );
     // recurringAdjustment/packageDiscount (the cleaning-portion discounts) are identical either way —
-    // the $35 add-on charge is added on top, full price, never reduced.
+    // the $30 add-on charge is added on top, full price, never reduced.
     expect(withAddOns.recurringAdjustment).toBeCloseTo(cleaningOnly.recurringAdjustment);
     expect(withAddOns.packageDiscount).toBeCloseTo(cleaningOnly.packageDiscount);
-    expect(withAddOns.prepaidPackageTotal! - cleaningOnly.prepaidPackageTotal!).toBeCloseTo(35);
+    expect(withAddOns.prepaidPackageTotal! - cleaningOnly.prepaidPackageTotal!).toBeCloseTo(30);
   });
 
   it("preserves manual-quote add-ons as price-to-be-confirmed, tagged with their visit number, never an invented price", () => {
@@ -685,7 +685,7 @@ describe("6+ prepaid package", () => {
         }),
         TEST_OVERRIDES
       );
-      expect(result.packageAddOnsTotal).toBe(35);
+      expect(result.packageAddOnsTotal).toBe(30);
       expect(result.hasStartingAtPricing).toBe(false);
       expect(result.packagePricedAddOns[0].pricingKind).toBe("fixed");
     });
@@ -754,14 +754,14 @@ describe("6+ prepaid package", () => {
           isPrepaidPackage: true,
           visitCount: 6,
           visitAddOns: [
-            ["inside_oven"], // Visit 1: fixed $35
+            ["inside_oven"], // Visit 1: fixed $30
             [],
             ["inside_cabinets_drawers"], // Visit 3: starting-at $40
           ],
         }),
         TEST_OVERRIDES
       );
-      expect(result.packageAddOnsTotal).toBe(75);
+      expect(result.packageAddOnsTotal).toBe(70);
       expect(result.hasStartingAtPricing).toBe(true); // one starting-at entry is enough to taint the whole total
       const kinds = result.packagePricedAddOns.map((a) => a.pricingKind).sort();
       expect(kinds).toEqual(["fixed", "starting_at"]);
@@ -790,9 +790,9 @@ describe("6+ prepaid package", () => {
 // ---------------------------------------------------------------------------
 
 describe("add-ons", () => {
-  it("adds the fixed $35 Inside Oven and Inside Refrigerator charges", () => {
+  it("adds the fixed $30 Oven Interior and $35 Refrigerator Interior charges", () => {
     const result = calculateEstimate(baseInput({ addOnIds: ["inside_oven", "inside_refrigerator"] }), TEST_OVERRIDES);
-    expect(result.pricedAddOnsTotal).toBe(70);
+    expect(result.pricedAddOnsTotal).toBe(65);
   });
 
   it("uses the approved starting-at amount without inventing a higher final figure", () => {

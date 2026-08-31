@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { getRoomAdjustment, ROOM_ADJUSTMENT_CONFIG, type RoomAdjustmentConfig } from "./room-adjustments";
+import {
+  getRoomAdjustment,
+  getSpecialRoomCharges,
+  ROOM_ADJUSTMENT_CONFIG,
+  SPECIAL_ROOM_CONFIG,
+  type RoomAdjustmentConfig,
+} from "./room-adjustments";
 
 // TEST-ONLY fixture — must never be copied into production config.
 const TEST_ROOM_CONFIG: RoomAdjustmentConfig = {
@@ -140,6 +146,74 @@ describe("getRoomAdjustment", () => {
     it("does not double-charge bedrooms or bathrooms already included in the size tier", () => {
       const result = getRoomAdjustment("standard", "1br_1ba", { bedrooms: 1, fullBathrooms: 1, halfBathrooms: 0 });
       expect(result).toEqual({ configured: true, amount: 0 });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Special (dedicated) rooms — Game Room / Media-Theater Room, owner-approved
+// hotfix 2026-08-30.
+// ---------------------------------------------------------------------------
+
+describe("getSpecialRoomCharges", () => {
+  it("charges nothing when no special rooms are selected", () => {
+    expect(getSpecialRoomCharges("standard", undefined)).toEqual({ configured: true, amount: 0, charges: [] });
+    expect(getSpecialRoomCharges("standard", [])).toEqual({ configured: true, amount: 0, charges: [] });
+  });
+
+  it.each([
+    { cleaningType: "standard" as const, expected: 15 },
+    { cleaningType: "deep" as const, expected: 20 },
+    { cleaningType: "move" as const, expected: 20 },
+  ])("Game Room on $cleaningType charges +$$expected", ({ cleaningType, expected }) => {
+    const result = getSpecialRoomCharges(cleaningType, ["game_room"]);
+    expect(result).toEqual({
+      configured: true,
+      amount: expected,
+      charges: [{ id: "game_room", label: "Game Room", amount: expected }],
+    });
+  });
+
+  it.each([
+    { cleaningType: "standard" as const, expected: 15 },
+    { cleaningType: "deep" as const, expected: 20 },
+    { cleaningType: "move" as const, expected: 20 },
+  ])("Media/Theater Room on $cleaningType charges +$$expected", ({ cleaningType, expected }) => {
+    const result = getSpecialRoomCharges(cleaningType, ["media_room"]);
+    expect(result).toEqual({
+      configured: true,
+      amount: expected,
+      charges: [{ id: "media_room", label: "Media / Theater Room", amount: expected }],
+    });
+  });
+
+  it("both dedicated rooms together sum their individual charges", () => {
+    const result = getSpecialRoomCharges("deep", ["game_room", "media_room"]);
+    expect(result.configured).toBe(true);
+    expect(result).toMatchObject({ amount: 40 });
+    expect(result.configured && result.charges).toHaveLength(2);
+  });
+
+  it("deduplicates a repeated selection instead of double-charging", () => {
+    const result = getSpecialRoomCharges("standard", ["game_room", "game_room"]);
+    expect(result).toEqual({
+      configured: true,
+      amount: 15,
+      charges: [{ id: "game_room", label: "Game Room", amount: 15 }],
+    });
+  });
+
+  it("returns a typed manual-review reason when a selected room isn't configured for the cleaning type", () => {
+    const unconfigured = { standard: {}, deep: {}, move: {} };
+    const result = getSpecialRoomCharges("standard", ["game_room"], unconfigured);
+    expect(result).toEqual({ configured: false, reason: "ROOM_ADJUSTMENT_NOT_CONFIGURED" });
+  });
+
+  it("production SPECIAL_ROOM_CONFIG matches the approved rates", () => {
+    expect(SPECIAL_ROOM_CONFIG).toEqual({
+      standard: { game_room: 15, media_room: 15 },
+      deep: { game_room: 20, media_room: 20 },
+      move: { game_room: 20, media_room: 20 },
     });
   });
 });

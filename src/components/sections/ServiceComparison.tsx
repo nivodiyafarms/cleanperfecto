@@ -119,7 +119,7 @@ export default function ServiceComparison() {
               ))}
             </div>
             <p className="mt-4 text-xs text-muted">
-              Interior Window Detailing — Available by quote
+              Additional Interior Window Detailing — Available by quote
             </p>
           </GlassPanel>
 

@@ -1,4 +1,10 @@
-import type { AddOnId } from "@/lib/pricing/types";
+import type {
+  AddOnId,
+  MovePackageLevel,
+  OutdoorSelection,
+  QuantifiedAddOnSelection,
+  SpecialRoomId,
+} from "@/lib/pricing/types";
 import type { InstantQuoteRawInput } from "@/lib/instant-quote/types";
 import type { PostEstimateDetails, WizardFormState } from "./wizard-types";
 
@@ -16,6 +22,12 @@ const ORDINARY_VISIT_COUNT = 1;
 
 export interface AddOnSelection {
   addOnIds: AddOnId[];
+  /** Optional dedicated Game Room / Media-Theater Room selections. */
+  specialRooms?: SpecialRoomId[];
+  /** Only meaningful when formState.cleaningType === "move"; defaults to "basic" when omitted. */
+  movePackageLevel?: MovePackageLevel;
+  outdoorSelection?: OutdoorSelection;
+  quantifiedAddOns?: QuantifiedAddOnSelection[];
 }
 
 export const EMPTY_ADD_ON_SELECTION: AddOnSelection = { addOnIds: [] };
@@ -51,6 +63,11 @@ export function mapWizardFormToRawInput(
     isPrepaidPackage: false,
     visitCount: ORDINARY_VISIT_COUNT,
     addOnIds: addOnSelection.addOnIds,
+    specialRooms: addOnSelection.specialRooms,
+    movePackageLevel: formState.cleaningType === "move" ? addOnSelection.movePackageLevel : undefined,
+    moveDirection: formState.cleaningType === "move" ? formState.moveDirection : undefined,
+    outdoorSelection: addOnSelection.outdoorSelection,
+    quantifiedAddOns: addOnSelection.quantifiedAddOns,
 
     name: formState.firstName.trim(),
     phone: formState.phone.trim(),

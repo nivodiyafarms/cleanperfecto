@@ -125,7 +125,7 @@ describe("chooseCleaningServiceDiscount", () => {
     expect(result.packageDiscount).toBe(0);
   });
 
-  it("applies the sequential 20% prepaid-package discount at exactly 6 scheduled and prepaid visits", () => {
+  it("applies the sequential 10% prepaid-package discount at exactly 6 scheduled and prepaid visits", () => {
     const result = chooseCleaningServiceDiscount({
       cleaningSubtotal: 200,
       frequency: "weekly",
@@ -133,10 +133,10 @@ describe("chooseCleaningServiceDiscount", () => {
       visitCount: 6,
       activeFirstCleaningOfferPercent: null,
     });
-    // afterRecurring = 200 * 0.79 = 158; afterPackage = 158 * 0.80 = 126.4
+    // afterRecurring = 200 * 0.79 = 158; afterPackage = 158 * 0.90 = 142.2
     expect(result.discountProgram).toBe("prepaid_package");
     expect(result.recurringAdjustment).toBeCloseTo(42); // 200 - 158
-    expect(result.packageDiscount).toBeCloseTo(31.6); // 158 - 126.4
+    expect(result.packageDiscount).toBeCloseTo(15.8); // 158 - 142.2
   });
 
   it("applies the prepaid-package discount for more than 6 scheduled and prepaid visits", () => {
@@ -148,9 +148,9 @@ describe("chooseCleaningServiceDiscount", () => {
       activeFirstCleaningOfferPercent: null,
     });
     expect(result.discountProgram).toBe("prepaid_package");
-    // afterRecurring = 200 * 0.86 = 172; afterPackage = 172 * 0.80 = 137.6
+    // afterRecurring = 200 * 0.86 = 172; afterPackage = 172 * 0.90 = 154.8
     expect(result.recurringAdjustment).toBeCloseTo(28);
-    expect(result.packageDiscount).toBeCloseTo(34.4);
+    expect(result.packageDiscount).toBeCloseTo(17.2);
   });
 
   it("never applies the first-cleaning offer on top of a 6+ prepaid package, even when eligible", () => {
@@ -174,9 +174,9 @@ describe("chooseCleaningServiceDiscount", () => {
       activeFirstCleaningOfferPercent: null,
     });
     const totalDiscount = result.recurringAdjustment + result.packageDiscount;
-    // Naive additive stacking (21% + 20% = 41%) would give 41; sequential
-    // multiplication (0.79 * 0.80 = 0.632) gives 36.8.
-    expect(totalDiscount).toBeCloseTo(36.8);
-    expect(totalDiscount).not.toBeCloseTo(41);
+    // Naive additive stacking (21% + 10% = 31%) would give 31; sequential
+    // multiplication (0.79 * 0.90 = 0.711) gives 28.9.
+    expect(totalDiscount).toBeCloseTo(28.9);
+    expect(totalDiscount).not.toBeCloseTo(31);
   });
 });

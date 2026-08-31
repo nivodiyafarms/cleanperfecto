@@ -141,6 +141,62 @@ describe("mapWizardFormToRawInput", () => {
     expect(input).not.toHaveProperty("entryChannel");
     expect(input).not.toHaveProperty("asOf");
   });
+
+  // -------------------------------------------------------------------
+  // 2026-08-30 pricing hotfix: Game/Media Room, Move package level/
+  // direction, outdoor selections, and quantified add-ons.
+  // -------------------------------------------------------------------
+
+  it("maps Game Room / Media Room selections", () => {
+    const input = mapWizardFormToRawInput(formState(), { addOnIds: [], specialRooms: ["game_room", "media_room"] });
+    expect(input.specialRooms).toEqual(["game_room", "media_room"]);
+  });
+
+  it("omits specialRooms when none are selected", () => {
+    const input = mapWizardFormToRawInput(formState());
+    expect(input.specialRooms).toBeUndefined();
+  });
+
+  it("maps movePackageLevel and moveDirection only when cleaningType is move", () => {
+    const moveInput = mapWizardFormToRawInput(
+      formState({ cleaningType: "move", moveDirection: "move_in" }),
+      { addOnIds: [], movePackageLevel: "complete" }
+    );
+    expect(moveInput.movePackageLevel).toBe("complete");
+    expect(moveInput.moveDirection).toBe("move_in");
+
+    const standardInput = mapWizardFormToRawInput(formState({ cleaningType: "standard" }), {
+      addOnIds: [],
+      movePackageLevel: "complete", // should be ignored — not a move request
+    });
+    expect(standardInput.movePackageLevel).toBeUndefined();
+    expect(standardInput.moveDirection).toBeUndefined();
+  });
+
+  it("maps outdoor selections", () => {
+    const input = mapWizardFormToRawInput(formState(), {
+      addOnIds: [],
+      outdoorSelection: { trio: "small", algaeMildewTreatmentSize: "medium" },
+    });
+    expect(input.outdoorSelection).toEqual({ trio: "small", algaeMildewTreatmentSize: "medium" });
+  });
+
+  it("maps quantified (per-unit) add-ons", () => {
+    const input = mapWizardFormToRawInput(formState(), {
+      addOnIds: [],
+      quantifiedAddOns: [{ id: "interior_window_detailing", quantity: 3 }],
+    });
+    expect(input.quantifiedAddOns).toEqual([{ id: "interior_window_detailing", quantity: 3 }]);
+  });
+
+  it("the default EMPTY_ADD_ON_SELECTION omits every new hotfix field — old-shape backward compatibility", () => {
+    const input = mapWizardFormToRawInput(formState());
+    expect(input.specialRooms).toBeUndefined();
+    expect(input.movePackageLevel).toBeUndefined();
+    expect(input.moveDirection).toBeUndefined();
+    expect(input.outdoorSelection).toBeUndefined();
+    expect(input.quantifiedAddOns).toBeUndefined();
+  });
 });
 
 const EMPTY_ADD_ON_SELECTION_FOR_TEST = { addOnIds: [] };

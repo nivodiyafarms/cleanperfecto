@@ -169,32 +169,32 @@ describe("11-13. Recurring cycles (2B2B Standard Light, not first-cleaning-eligi
 });
 
 describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
-  it("applies the sequential 21% recurring + 20% package discount (not additive) and reports the authoritative payable total in exact USD cents", () => {
+  it("applies the sequential 21% recurring + 10% package discount (not additive) and reports the authoritative payable total in exact USD cents", () => {
     const result = calculateEstimate(
       baseInput({ sizeTier: "2br_2ba", frequency: "weekly", isPrepaidPackage: true, visitCount: 6 })
     );
     expect(result.discountProgram).toBe("prepaid_package");
 
-    // --- Calculation components (owner worked example, 2026-08-13) ---
-    // Cleaning subtotal $149 -> weekly recurring (x0.79) -> package (x0.80):
-    //   149 x 0.79 x 6 x 0.80 = 565.008 -> rounded once: $565.01
-    // Supplies: 22.50 x 6 = $135.00. Travel: $0. Total: 565.01 + 135.00 = $700.01.
+    // --- Calculation components (finalized 2026-08-31: 10% package discount, was 20%) ---
+    // Cleaning subtotal $149 -> weekly recurring (x0.79) -> package (x0.90):
+    //   149 x 0.79 x 6 x 0.90 = 635.634
+    // Supplies: 22.50 x 6 = $135.00. Travel: $0. Total: 635.634 + 135.00 = 770.634 -> rounded once: $770.63.
     expect(result.recurringAdjustment).toBeCloseTo(31.29); // 149 - (149*0.79)
-    expect(result.packageDiscount).toBeCloseTo(23.542); // (149*0.79) - (149*0.79*0.8)
+    expect(result.packageDiscount).toBeCloseTo(11.771); // (149*0.79) - (149*0.79*0.9)
 
     expect(result.visitCount).toBe(6);
 
     // --- Authoritative payable amounts, rounded to the cent — never raw
-    // floats like 700.008 or 116.668 in customer/payment-facing output ---
-    expect(result.prepaidPackageTotal).toBe(700.01);
-    expect(result.effectivePricePerVisit).toBe(116.67); // 700.01 / 6 = 116.6683... -> 116.67
+    // floats like 770.634 or 128.438333 in customer/payment-facing output ---
+    expect(result.prepaidPackageTotal).toBe(770.63);
+    expect(result.effectivePricePerVisit).toBe(128.44); // 770.63 / 6 = 128.43833... -> 128.44
     expect(Number.isInteger(result.prepaidPackageTotal! * 100)).toBe(true);
     expect(Number.isInteger(result.effectivePricePerVisit! * 100)).toBe(true);
 
-    expect(result.range).toEqual({ lower: 120, upper: 140 }); // range is built around the per-visit price
+    expect(result.range).toEqual({ lower: 130, upper: 150 }); // range is built around the per-visit price
   });
 
-  it("owner worked example: visit-specific add-ons (Oven on Visit 1, Fridge on Visit 3, Oven+Fridge on Visit 5) add exactly $140, undiscounted, for a $840.01 package total", () => {
+  it("owner worked example: visit-specific add-ons (Oven on Visit 1, Fridge on Visit 3, Oven+Fridge on Visit 5) add exactly $130, undiscounted, for a $900.63 package total", () => {
     const result = calculateEstimate(
       baseInput({
         sizeTier: "2br_2ba",
@@ -202,17 +202,17 @@ describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
         isPrepaidPackage: true,
         visitCount: 6,
         visitAddOns: [
-          ["inside_oven"], // Visit 1: +$35
+          ["inside_oven"], // Visit 1: +$30
           [], // Visit 2
           ["inside_refrigerator"], // Visit 3: +$35
           [], // Visit 4
-          ["inside_oven", "inside_refrigerator"], // Visit 5: +$70
+          ["inside_oven", "inside_refrigerator"], // Visit 5: +$65
           [], // Visit 6
         ],
       })
     );
-    expect(result.packageAddOnsTotal).toBe(140);
-    expect(result.prepaidPackageTotal).toBe(840.01);
+    expect(result.packageAddOnsTotal).toBe(130);
+    expect(result.prepaidPackageTotal).toBe(900.63);
     expect(Number.isInteger(result.prepaidPackageTotal! * 100)).toBe(true);
   });
 
@@ -222,7 +222,7 @@ describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
   // guaranteed payable total just because a minimum dollar figure exists.
   // ---------------------------------------------------------------------
 
-  it("$700.01 base + Visit 1 Inside Oven ($35, fixed) = exact $735.01, hasStartingAtPricing false", () => {
+  it("$770.63 base + Visit 1 Oven Interior ($30, fixed) = exact $800.63, hasStartingAtPricing false", () => {
     const base = calculateEstimate(
       baseInput({ sizeTier: "2br_2ba", frequency: "weekly", isPrepaidPackage: true, visitCount: 6 })
     );
@@ -235,12 +235,12 @@ describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
         visitAddOns: [["inside_oven"]],
       })
     );
-    expect(base.prepaidPackageTotal).toBe(700.01);
-    expect(result.prepaidPackageTotal).toBe(735.01);
+    expect(base.prepaidPackageTotal).toBe(770.63);
+    expect(result.prepaidPackageTotal).toBe(800.63);
     expect(result.hasStartingAtPricing).toBe(false); // safe to present as an exact, final total
   });
 
-  it("$700.01 base + Visit 2 Inside Cabinets & Drawers (starting at $40) = numeric $740.01, but flagged as a non-final estimate", () => {
+  it("$770.63 base + Visit 2 Inside Cabinets & Drawers (starting at $40) = numeric $810.63, but flagged as a non-final estimate", () => {
     const result = calculateEstimate(
       baseInput({
         sizeTier: "2br_2ba",
@@ -250,7 +250,7 @@ describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
         visitAddOns: [[], ["inside_cabinets_drawers"]], // Visit 2
       })
     );
-    expect(result.prepaidPackageTotal).toBe(740.01); // the numeric minimum
+    expect(result.prepaidPackageTotal).toBe(810.63); // the numeric minimum
     expect(result.hasStartingAtPricing).toBe(true); // must be presented as "starting at" / requires confirmation, never as final
   });
 
@@ -264,7 +264,7 @@ describe("14. 6+ prepaid weekly package (2B2B Standard Light)", () => {
         visitAddOns: [[], [], ["extra_pet_hair_removal"]], // Visit 3
       })
     );
-    expect(result.prepaidPackageTotal).toBe(720.01); // 700.01 + 20
+    expect(result.prepaidPackageTotal).toBe(790.63); // 770.63 + 20
     expect(result.hasStartingAtPricing).toBe(true);
   });
 });

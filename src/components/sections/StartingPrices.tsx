@@ -29,11 +29,11 @@ const PROPERTY_PRICING = [
 ];
 
 const PRICED_ADD_ONS = [
-  { label: "Inside Oven", price: "$35" },
-  { label: "Inside Refrigerator", price: "$35" },
+  { label: "Oven Interior", price: "$30" },
+  { label: "Refrigerator Interior", price: "$35" },
   { label: "Inside Cabinets and Drawers", price: "Starting at $40" },
   { label: "Pet Hair Treatment", price: "Starting at $20" },
-  { label: "Interior Window Detailing", price: "Available by quote" },
+  { label: "Additional Interior Window Detailing", price: "Available by quote" },
 ];
 
 const UNPRICED_ADD_ONS = ["Carpet Shampooing", "Heavy Organization"];
