@@ -184,8 +184,8 @@ export const QUANTIFIED_ADD_ON_CATALOG: Record<QuantifiedAddOnId, QuantifiedAddO
   },
 };
 
-/** Ground-level / safely reachable windows only — approved customer wording for exterior window cleaning. */
-export const EXTERIOR_WINDOW_CUSTOMER_NOTE = "Ground-level / safely reachable windows only.";
+/** Approved customer wording for exterior window cleaning — CleanPerfecto has equipment for higher windows too, so this must not imply ground-level-only. */
+export const EXTERIOR_WINDOW_CUSTOMER_NOTE = "Safely reachable windows only.";
 
 export interface QuantifiedAddOnClassification {
   priced: QuantifiedAddOnResult[];

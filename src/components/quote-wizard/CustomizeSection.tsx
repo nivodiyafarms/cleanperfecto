@@ -247,13 +247,17 @@ interface CustomizeSectionProps {
  * Media Room, indoor add-ons, and outdoor add-ons. Every number shown here
  * comes from the real production pricing engine via
  * previewInstantQuoteCustomization — nothing is hardcoded or estimated
- * client-side. No prepaid-package / per-visit UI exists here (that belongs
- * to the future Booking + Payment milestone's 6+ prepaid package flow) and
- * no preferred-date field (real scheduling is part of that same future
+ * client-side. The "Optional Extras" catalog is always visible (owner
+ * feedback, 2026-08-31) — never gated behind a collapsed/accordion toggle,
+ * so the customer sees every available extra without an extra click; "How
+ * did you hear about us?" and the notes field live in their own separate
+ * section below it, visually distinct from pricing controls. No
+ * prepaid-package / per-visit UI exists here (that belongs to the future
+ * Booking + Payment milestone's 6+ prepaid package flow) and no
+ * preferred-date field (real scheduling is part of that same future
  * milestone) — see wizard-types.ts.
  */
 export default function CustomizeSection({ formState }: CustomizeSectionProps) {
-  const [expanded, setExpanded] = useState(false);
   const [selection, setSelection] = useState<CustomizationSelection>(EMPTY_SELECTION);
   const [preview, setPreview] = useState<InstantQuoteCustomizationPreviewResult | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
@@ -297,8 +301,8 @@ export default function CustomizeSection({ formState }: CustomizeSectionProps) {
   }
 
   // Show the Move Basic/Complete comparison as soon as this section mounts
-  // for a Move-In/Move-Out request — the customer shouldn't have to open
-  // "Customize your cleaning" first to see the two required cards.
+  // for a Move-In/Move-Out request, without waiting for the customer to
+  // touch an extra first.
   useEffect(() => {
     if (!isMove) return;
     // Deferred to a macrotask so the preview's own setState calls never run
@@ -408,7 +412,7 @@ export default function CustomizeSection({ formState }: CustomizeSectionProps) {
   const knownGarageCapacity = trioSelected ? TRIO_CONFIG[outdoor.trio as TrioSize].garageCars : outdoor.garageCars;
 
   return (
-    <div className="mt-8">
+    <div className="mt-8 flex flex-col gap-6">
       {isMove && (
         <MovePackagePicker
           selectedLevel={selection.movePackageLevel}
@@ -418,216 +422,206 @@ export default function CustomizeSection({ formState }: CustomizeSectionProps) {
         />
       )}
 
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-        className="text-sm font-semibold text-secondary underline decoration-secondary/40 underline-offset-2"
-      >
-        {expanded ? "Hide extras" : "Customize your cleaning"}
-      </button>
-
-      {expanded && (
-        <div className="mt-4 flex flex-col gap-6 rounded-3xl border border-border bg-white p-5 sm:p-6">
-          <div>
-            <p className="mb-3 text-sm font-medium text-foreground">Dedicated rooms</p>
-            <p className="mb-2 text-xs text-muted">Only counts when it&apos;s a separate, dedicated room.</p>
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              {SPECIAL_ROOM_OPTIONS.map((option) => (
-                <ToggleChip
-                  key={option.id}
-                  label={option.label}
-                  priceLabel={addOnPriceLabelForSpecialRoom(formState.cleaningType)}
-                  selected={selection.specialRooms.includes(option.id)}
-                  onToggle={() => toggleSpecialRoom(option.id)}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <p className="mb-3 text-sm font-medium text-foreground">Indoor add-ons</p>
-            {isComplete && (
-              <p className="mb-2 text-xs text-muted">
-                Complete already includes Refrigerator, Oven, and Cabinet interiors — they can&apos;t be added again
-                separately.
-              </p>
-            )}
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              {STANDALONE_INDOOR_ADD_ON_IDS.map((id) => (
-                <ToggleChip
-                  key={id}
-                  label={ADD_ON_CATALOG[id].label}
-                  priceLabel={addOnPriceLabel(id)}
-                  selected={selection.addOnIds.includes(id)}
-                  onToggle={() => toggleAddOn(id)}
-                  disabled={isComplete && COMPLETE_MOVE_PACKAGE_ADD_ONS.includes(id)}
-                />
-              ))}
-            </div>
-
-            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-              <QuantityStepper
-                label={QUANTIFIED_ADD_ON_CATALOG.interior_window_detailing.label}
-                priceLabel={`$${QUANTIFIED_ADD_ON_CATALOG.interior_window_detailing.perUnitAmount} each`}
-                quantity={quantifiedQuantity(selection, "interior_window_detailing")}
-                onChange={(qty) =>
-                  updateSelection((prev) => setQuantifiedQuantity(prev, "interior_window_detailing", qty))
-                }
-              />
-              <QuantityStepper
-                label={QUANTIFIED_ADD_ON_CATALOG.exterior_window_cleaning.label}
-                priceLabel={`$${QUANTIFIED_ADD_ON_CATALOG.exterior_window_cleaning.perUnitAmount} each`}
-                quantity={quantifiedQuantity(selection, "exterior_window_cleaning")}
-                onChange={(qty) =>
-                  updateSelection((prev) => setQuantifiedQuantity(prev, "exterior_window_cleaning", qty))
-                }
-                helperText={EXTERIOR_WINDOW_CUSTOMER_NOTE}
-              />
-            </div>
-          </div>
-
-          <div>
-            <p className="mb-3 text-sm font-medium text-foreground">Outdoor add-ons</p>
-
-            <p className="mb-2 text-xs font-medium text-foreground">Bundles (Garage + Porch + Patio)</p>
-            <div role="group" aria-label="Outdoor Trio bundle" className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                aria-pressed={!trioSelected}
-                onClick={() => selectTrio(null)}
-                className={`rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
-                  !trioSelected ? "border-secondary bg-secondary/10" : "border-border bg-white hover:border-secondary/50"
-                }`}
-              >
-                <span className="block font-medium text-foreground">None</span>
-                <span className="block text-muted">Individual pricing</span>
-              </button>
-              {TRIO_OPTIONS.map((option) => {
-                const isSelected = outdoor.trio === option.id;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    aria-pressed={isSelected}
-                    onClick={() => selectTrio(isSelected ? null : option.id)}
-                    className={`rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
-                      isSelected ? "border-secondary bg-secondary/10" : "border-border bg-white hover:border-secondary/50"
-                    }`}
-                  >
-                    <span className="block font-medium text-foreground">{option.label}</span>
-                    <span className="block text-muted">{option.priceLabel}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {!trioSelected && (
-              <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                <div>
-                  <p className="mb-2 text-xs font-medium text-foreground">Porch</p>
-                  <SizePicker
-                    ariaLabel="Porch size"
-                    options={PORCH_OPTIONS}
-                    selected={sqFtToSize(outdoor.porchSqFt, PORCH_SIZE_TO_SQFT)}
-                    onSelect={selectPorch}
-                  />
-                </div>
-                <div>
-                  <p className="mb-2 text-xs font-medium text-foreground">Patio</p>
-                  <SizePicker
-                    ariaLabel="Patio size"
-                    options={PATIO_OPTIONS}
-                    selected={sqFtToSize(outdoor.patioSqFt, PATIO_SIZE_TO_SQFT)}
-                    onSelect={selectPatio}
-                  />
-                </div>
-                <div>
-                  <p className="mb-2 text-xs font-medium text-foreground">Garage</p>
-                  <SizePicker
-                    ariaLabel="Garage size"
-                    options={GARAGE_OPTIONS}
-                    selected={carsToId(outdoor.garageCars)}
-                    onSelect={selectGarage}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div>
-                <p className="mb-2 text-xs font-medium text-foreground">Heavy Garage Oil &amp; Degrease</p>
-                <QuantityStepper
-                  label={`Affected bays (+$${OIL_DEGREASE_PER_BAY} each)`}
-                  priceLabel=""
-                  quantity={outdoor.oilDegreaseAffectedBays ?? 0}
-                  max={knownGarageCapacity}
-                  onChange={setOilDegreaseBays}
-                />
-              </div>
-              <div>
-                <p className="mb-2 text-xs font-medium text-foreground">Black Algae &amp; Mildew Deep Treatment</p>
-                <SizePicker
-                  ariaLabel="Algae/mildew treatment size"
-                  options={ALGAE_MILDEW_OPTIONS}
-                  selected={outdoor.algaeMildewTreatmentSize ?? null}
-                  onSelect={selectAlgaeMildew}
-                />
-                <p className="mt-1 text-xs text-muted">{ALGAE_MILDEW_CUSTOMER_NOTE}</p>
-              </div>
-            </div>
-
-            <details className="mt-4 rounded-2xl bg-background-alt p-3 text-xs text-muted">
-              <summary className="cursor-pointer font-medium text-foreground">What&apos;s included outdoors?</summary>
-              <p className="mt-2">{OUTDOOR_STANDARD_SCOPE_NOTE}</p>
-            </details>
-          </div>
-
-          <PreviewSummary preview={preview} pending={previewPending} selection={selection} isMove={isMove} />
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <label htmlFor="wizard-lead-source" className="mb-2 block text-sm font-medium text-foreground">
-                How did you hear about us?
-              </label>
-              <select
-                id="wizard-lead-source"
-                value={postEstimate.leadSource}
-                onChange={(event) =>
-                  setPostEstimate((prev) => ({ ...prev, leadSource: event.target.value as LeadSource | "" }))
-                }
-                className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
-              >
-                <option value="">Select one (optional)</option>
-                {LEAD_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label htmlFor="wizard-notes" className="mb-2 block text-sm font-medium text-foreground">
-                Anything else we should know? <span className="font-normal text-muted">(optional)</span>
-              </label>
-              <textarea
-                id="wizard-notes"
-                rows={3}
-                value={postEstimate.leadSourceDetail}
-                onChange={(event) =>
-                  setPostEstimate((prev) => ({ ...prev, leadSourceDetail: event.target.value }))
-                }
-                className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <p className="text-sm text-muted">
-            Our team will follow up to confirm your final scope and booking details.
-          </p>
+      <div className="flex flex-col gap-6 rounded-3xl border border-border bg-white p-5 sm:p-6">
+        <div>
+          <p className="text-base font-semibold text-foreground">Optional Extras</p>
+          <p className="mt-1 text-sm text-muted">Add any extra services you need. All selections are optional.</p>
         </div>
-      )}
+
+        <div>
+          <p className="mb-3 text-sm font-medium text-foreground">Dedicated rooms</p>
+          <p className="mb-2 text-xs text-muted">Only counts when it&apos;s a separate, dedicated room.</p>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {SPECIAL_ROOM_OPTIONS.map((option) => (
+              <ToggleChip
+                key={option.id}
+                label={option.label}
+                priceLabel={addOnPriceLabelForSpecialRoom(formState.cleaningType)}
+                selected={selection.specialRooms.includes(option.id)}
+                onToggle={() => toggleSpecialRoom(option.id)}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-3 text-sm font-medium text-foreground">Indoor add-ons</p>
+          {isComplete && (
+            <p className="mb-2 text-xs text-muted">
+              Complete already includes Refrigerator, Oven, and Cabinet interiors — they can&apos;t be added again
+              separately.
+            </p>
+          )}
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {STANDALONE_INDOOR_ADD_ON_IDS.map((id) => (
+              <ToggleChip
+                key={id}
+                label={ADD_ON_CATALOG[id].label}
+                priceLabel={addOnPriceLabel(id)}
+                selected={selection.addOnIds.includes(id)}
+                onToggle={() => toggleAddOn(id)}
+                disabled={isComplete && COMPLETE_MOVE_PACKAGE_ADD_ONS.includes(id)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+            <QuantityStepper
+              label={QUANTIFIED_ADD_ON_CATALOG.interior_window_detailing.label}
+              priceLabel={`$${QUANTIFIED_ADD_ON_CATALOG.interior_window_detailing.perUnitAmount} each`}
+              quantity={quantifiedQuantity(selection, "interior_window_detailing")}
+              onChange={(qty) =>
+                updateSelection((prev) => setQuantifiedQuantity(prev, "interior_window_detailing", qty))
+              }
+            />
+            <QuantityStepper
+              label={QUANTIFIED_ADD_ON_CATALOG.exterior_window_cleaning.label}
+              priceLabel={`$${QUANTIFIED_ADD_ON_CATALOG.exterior_window_cleaning.perUnitAmount} each`}
+              quantity={quantifiedQuantity(selection, "exterior_window_cleaning")}
+              onChange={(qty) =>
+                updateSelection((prev) => setQuantifiedQuantity(prev, "exterior_window_cleaning", qty))
+              }
+              helperText={EXTERIOR_WINDOW_CUSTOMER_NOTE}
+            />
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-3 text-sm font-medium text-foreground">Outdoor add-ons</p>
+
+          <p className="mb-2 text-xs font-medium text-foreground">Bundles (Garage + Porch + Patio)</p>
+          <div role="group" aria-label="Outdoor Trio bundle" className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              aria-pressed={!trioSelected}
+              onClick={() => selectTrio(null)}
+              className={`rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
+                !trioSelected ? "border-secondary bg-secondary/10" : "border-border bg-white hover:border-secondary/50"
+              }`}
+            >
+              <span className="block font-medium text-foreground">None</span>
+              <span className="block text-muted">Individual pricing</span>
+            </button>
+            {TRIO_OPTIONS.map((option) => {
+              const isSelected = outdoor.trio === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => selectTrio(isSelected ? null : option.id)}
+                  className={`rounded-xl border px-3 py-2 text-left text-xs transition-colors ${
+                    isSelected ? "border-secondary bg-secondary/10" : "border-border bg-white hover:border-secondary/50"
+                  }`}
+                >
+                  <span className="block font-medium text-foreground">{option.label}</span>
+                  <span className="block text-muted">{option.priceLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {!trioSelected && (
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <div>
+                <p className="mb-2 text-xs font-medium text-foreground">Porch</p>
+                <SizePicker
+                  ariaLabel="Porch size"
+                  options={PORCH_OPTIONS}
+                  selected={sqFtToSize(outdoor.porchSqFt, PORCH_SIZE_TO_SQFT)}
+                  onSelect={selectPorch}
+                />
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-medium text-foreground">Patio</p>
+                <SizePicker
+                  ariaLabel="Patio size"
+                  options={PATIO_OPTIONS}
+                  selected={sqFtToSize(outdoor.patioSqFt, PATIO_SIZE_TO_SQFT)}
+                  onSelect={selectPatio}
+                />
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-medium text-foreground">Garage</p>
+                <SizePicker
+                  ariaLabel="Garage size"
+                  options={GARAGE_OPTIONS}
+                  selected={carsToId(outdoor.garageCars)}
+                  onSelect={selectGarage}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="mb-2 text-xs font-medium text-foreground">Heavy Garage Oil &amp; Degrease</p>
+              <QuantityStepper
+                label={`Affected bays (+$${OIL_DEGREASE_PER_BAY} each)`}
+                priceLabel=""
+                quantity={outdoor.oilDegreaseAffectedBays ?? 0}
+                max={knownGarageCapacity}
+                onChange={setOilDegreaseBays}
+              />
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-medium text-foreground">Black Algae &amp; Mildew Deep Treatment</p>
+              <SizePicker
+                ariaLabel="Algae/mildew treatment size"
+                options={ALGAE_MILDEW_OPTIONS}
+                selected={outdoor.algaeMildewTreatmentSize ?? null}
+                onSelect={selectAlgaeMildew}
+              />
+              <p className="mt-1 text-xs text-muted">{ALGAE_MILDEW_CUSTOMER_NOTE}</p>
+            </div>
+          </div>
+
+          <details className="mt-4 rounded-2xl bg-background-alt p-3 text-xs text-muted">
+            <summary className="cursor-pointer font-medium text-foreground">What&apos;s included outdoors?</summary>
+            <p className="mt-2">{OUTDOOR_STANDARD_SCOPE_NOTE}</p>
+          </details>
+        </div>
+
+        <PreviewSummary preview={preview} pending={previewPending} selection={selection} isMove={isMove} />
+      </div>
+
+      <div className="rounded-3xl border border-border bg-white p-5 sm:p-6">
+        <label htmlFor="wizard-lead-source" className="block text-base font-semibold text-foreground">
+          How did you hear about us?
+        </label>
+        <select
+          id="wizard-lead-source"
+          value={postEstimate.leadSource}
+          onChange={(event) =>
+            setPostEstimate((prev) => ({ ...prev, leadSource: event.target.value as LeadSource | "" }))
+          }
+          className="mt-3 w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none sm:max-w-sm"
+        >
+          <option value="">Select one (optional)</option>
+          {LEAD_SOURCE_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+
+        <div className="mt-5">
+          <label htmlFor="wizard-notes" className="mb-2 block text-sm font-medium text-foreground">
+            Anything else we should know? <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <textarea
+            id="wizard-notes"
+            rows={3}
+            value={postEstimate.leadSourceDetail}
+            onChange={(event) => setPostEstimate((prev) => ({ ...prev, leadSourceDetail: event.target.value }))}
+            className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
+          />
+        </div>
+
+        <p className="mt-5 text-sm text-muted">
+          Our team will follow up to confirm your final scope and booking details.
+        </p>
+      </div>
     </div>
   );
 }

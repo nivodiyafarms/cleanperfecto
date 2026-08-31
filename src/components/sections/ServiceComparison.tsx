@@ -51,14 +51,6 @@ const DEEP_ITEMS = [
   "Interior window refresh for up to 5 reachable panes",
 ];
 
-const ADD_ONS = [
-  "Inside oven",
-  "Inside refrigerator",
-  "Inside cabinets and drawers",
-  "Carpet shampooing",
-  "Heavy organization",
-];
-
 function ItemGrid({ items }: { items: string[] }) {
   return (
     <ul className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-sm text-muted sm:grid-cols-2">
@@ -139,19 +131,6 @@ export default function ServiceComparison() {
               Additional window detailing is available by quote.
             </p>
           </GlassPanel>
-        </div>
-
-        <div className="mt-6 rounded-3xl border border-dashed border-border bg-background-alt p-6 sm:p-8">
-          <p className="text-sm font-semibold text-foreground">
-            Add-ons (available for Standard and Deep Cleaning)
-          </p>
-          <div className="mt-3">
-            <ItemGrid items={ADD_ONS} />
-          </div>
-          <p className="mt-4 text-sm text-muted">
-            Inside oven, refrigerator, cabinets and drawers, carpet
-            shampooing, and heavy organization are available as add-ons.
-          </p>
         </div>
       </div>
     </section>

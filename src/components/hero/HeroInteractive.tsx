@@ -18,7 +18,7 @@ export default function HeroInteractive() {
   const isCommercial = COMMERCIAL_PROPERTY_TYPE_IDS.includes(propertyType);
 
   return (
-    <div className="flex flex-col items-center gap-6 sm:items-start">
+    <div className="flex flex-col items-center gap-6 sm:items-start lg:w-full lg:max-w-4xl">
       <PropertyTypeSelector
         propertyTypes={PROPERTY_TYPES}
         selectedId={propertyType}
@@ -33,10 +33,10 @@ export default function HeroInteractive() {
         onSelect={setServiceId}
       />
 
-      <div className="w-full max-w-md rounded-2xl border border-border bg-background-alt/60 p-5 text-left">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background-alt/60 p-5 text-left lg:max-w-none">
         <p className="text-sm font-medium text-foreground">{activeService.name}</p>
         <p className="mt-1 text-sm text-muted">{activeService.description}</p>
-        <ul className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-xs text-muted sm:grid-cols-2">
+        <ul className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-xs text-muted sm:grid-cols-2 lg:grid-cols-3">
           {activeService.included.map((item) => (
             <li key={item} className="flex items-start gap-1.5">
               <span aria-hidden="true" className="mt-0.5 text-secondary">
