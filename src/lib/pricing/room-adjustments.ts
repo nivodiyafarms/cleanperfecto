@@ -1,5 +1,5 @@
 import { SIZE_TIER_BASELINE_ROOMS } from "./config";
-import type { CleaningType, RoomCounts, SizeTier } from "./types";
+import type { CleaningType, RoomCounts, SizeTier, SpecialRoomChargeResult, SpecialRoomId } from "./types";
 
 export interface RoomAdjustmentRates {
   additionalBedroomCharge: number | null;
@@ -82,4 +82,56 @@ export function getRoomAdjustment(
     extraHalfBaths * (rates.additionalHalfBathroomCharge ?? 0);
 
   return { configured: true, amount };
+}
+
+// ---------------------------------------------------------------------------
+// Special (dedicated) rooms — Game Room / Media-Theater Room, owner-approved
+// hotfix 2026-08-30. A separate function rather than folding into
+// getRoomAdjustment's own signature/return shape, so every existing call
+// site and test above is unaffected; the caller (calculate-estimate.ts)
+// combines both amounts into the same pre-multiplier roomAdjustments total,
+// reusing the exact same "keyed by CleaningType" config pattern.
+// ---------------------------------------------------------------------------
+
+export const SPECIAL_ROOM_LABELS: Record<SpecialRoomId, string> = {
+  game_room: "Game Room",
+  media_room: "Media / Theater Room",
+};
+
+export type SpecialRoomConfig = Record<CleaningType, Partial<Record<SpecialRoomId, number>>>;
+
+/** Production special-room charges, owner-approved 2026-08-30. */
+export const SPECIAL_ROOM_CONFIG: SpecialRoomConfig = {
+  standard: { game_room: 15, media_room: 15 },
+  deep: { game_room: 20, media_room: 20 },
+  move: { game_room: 20, media_room: 20 },
+};
+
+export type SpecialRoomResult =
+  | { configured: true; amount: number; charges: SpecialRoomChargeResult[] }
+  | { configured: false; reason: "ROOM_ADJUSTMENT_NOT_CONFIGURED" };
+
+/** Deduplicates repeated selections so a double-submitted room can't double-charge. */
+export function getSpecialRoomCharges(
+  cleaningType: CleaningType,
+  specialRooms: SpecialRoomId[] | undefined,
+  config: SpecialRoomConfig = SPECIAL_ROOM_CONFIG
+): SpecialRoomResult {
+  if (!specialRooms || specialRooms.length === 0) {
+    return { configured: true, amount: 0, charges: [] };
+  }
+
+  const rates = config[cleaningType];
+  const charges: SpecialRoomChargeResult[] = [];
+
+  for (const id of new Set(specialRooms)) {
+    const rate = rates[id];
+    if (rate === undefined) {
+      return { configured: false, reason: "ROOM_ADJUSTMENT_NOT_CONFIGURED" };
+    }
+    charges.push({ id, label: SPECIAL_ROOM_LABELS[id], amount: rate });
+  }
+
+  const amount = charges.reduce((sum, charge) => sum + charge.amount, 0);
+  return { configured: true, amount, charges };
 }

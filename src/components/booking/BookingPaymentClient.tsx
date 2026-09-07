@@ -8,9 +8,9 @@ import type { AchPackagePricing } from "@/lib/booking/ach-package-options";
 import { NORMAL_FREQUENCY_LABELS, PREPAID_FREQUENCY_LABELS } from "@/lib/booking/labels";
 import { OPERATING_HOURS_END, OPERATING_HOURS_START } from "@/lib/booking/operating-hours";
 import type { BookingPricingOptions, PaymentMethodType, PrepaidFrequency } from "@/lib/booking/types";
-import { getAddOnLabel } from "@/lib/instant-quote/email/labels";
-import type { AddOnId, FrequencyId } from "@/lib/pricing/types";
+import type { CalculationResult, FrequencyId } from "@/lib/pricing/types";
 import { SITE_CONTACT } from "@/lib/site-contact";
+import type { AddOnSelection } from "@/components/quote-wizard/map-form-to-raw-input";
 import GlassPanel from "@/components/ui/GlassPanel";
 
 const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "every_4_weeks"];
@@ -34,10 +34,29 @@ function isRecurring(frequency: FrequencyId): frequency is Exclude<FrequencyId, 
   return frequency !== "one_time";
 }
 
+/**
+ * Extras summary built entirely from the already-computed, trusted
+ * CalculationResult breakdown — never re-derives labels/prices from the raw
+ * selection, so bundle folding (e.g. Refrigerator+Oven -> the bundle) and
+ * Complete-package inclusion are always reflected correctly without
+ * duplicating that logic here.
+ */
+function extrasSummary(result: CalculationResult): string[] {
+  return [
+    ...result.pricedAddOns.map((entry) => entry.label),
+    ...result.manualQuoteAddOns.map((entry) => entry.label),
+    ...result.specialRoomCharges.map((entry) => entry.label),
+    ...result.quantifiedAddOns.map((entry) => `${entry.label} ×${entry.quantity}`),
+    ...result.outdoorCharges.map((entry) => entry.label),
+    ...result.outdoorManualCharges.map((entry) => entry.label),
+  ];
+}
+
 interface BookingPaymentClientProps {
   quoteId: string;
   defaultFrequency: FrequencyId;
-  addOnIds: AddOnId[];
+  /** The full post-estimate customization selection carried from the quote's booking handoff — see customization-selection-params.ts. */
+  selection: AddOnSelection;
   normalOptions: BookingPricingOptions["normal"];
   futureRecurringOptions: BookingPricingOptions["futureRecurring"];
   packageOptions: BookingPricingOptions["packages"];
@@ -75,7 +94,7 @@ function CancellationPolicyDisclosure() {
 export default function BookingPaymentClient({
   quoteId,
   defaultFrequency,
-  addOnIds,
+  selection,
   normalOptions,
   futureRecurringOptions,
   packageOptions,
@@ -130,7 +149,11 @@ export default function BookingPaymentClient({
         frequency: normalFrequency,
         requestedDate,
         requestedStartTime,
-        addOnIds,
+        addOnIds: selection.addOnIds,
+        specialRooms: selection.specialRooms,
+        movePackageLevel: selection.movePackageLevel,
+        outdoorSelection: selection.outdoorSelection,
+        quantifiedAddOns: selection.quantifiedAddOns,
         paymentMethodSaveAuthorized: authorized,
       });
       // A successful call redirects server-side and never returns here.
@@ -249,11 +272,11 @@ export default function BookingPaymentClient({
               </div>
             )}
 
-            {addOnIds.length > 0 && (
-              <p className="mt-2 text-xs text-muted">
-                Extras: {addOnIds.map((id) => getAddOnLabel(id)).join(", ")}
-              </p>
-            )}
+            {!selectedNormalOption.manualReviewRequired &&
+              selectedNormalOption.range !== null &&
+              extrasSummary(selectedNormalOption).length > 0 && (
+                <p className="mt-2 text-xs text-muted">Extras: {extrasSummary(selectedNormalOption).join(", ")}</p>
+              )}
           </div>
         )}
 

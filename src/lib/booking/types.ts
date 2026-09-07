@@ -1,4 +1,13 @@
-import type { AddOnId, CalculationInput, CalculationResult, FrequencyId } from "@/lib/pricing/types";
+import type {
+  AddOnId,
+  CalculationInput,
+  CalculationResult,
+  FrequencyId,
+  MovePackageLevel,
+  OutdoorSelection,
+  QuantifiedAddOnSelection,
+  SpecialRoomId,
+} from "@/lib/pricing/types";
 
 export type BookingType = "normal" | "prepaid_package";
 
@@ -92,6 +101,12 @@ export interface NormalBookingSelectionInput {
   /** "HH:MM" (24-hour), within the approved 08:00-18:00 operating-hours window. Still a request, not a guaranteed slot. Replaces the old Morning/Afternoon/Evening picker. */
   requestedStartTime: string;
   addOnIds: AddOnId[];
+  /** Optional dedicated Game Room / Media-Theater Room selections carried from the quote's post-estimate customization. */
+  specialRooms?: SpecialRoomId[];
+  /** Only meaningful when the quote's cleaningType is "move"; defaults to "basic" when omitted. */
+  movePackageLevel?: MovePackageLevel;
+  outdoorSelection?: OutdoorSelection;
+  quantifiedAddOns?: QuantifiedAddOnSelection[];
   paymentMethodSaveAuthorized: boolean;
 }
 

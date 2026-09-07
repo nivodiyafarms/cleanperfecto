@@ -238,7 +238,7 @@ Do not require or restore unverified claims such as "5.0 Average Rating," "Insur
 
 **Add-ons**:
 
-- Priced: Inside Oven ($35), Inside Refrigerator ($35), Inside Cabinets and Drawers (starting at $40), Pet Hair Treatment (starting at $20)
+- Priced: Oven Interior ($30), Refrigerator Interior ($35), Refrigerator + Oven Bundle ($55), Inside Cabinets and Drawers (starting at $40), Pet Hair Treatment (starting at $20)
 - Available without a published price: Carpet Shampooing, Heavy Organization, additional interior window detailing
 - Heavy grease and buildup is part of Deep Cleaning, not an add-on
 

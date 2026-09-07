@@ -39,6 +39,8 @@ describe("mapToCustomizationPreviewResult", () => {
       regularDisplayRangeLower: null,
       regularDisplayRangeUpper: null,
       minimumServiceFloorApplied: false,
+      movePackageLevel: null,
+      moveCompleteUpgradeConfigured: null,
     });
     expect(safe).not.toHaveProperty("quoteId");
   });
@@ -103,5 +105,42 @@ describe("mapToCustomizationPreviewResult", () => {
       expect(safe.displayRangeLower).toBeGreaterThan(0);
     }
     expect(JSON.stringify(safe)).not.toContain("MANUAL_QUOTE_ADD_ON_SELECTED");
+  });
+
+  // -------------------------------------------------------------------
+  // Move Basic/Complete display fields — what the live Move UI cards
+  // (StepOneCleaning/CustomizeSection) actually consume.
+  // -------------------------------------------------------------------
+
+  it("echoes movePackageLevel and moveCompleteUpgradeConfigured for a priceable Complete request", () => {
+    const estimate = calculateEstimateWithComparison(
+      baseInput({ cleaningType: "move", movePackageLevel: "complete", squareFeet: 1300 })
+    );
+    const safe = mapToCustomizationPreviewResult(estimate);
+    expect(safe.estimateType).toBe("instant_range");
+    if (safe.estimateType === "instant_range") {
+      expect(safe.movePackageLevel).toBe("complete");
+      expect(safe.moveCompleteUpgradeConfigured).toBe(true);
+      expect(safe.displayRangeLower).toBeGreaterThan(0);
+    }
+  });
+
+  // Note: a "Complete beyond the sq-ft limit but Basic still priceable" case
+  // can't be constructed through this preview path using real production
+  // config — the general square-footage ceiling and the Complete-upgrade
+  // ceiling both cap out at 4,500 sq ft for the largest tier, so that
+  // combination is already fully manual for an unrelated reason first. That
+  // exact branch (moveCompleteUpgradeConfigured: false while calculatedTotal
+  // stays a valid Basic total) is verified directly against calculateEstimate
+  // with an isolated config override in hotfix-2026-08-30.test.ts.
+
+  it("movePackageLevel/moveCompleteUpgradeConfigured are both null for a non-Move request", () => {
+    const estimate = calculateEstimateWithComparison(baseInput({ cleaningType: "standard" }));
+    const safe = mapToCustomizationPreviewResult(estimate);
+    expect(safe.estimateType).toBe("instant_range");
+    if (safe.estimateType === "instant_range") {
+      expect(safe.movePackageLevel).toBeNull();
+      expect(safe.moveCompleteUpgradeConfigured).toBeNull();
+    }
   });
 });

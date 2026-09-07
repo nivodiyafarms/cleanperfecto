@@ -1,10 +1,19 @@
 import { getActiveFirstCleaningOffer } from "@/lib/offers/first-cleaning-offer";
-import { classifyAddOns } from "./add-ons";
+import { classifyAddOns, classifyQuantifiedAddOns, COMPLETE_MOVE_PACKAGE_ADD_ONS, splitCompletePackageAddOns } from "./add-ons";
 import { BASE_PRICES, CONDITION_MULTIPLIERS, MINIMUM_SERVICE_TOTAL, MOVE_BASE_PRICE, PRICING_VERSION } from "./config";
 import { chooseCleaningServiceDiscount } from "./discount-program";
 import { buildEstimateRange } from "./estimate-range";
+import { getMoveCompleteUpgrade, MOVE_COMPLETE_UPGRADE_CONFIG, type MoveCompleteUpgradeBand } from "./move-package";
 import { roundToCents } from "./money";
-import { getRoomAdjustment, ROOM_ADJUSTMENT_CONFIG, type RoomAdjustmentConfig } from "./room-adjustments";
+import { classifyOutdoorSelection } from "./outdoor-add-ons";
+import {
+  getRoomAdjustment,
+  getSpecialRoomCharges,
+  ROOM_ADJUSTMENT_CONFIG,
+  SPECIAL_ROOM_CONFIG,
+  type RoomAdjustmentConfig,
+  type SpecialRoomConfig,
+} from "./room-adjustments";
 import {
   getSquareFootageMultiplier,
   resolveDefaultSquareFeet,
@@ -19,7 +28,13 @@ import {
   type AirbnbSuppliesRule,
   type SuppliesEquipmentRule,
 } from "./supplies-equipment";
-import type { CalculationInput, CalculationResult, ManualReviewReasonCode } from "./types";
+import type {
+  CalculationInput,
+  CalculationResult,
+  ManualQuoteAddOnResult,
+  ManualReviewReasonCode,
+  MovePackageLevel,
+} from "./types";
 import { getZipTravelRule, ZIP_TRAVEL_CONFIG, type ZipTravelRule } from "./zip-travel";
 
 /** Injectable config bundle — defaults to production config; tests override with isolated fixtures. */
@@ -29,6 +44,8 @@ export interface PricingConfigOverrides {
   airbnbSuppliesConfig?: AirbnbSuppliesRule[];
   squareFootageConfig?: SquareFootageBand[];
   roomAdjustmentConfig?: RoomAdjustmentConfig;
+  specialRoomConfig?: SpecialRoomConfig;
+  moveCompleteUpgradeConfig?: MoveCompleteUpgradeBand[];
 }
 
 function manualReviewResult(
@@ -47,6 +64,9 @@ function manualReviewResult(
     basePrice: 0,
     roomAdjustments: 0,
     roomAdjustmentConfigured: true,
+    specialRoomCharges: [],
+    specialRoomChargesTotal: 0,
+    specialRoomsConfigured: true,
     squareFootageMultiplier: 1,
     squareFootageConfigured: true,
     conditionMultiplier: 0,
@@ -67,6 +87,19 @@ function manualReviewResult(
     packageAddOnsTotal: 0,
     packagePricedAddOns: [],
     packageManualQuoteAddOns: [],
+    quantifiedAddOns: [],
+    quantifiedAddOnsTotal: 0,
+    movePackageLevel: null,
+    moveDirection: null,
+    moveEquivalentDeepTotal: null,
+    moveFloorApplied: null,
+    moveCompleteUpgrade: null,
+    moveCompleteUpgradeConfigured: null,
+    includedByCompletePackage: [],
+    completePackageRecommended: false,
+    outdoorCharges: [],
+    outdoorChargesTotal: 0,
+    outdoorManualCharges: [],
     activeFirstCleaningOfferPercent: null,
     firstCleaningEligible: input.firstCleaningEligible,
     firstCleaningDiscount: 0,
@@ -134,6 +167,15 @@ export function calculateEstimate(
     manualReviewReasons.push(roomAdjustmentResult.reason);
   }
 
+  const specialRoomConfig = overrides.specialRoomConfig ?? SPECIAL_ROOM_CONFIG;
+  const specialRoomResult = getSpecialRoomCharges(input.cleaningType, input.specialRooms, specialRoomConfig);
+  const specialRoomsConfigured = specialRoomResult.configured;
+  const specialRoomCharges = specialRoomResult.configured ? specialRoomResult.charges : [];
+  const specialRoomChargesTotal = specialRoomResult.configured ? specialRoomResult.amount : 0;
+  if (!specialRoomResult.configured) {
+    manualReviewReasons.push(specialRoomResult.reason);
+  }
+
   const squareFootageConfig = overrides.squareFootageConfig ?? SQUARE_FOOTAGE_CONFIG;
 
   let squareFootageMultiplier = 1;
@@ -148,7 +190,8 @@ export function calculateEstimate(
     }
   }
 
-  const cleaningSubtotal = (basePrice + roomAdjustments) * squareFootageMultiplier * conditionMultiplier;
+  const cleaningSubtotal =
+    (basePrice + roomAdjustments + specialRoomChargesTotal) * squareFootageMultiplier * conditionMultiplier;
 
   const activeOffer = input.firstCleaningEligible ? getActiveFirstCleaningOffer(input.asOf) : null;
   const activeFirstCleaningOfferPercent = activeOffer?.percent ?? null;
@@ -204,19 +247,36 @@ export function calculateEstimate(
   // packageAddOnsTotal/packageManualQuoteAddOns below.
   const isPackage = discountProgram === "prepaid_package";
 
+  const resolvedMovePackageLevel: MovePackageLevel | null =
+    input.cleaningType === "move" ? (input.movePackageLevel ?? "basic") : null;
+  const isMoveComplete = resolvedMovePackageLevel === "complete";
+
   let pricedAddOns: CalculationResult["pricedAddOns"] = [];
   let pricedAddOnsTotal = 0;
   let manualQuoteAddOns: CalculationResult["manualQuoteAddOns"] = [];
   let packageAddOnsTotal = 0;
   const packageManualQuoteAddOns: CalculationResult["packageManualQuoteAddOns"] = [];
   const packagePricedAddOns: CalculationResult["packagePricedAddOns"] = [];
+  const includedByCompletePackage: ManualQuoteAddOnResult[] = [];
 
   if (isPackage) {
     const visitAddOns = input.visitAddOns;
     if (visitAddOns && visitAddOns.length > 0) {
       visitAddOns.forEach((addOnIdsForVisit, index) => {
         const visitNumber = index + 1;
-        const classified = classifyAddOns(addOnIdsForVisit);
+        // A Complete package folds Refrigerator/Oven/Cabinet Interior in
+        // automatically — strip them from every visit's own selection so
+        // they're never independently chargeable, even under a manipulated
+        // request. Enforced here server-side, not merely by UI checkboxes.
+        let idsForVisit = addOnIdsForVisit;
+        if (isMoveComplete) {
+          const split = splitCompletePackageAddOns(addOnIdsForVisit);
+          idsForVisit = split.remaining;
+          for (const included of split.included) {
+            includedByCompletePackage.push({ ...included, visitNumber });
+          }
+        }
+        const classified = classifyAddOns(idsForVisit);
         packageAddOnsTotal += classified.pricedTotal;
         // Keep each visit's own priced add-ons — including pricingKind —
         // rather than collapsing to a bare number. Losing "starting_at"
@@ -238,13 +298,40 @@ export function calculateEstimate(
       manualReviewReasons.push("ADD_ON_VISIT_ASSIGNMENT_REQUIRED");
     }
   } else {
-    const classified = classifyAddOns(input.addOnIds);
+    let idsForPricing = input.addOnIds;
+    if (isMoveComplete) {
+      const split = splitCompletePackageAddOns(input.addOnIds);
+      idsForPricing = split.remaining;
+      includedByCompletePackage.push(...split.included);
+    }
+    const classified = classifyAddOns(idsForPricing);
     pricedAddOns = classified.priced;
     pricedAddOnsTotal = classified.pricedTotal;
     manualQuoteAddOns = classified.manual;
     if (manualQuoteAddOns.length > 0) {
       manualReviewReasons.push("MANUAL_QUOTE_ADD_ON_SELECTED");
     }
+  }
+
+  // Like addOnIds, outdoor selections and quantified (per-unit) add-ons have
+  // no per-visit assignment mechanism today — they're a single top-level
+  // request field, so (matching addOnIds' own package-mode behavior) they
+  // only price a one-off/plain-recurring request, never a prepaid package
+  // (a one-time charge here must never be silently multiplied by visitCount).
+  const quantifiedClassification = isPackage
+    ? { priced: [], pricedTotal: 0 }
+    : classifyQuantifiedAddOns(input.quantifiedAddOns);
+  const quantifiedAddOns = quantifiedClassification.priced;
+  const quantifiedAddOnsTotal = quantifiedClassification.pricedTotal;
+
+  const outdoorClassification = isPackage
+    ? { priced: [], pricedTotal: 0, manual: [], reasons: [] }
+    : classifyOutdoorSelection(input.outdoorSelection);
+  const outdoorCharges = outdoorClassification.priced;
+  const outdoorChargesTotal = outdoorClassification.pricedTotal;
+  const outdoorManualCharges = outdoorClassification.manual;
+  for (const reason of outdoorClassification.reasons) {
+    manualReviewReasons.push(reason);
   }
 
   // True whenever any add-on contributing to the returned total(s) is
@@ -257,7 +344,8 @@ export function calculateEstimate(
     ? packagePricedAddOns.some((addOn) => addOn.pricingKind === "starting_at")
     : pricedAddOns.some((addOn) => addOn.pricingKind === "starting_at");
 
-  const preDiscountTotal = cleaningSubtotal + travelCharge + suppliesEquipmentCharge + pricedAddOnsTotal;
+  const preDiscountTotal =
+    cleaningSubtotal + travelCharge + suppliesEquipmentCharge + pricedAddOnsTotal + outdoorChargesTotal + quantifiedAddOnsTotal;
 
   // $99 minimum enforcement — a hard backend rule, not display logic. The
   // discount actually applied is capped so the final total never drops
@@ -285,7 +373,78 @@ export function calculateEstimate(
   // figure. In package mode pricedAddOnsTotal is always 0 (add-ons are
   // per-visit, tracked separately in packageAddOnsTotal), so this is purely
   // the cleaning+travel+supplies portion, identical every visit.
-  const rawCalculatedTotal = Math.max(MINIMUM_SERVICE_TOTAL, preDiscountTotal - actualDiscountTotal);
+  let rawCalculatedTotal = Math.max(MINIMUM_SERVICE_TOTAL, preDiscountTotal - actualDiscountTotal);
+
+  // Move-In/Move-Out hierarchy + Complete package upgrade (owner-approved
+  // hotfix, 2026-08-30): Basic Move must never price below the equivalent
+  // Deep Cleaning for the SAME property/rooms/special rooms/sqft/condition/
+  // zip/frequency/eligibility (no add-ons — those aren't part of the
+  // hierarchy comparison). The equivalent Deep total is computed by
+  // re-running this exact same trusted engine rather than duplicating its
+  // formula (same pattern as estimate-with-comparison.ts's regular-vs-
+  // first-cleaning comparison) — every later pricing step (discounts, $99
+  // minimum) has already been applied identically to both sides by the time
+  // they're compared, so the hierarchy holds through the final pre-tax
+  // result, not just the raw subtotal.
+  let moveEquivalentDeepTotal: number | null = null;
+  let moveFloorApplied: boolean | null = null;
+  let moveCompleteUpgrade: number | null = null;
+  let moveCompleteUpgradeConfigured: boolean | null = null;
+  let completePackageRecommended = false;
+
+  if (input.cleaningType === "move") {
+    const equivalentDeepResult = calculateEstimate(
+      {
+        ...input,
+        cleaningType: "deep",
+        movePackageLevel: undefined,
+        moveDirection: undefined,
+        addOnIds: [],
+        visitAddOns: undefined,
+        quantifiedAddOns: undefined,
+        outdoorSelection: undefined,
+      },
+      overrides
+    );
+    moveEquivalentDeepTotal = equivalentDeepResult.calculatedTotal;
+
+    const flooredTotal = Math.max(rawCalculatedTotal, moveEquivalentDeepTotal);
+    moveFloorApplied = flooredTotal > rawCalculatedTotal;
+    rawCalculatedTotal = flooredTotal;
+
+    const moveCompleteUpgradeConfig = overrides.moveCompleteUpgradeConfig ?? MOVE_COMPLETE_UPGRADE_CONFIG;
+    const upgradeResult =
+      effectiveSquareFeet === null
+        ? ({ configured: false, reason: "MOVE_COMPLETE_UPGRADE_NOT_CONFIGURED" } as const)
+        : getMoveCompleteUpgrade(effectiveSquareFeet, moveCompleteUpgradeConfig);
+
+    if (resolvedMovePackageLevel === "complete") {
+      if (upgradeResult.configured) {
+        moveCompleteUpgrade = upgradeResult.amount;
+        moveCompleteUpgradeConfigured = true;
+        rawCalculatedTotal += moveCompleteUpgrade;
+      } else {
+        // Complete itself needs a custom quote — Basic must not be
+        // destroyed by this. rawCalculatedTotal stays the valid Basic
+        // total; the gap is surfaced via manualReviewReasons instead.
+        moveCompleteUpgrade = 0;
+        moveCompleteUpgradeConfigured = false;
+        manualReviewReasons.push(upgradeResult.reason);
+      }
+    } else {
+      moveCompleteUpgrade = 0;
+      moveCompleteUpgradeConfigured = true;
+
+      // Informational only — never auto-switches movePackageLevel or pricing.
+      const standaloneInteriorTotal = pricedAddOns
+        .filter((addOn) => COMPLETE_MOVE_PACKAGE_ADD_ONS.includes(addOn.id))
+        .reduce((sum, addOn) => sum + addOn.amount, 0);
+      if (upgradeResult.configured && standaloneInteriorTotal > upgradeResult.amount) {
+        completePackageRecommended = true;
+      }
+    }
+  }
+
   const calculatedTotal = roundToCents(rawCalculatedTotal);
 
   // Only the prepaid package has a fixed, known visit count the customer
@@ -320,6 +479,9 @@ export function calculateEstimate(
     basePrice,
     roomAdjustments,
     roomAdjustmentConfigured,
+    specialRoomCharges,
+    specialRoomChargesTotal,
+    specialRoomsConfigured,
     squareFootageMultiplier,
     squareFootageConfigured,
     conditionMultiplier,
@@ -340,6 +502,19 @@ export function calculateEstimate(
     packageAddOnsTotal,
     packagePricedAddOns,
     packageManualQuoteAddOns,
+    quantifiedAddOns,
+    quantifiedAddOnsTotal,
+    movePackageLevel: resolvedMovePackageLevel,
+    moveDirection: input.cleaningType === "move" ? (input.moveDirection ?? null) : null,
+    moveEquivalentDeepTotal,
+    moveFloorApplied,
+    moveCompleteUpgrade,
+    moveCompleteUpgradeConfigured,
+    includedByCompletePackage,
+    completePackageRecommended,
+    outdoorCharges,
+    outdoorChargesTotal,
+    outdoorManualCharges,
     activeFirstCleaningOfferPercent,
     firstCleaningEligible: input.firstCleaningEligible,
     firstCleaningDiscount,
@@ -355,7 +530,9 @@ export function calculateEstimate(
   const hasManualQuoteAddOn =
     manualQuoteAddOns.length > 0 ||
     packageManualQuoteAddOns.length > 0 ||
-    manualReviewReasons.includes("ADD_ON_VISIT_ASSIGNMENT_REQUIRED");
+    manualReviewReasons.includes("ADD_ON_VISIT_ASSIGNMENT_REQUIRED") ||
+    outdoorManualCharges.length > 0 ||
+    moveCompleteUpgradeConfigured === false;
 
   if (hasBlockingConfigurationGap) {
     return {

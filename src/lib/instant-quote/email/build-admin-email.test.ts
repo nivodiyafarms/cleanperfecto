@@ -45,6 +45,8 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     manualReviewRequired: false,
     manualReviewReasons: [],
     minimumServiceTotalApplied: false,
+    movePackageLevel: null,
+    moveCompleteUpgradeConfigured: null,
     ...overrides,
   };
 }
@@ -113,9 +115,9 @@ describe("buildInstantQuoteAdminEmail", () => {
       okResult({ prepaidPackageTotal: 500, effectivePricePerVisit: 166.67 })
     );
     const { text } = buildInstantQuoteAdminEmail(details);
-    expect(text).toContain("Visit 1: Inside Oven");
+    expect(text).toContain("Visit 1: Oven Interior");
     expect(text).toContain("Visit 2: None");
-    expect(text).toContain("Visit 3: Inside Refrigerator, Inside Oven");
+    expect(text).toContain("Visit 3: Refrigerator Interior, Oven Interior");
     expect(text).toContain("Prepaid package total: $500.00");
     expect(text).toContain("Effective price/visit: $166.67");
   });
@@ -126,7 +128,7 @@ describe("buildInstantQuoteAdminEmail", () => {
       okResult()
     );
     const { text } = buildInstantQuoteAdminEmail(details);
-    expect(text).toContain("Inside Oven, Inside Refrigerator");
+    expect(text).toContain("Oven Interior, Refrigerator Interior");
   });
 
   it("states an identity conflict plainly without exposing unrelated customer PII", () => {

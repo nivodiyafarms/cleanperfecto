@@ -67,8 +67,8 @@ describe("estimateVisitPricing", () => {
     const pricing = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
     expect(pricing.baseAmount).toBeGreaterThan(0);
-    expect(pricing.addOnAmount).toBe(35);
-    expect(pricing.totalAmount).toBe(pricing.baseAmount + 35);
+    expect(pricing.addOnAmount).toBe(30);
+    expect(pricing.totalAmount).toBe(pricing.baseAmount + 30);
     expect(pricing.amountDueFromCustomer).toBe(pricing.totalAmount);
   });
 
@@ -109,8 +109,8 @@ describe("estimateVisitPricing", () => {
     });
 
     expect(pricing.baseAmount).toBe(0);
-    expect(pricing.addOnAmount).toBe(70);
-    expect(pricing.amountDueFromCustomer).toBe(70);
+    expect(pricing.addOnAmount).toBe(65);
+    expect(pricing.amountDueFromCustomer).toBe(65);
   });
 
   it("does not consume a package credit or touch package pricing when estimating extras", async () => {

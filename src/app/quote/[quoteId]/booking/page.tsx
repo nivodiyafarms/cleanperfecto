@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { buildAchPackageOptions } from "@/lib/booking/ach-package-options";
 import { buildBookingPricingOptions } from "@/lib/booking/build-booking-pricing-options";
+import {
+  parseCustomizationSelectionParams,
+  type CustomizationSelectionSearchParams,
+} from "@/lib/booking/customization-selection-params";
 import { getQuoteForBooking } from "@/lib/booking/get-quote-for-booking";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
-import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
-import type { AddOnId } from "@/lib/pricing/types";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import BookingPaymentClient from "@/components/booking/BookingPaymentClient";
 import GlassPanel from "@/components/ui/GlassPanel";
@@ -15,17 +17,6 @@ export const metadata: Metadata = {
   title: "Booking & Payment — CleanPerfecto",
   description: "Secure your CleanPerfecto booking or purchase a 6+ cleaning prepaid package.",
 };
-
-const KNOWN_ADD_ON_IDS = new Set(Object.keys(ADD_ON_CATALOG) as AddOnId[]);
-
-function parseAddOnIds(raw: string | string[] | undefined): AddOnId[] {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (!value) return [];
-  return value
-    .split(",")
-    .map((id) => id.trim())
-    .filter((id): id is AddOnId => KNOWN_ADD_ON_IDS.has(id as AddOnId));
-}
 
 function NotBookableMessage({ reason }: { reason: string }) {
   const message =
@@ -60,13 +51,14 @@ function NotBookableMessage({ reason }: { reason: string }) {
 
 interface BookingPageProps {
   params: Promise<{ quoteId: string }>;
-  searchParams: Promise<{ addOns?: string | string[] }>;
+  searchParams: Promise<CustomizationSelectionSearchParams>;
 }
 
 export default async function QuoteBookingPage({ params, searchParams }: BookingPageProps) {
   const { quoteId } = await params;
-  const { addOns } = await searchParams;
-  const addOnIds = parseAddOnIds(addOns);
+  const resolvedSearchParams = await searchParams;
+  const selection = parseCustomizationSelectionParams(resolvedSearchParams);
+  const { addOnIds, specialRooms, movePackageLevel, outdoorSelection, quantifiedAddOns } = selection;
 
   const repo = createSupabaseBookingRepository();
   const quoteResult = await getQuoteForBooking(quoteId, repo);
@@ -89,6 +81,10 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
     baseInput: quote.baseInput,
     firstCleaningEligible: eligibility.eligible,
     addOnIds,
+    specialRooms,
+    movePackageLevel,
+    outdoorSelection,
+    quantifiedAddOns,
     asOf: new Date(),
   });
   const achPackageOptions = buildAchPackageOptions(options.packages);
@@ -98,7 +94,7 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
       <BookingPaymentClient
         quoteId={quoteId}
         defaultFrequency={quote.baseInput.frequency}
-        addOnIds={addOnIds}
+        selection={selection}
         normalOptions={options.normal}
         futureRecurringOptions={options.futureRecurring}
         packageOptions={options.packages}

@@ -7,10 +7,10 @@ import type {
   InstantQuoteRequestAutomaticEstimate,
   InstantQuoteRequestManualReview,
 } from "@/lib/instant-quote/instant-quote-request-result";
-import type { AddOnId } from "@/lib/pricing/types";
+import { encodeCustomizationSelectionParams } from "@/lib/booking/customization-selection-params";
 import CustomizeSection from "./CustomizeSection";
 import EstimateResult from "./EstimateResult";
-import { mapWizardFormToRawInput } from "./map-form-to-raw-input";
+import { EMPTY_ADD_ON_SELECTION, mapWizardFormToRawInput, type AddOnSelection } from "./map-form-to-raw-input";
 import { isStepOneValid, isStepTwoValid } from "./step-validation";
 import StepOneCleaning from "./StepOneCleaning";
 import StepTwoContact from "./StepTwoContact";
@@ -37,7 +37,7 @@ export default function QuoteWizard({ nowIso }: QuoteWizardProps) {
   const [result, setResult] = useState<
     InstantQuoteRequestAutomaticEstimate | InstantQuoteRequestManualReview | null
   >(null);
-  const [selectedAddOnIds, setSelectedAddOnIds] = useState<AddOnId[]>([]);
+  const [selection, setSelection] = useState<AddOnSelection>(EMPTY_ADD_ON_SELECTION);
 
   function updateField<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) {
     setFormState((prev) => ({ ...prev, [key]: value }));
@@ -83,20 +83,21 @@ export default function QuoteWizard({ nowIso }: QuoteWizardProps) {
   function handleEditDetails() {
     setResult(null);
     setSubmitError(null);
-    setSelectedAddOnIds([]);
+    setSelection(EMPTY_ADD_ON_SELECTION);
     setPhase("step1");
   }
 
   if (phase === "result" && result) {
+    const selectionQuery = encodeCustomizationSelectionParams(selection).toString();
     const bookingHref =
       result.success && result.quoteId
-        ? `/quote/${result.quoteId}/booking${selectedAddOnIds.length > 0 ? `?addOns=${selectedAddOnIds.join(",")}` : ""}`
+        ? `/quote/${result.quoteId}/booking${selectionQuery ? `?${selectionQuery}` : ""}`
         : undefined;
 
     return (
       <div className="mx-auto max-w-3xl px-6 py-16 sm:py-20 lg:px-8">
         <EstimateResult result={result} frequency="one_time" onEditDetails={handleEditDetails} bookingHref={bookingHref}>
-          <CustomizeSection formState={formState} onAddOnsChange={setSelectedAddOnIds} />
+          <CustomizeSection formState={formState} onSelectionChange={setSelection} />
         </EstimateResult>
       </div>
     );

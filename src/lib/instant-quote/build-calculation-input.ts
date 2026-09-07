@@ -45,6 +45,11 @@ export function buildCalculationInput(
     visitCount: validated.visitCount,
     addOnIds: validated.addOnIds,
     visitAddOns: validated.visitAddOns ?? undefined,
+    specialRooms: validated.specialRooms.length > 0 ? validated.specialRooms : undefined,
+    movePackageLevel: validated.movePackageLevel ?? undefined,
+    moveDirection: validated.moveDirection ?? undefined,
+    outdoorSelection: validated.outdoorSelection ?? undefined,
+    quantifiedAddOns: validated.quantifiedAddOns.length > 0 ? validated.quantifiedAddOns : undefined,
     firstCleaningEligible,
     asOf,
   };

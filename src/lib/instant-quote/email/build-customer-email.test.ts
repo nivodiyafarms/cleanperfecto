@@ -41,6 +41,8 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     manualReviewRequired: false,
     manualReviewReasons: [],
     minimumServiceTotalApplied: false,
+    movePackageLevel: null,
+    moveCompleteUpgradeConfigured: null,
     ...overrides,
   };
 }

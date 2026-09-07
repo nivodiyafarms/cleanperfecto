@@ -21,6 +21,8 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
     manualReviewRequired: false,
     manualReviewReasons: [],
     minimumServiceTotalApplied: false,
+    movePackageLevel: null,
+    moveCompleteUpgradeConfigured: null,
     ...overrides,
   };
 }
@@ -42,6 +44,8 @@ describe("mapToCustomerSafeResult", () => {
       regularDisplayRangeLower: null,
       regularDisplayRangeUpper: null,
       minimumServiceFloorApplied: false,
+      movePackageLevel: null,
+      moveCompleteUpgradeConfigured: null,
     });
   });
 

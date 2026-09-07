@@ -1,5 +1,13 @@
-import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
-import type { AddOnId } from "@/lib/pricing/types";
+import { ADD_ON_CATALOG, QUANTIFIED_ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
+import type {
+  AddOnId,
+  MoveDirection,
+  MovePackageLevel,
+  OutdoorSelection,
+  QuantifiedAddOnId,
+  QuantifiedAddOnSelection,
+  SpecialRoomId,
+} from "@/lib/pricing/types";
 import { normalizePhone } from "./normalize-phone";
 import type { InstantQuoteRawInput, LeadSource, ValidatedInstantQuoteInput } from "./types";
 
@@ -24,6 +32,15 @@ const LEAD_SOURCES = new Set<LeadSource>([
   "other",
 ]);
 const VALID_ADD_ON_IDS = new Set(Object.keys(ADD_ON_CATALOG));
+const VALID_QUANTIFIED_ADD_ON_IDS = new Set(Object.keys(QUANTIFIED_ADD_ON_CATALOG));
+const SPECIAL_ROOM_IDS = new Set<SpecialRoomId>(["game_room", "media_room"]);
+const MOVE_PACKAGE_LEVELS = new Set<MovePackageLevel>(["basic", "complete"]);
+const MOVE_DIRECTIONS = new Set<MoveDirection>(["move_in", "move_out"]);
+const OUTDOOR_SIZES = new Set(["small", "medium", "large"]);
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
 
 function isValidCalendarDate(value: string): boolean {
   const [year, month, day] = value.split("-").map(Number);
@@ -189,6 +206,93 @@ export function validateInstantQuoteInput(raw: InstantQuoteRawInput): ValidateIn
     }
   }
 
+  let specialRooms: SpecialRoomId[] = [];
+  if (raw.specialRooms !== undefined) {
+    if (
+      !Array.isArray(raw.specialRooms) ||
+      !raw.specialRooms.every((id) => typeof id === "string" && SPECIAL_ROOM_IDS.has(id as SpecialRoomId))
+    ) {
+      errors.push("specialRooms contains an unrecognized room");
+    } else {
+      specialRooms = raw.specialRooms;
+    }
+  }
+
+  let movePackageLevel: MovePackageLevel | null = null;
+  if (raw.movePackageLevel !== undefined) {
+    if (!MOVE_PACKAGE_LEVELS.has(raw.movePackageLevel)) {
+      errors.push("movePackageLevel is not a recognized value");
+    } else {
+      movePackageLevel = raw.movePackageLevel;
+    }
+  }
+
+  let moveDirection: MoveDirection | null = null;
+  if (raw.moveDirection !== undefined) {
+    if (!MOVE_DIRECTIONS.has(raw.moveDirection)) {
+      errors.push("moveDirection is not a recognized value");
+    } else {
+      moveDirection = raw.moveDirection;
+    }
+  }
+
+  let outdoorSelection: OutdoorSelection | null = null;
+  if (raw.outdoorSelection !== undefined) {
+    const outdoor = raw.outdoorSelection;
+    const outdoorErrors: string[] = [];
+    const validated: OutdoorSelection = {};
+
+    if (outdoor.porchSqFt !== undefined) {
+      if (!isPositiveInteger(outdoor.porchSqFt)) outdoorErrors.push("outdoorSelection.porchSqFt must be a positive integer");
+      else validated.porchSqFt = outdoor.porchSqFt;
+    }
+    if (outdoor.patioSqFt !== undefined) {
+      if (!isPositiveInteger(outdoor.patioSqFt)) outdoorErrors.push("outdoorSelection.patioSqFt must be a positive integer");
+      else validated.patioSqFt = outdoor.patioSqFt;
+    }
+    if (outdoor.garageCars !== undefined) {
+      if (!isPositiveInteger(outdoor.garageCars)) outdoorErrors.push("outdoorSelection.garageCars must be a positive integer");
+      else validated.garageCars = outdoor.garageCars;
+    }
+    if (outdoor.oilDegreaseAffectedBays !== undefined) {
+      if (!isPositiveInteger(outdoor.oilDegreaseAffectedBays))
+        outdoorErrors.push("outdoorSelection.oilDegreaseAffectedBays must be a positive integer");
+      else validated.oilDegreaseAffectedBays = outdoor.oilDegreaseAffectedBays;
+    }
+    if (outdoor.trio !== undefined) {
+      if (!OUTDOOR_SIZES.has(outdoor.trio)) outdoorErrors.push("outdoorSelection.trio is not a recognized value");
+      else validated.trio = outdoor.trio;
+    }
+    if (outdoor.algaeMildewTreatmentSize !== undefined) {
+      if (!OUTDOOR_SIZES.has(outdoor.algaeMildewTreatmentSize))
+        outdoorErrors.push("outdoorSelection.algaeMildewTreatmentSize is not a recognized value");
+      else validated.algaeMildewTreatmentSize = outdoor.algaeMildewTreatmentSize;
+    }
+
+    errors.push(...outdoorErrors);
+    if (outdoorErrors.length === 0) {
+      outdoorSelection = validated;
+    }
+  }
+
+  let quantifiedAddOns: QuantifiedAddOnSelection[] = [];
+  if (raw.quantifiedAddOns !== undefined) {
+    const isValidQuantifiedList =
+      Array.isArray(raw.quantifiedAddOns) &&
+      raw.quantifiedAddOns.every(
+        (entry) =>
+          entry &&
+          typeof entry.id === "string" &&
+          VALID_QUANTIFIED_ADD_ON_IDS.has(entry.id) &&
+          isPositiveInteger(entry.quantity)
+      );
+    if (!isValidQuantifiedList) {
+      errors.push("quantifiedAddOns must be an array of { id, quantity } with a recognized id and a positive integer quantity");
+    } else {
+      quantifiedAddOns = raw.quantifiedAddOns as { id: QuantifiedAddOnId; quantity: number }[];
+    }
+  }
+
   if (errors.length > 0) {
     return { valid: false, errors };
   }
@@ -206,6 +310,11 @@ export function validateInstantQuoteInput(raw: InstantQuoteRawInput): ValidateIn
       visitCount: raw.visitCount,
       addOnIds: [...raw.addOnIds],
       visitAddOns,
+      specialRooms,
+      movePackageLevel,
+      moveDirection,
+      outdoorSelection,
+      quantifiedAddOns,
       name,
       phone,
       email,

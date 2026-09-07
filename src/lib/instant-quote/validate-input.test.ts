@@ -26,6 +26,81 @@ describe("validateInstantQuoteInput", () => {
     expect(result.valid).toBe(true);
   });
 
+  // -------------------------------------------------------------------
+  // Backward compatibility: the pre-hotfix live wizard shape (no
+  // specialRooms/movePackageLevel/moveDirection/outdoorSelection/
+  // quantifiedAddOns at all) must keep validating and default safely —
+  // these new selections are additive, never mandatory for existing callers.
+  // -------------------------------------------------------------------
+  it("validates an old-shape payload (pre-hotfix, no new optional fields) and defaults every new selection to none/basic", () => {
+    const result = validateInstantQuoteInput(validRawInput());
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.specialRooms).toEqual([]);
+      expect(result.value.movePackageLevel).toBeNull();
+      expect(result.value.moveDirection).toBeNull();
+      expect(result.value.outdoorSelection).toBeNull();
+      expect(result.value.quantifiedAddOns).toEqual([]);
+    }
+  });
+
+  it("accepts valid new selections together", () => {
+    const result = validateInstantQuoteInput(
+      validRawInput({
+        cleaningType: "move",
+        specialRooms: ["game_room", "media_room"],
+        movePackageLevel: "complete",
+        moveDirection: "move_out",
+        outdoorSelection: { garageCars: 2, trio: undefined, algaeMildewTreatmentSize: "small" },
+        quantifiedAddOns: [{ id: "interior_window_detailing", quantity: 3 }],
+      })
+    );
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.value.specialRooms).toEqual(["game_room", "media_room"]);
+      expect(result.value.movePackageLevel).toBe("complete");
+      expect(result.value.moveDirection).toBe("move_out");
+      expect(result.value.outdoorSelection).toEqual({ garageCars: 2, algaeMildewTreatmentSize: "small" });
+      expect(result.value.quantifiedAddOns).toEqual([{ id: "interior_window_detailing", quantity: 3 }]);
+    }
+  });
+
+  it("rejects an unrecognized specialRooms entry", () => {
+    const result = validateInstantQuoteInput(validRawInput({ specialRooms: ["sunroom"] as never }));
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an unrecognized movePackageLevel", () => {
+    const result = validateInstantQuoteInput(validRawInput({ movePackageLevel: "premium" as never }));
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an unrecognized moveDirection", () => {
+    const result = validateInstantQuoteInput(validRawInput({ moveDirection: "sideways" as never }));
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects a non-positive outdoorSelection dimension", () => {
+    const result = validateInstantQuoteInput(validRawInput({ outdoorSelection: { porchSqFt: 0 } }));
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects an unrecognized Trio size", () => {
+    const result = validateInstantQuoteInput(validRawInput({ outdoorSelection: { trio: "extra-large" as never } }));
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects a quantifiedAddOns entry with an unrecognized id or non-positive quantity", () => {
+    expect(
+      validateInstantQuoteInput(validRawInput({ quantifiedAddOns: [{ id: "extra_pet_hair_removal" as never, quantity: 1 }] }))
+        .valid
+    ).toBe(false);
+    expect(
+      validateInstantQuoteInput(validRawInput({ quantifiedAddOns: [{ id: "interior_window_detailing", quantity: 0 }] }))
+        .valid
+    ).toBe(false);
+  });
+
   it("accepts phone-only contact", () => {
     const result = validateInstantQuoteInput(validRawInput({ email: undefined }));
     expect(result.valid).toBe(true);

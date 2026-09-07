@@ -7,6 +7,8 @@
  * quoteId because it persisted a row; the preview doesn't, because it
  * persists nothing).
  */
+import type { MovePackageLevel } from "@/lib/pricing/types";
+
 export interface InstantQuoteEstimateDisplay {
   estimateType: "instant_range";
   /**
@@ -44,6 +46,17 @@ export interface InstantQuoteEstimateDisplay {
    * unconditionally whenever a discount was applied.
    */
   minimumServiceFloorApplied: boolean;
+
+  /** Null unless the request's cleaningType is "move" (Move-In/Move-Out). */
+  movePackageLevel: MovePackageLevel | null;
+  /**
+   * False only when Complete was requested but the property's square
+   * footage is beyond the configured Complete-upgrade bands — the UI must
+   * show "Custom Quote" for Complete rather than the number above (which,
+   * in that specific case, is actually Basic's price — see
+   * calculate-estimate.ts). Null unless movePackageLevel is non-null.
+   */
+  moveCompleteUpgradeConfigured: boolean | null;
 }
 
 export interface InstantQuoteManualReviewDisplay {

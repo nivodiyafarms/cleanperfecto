@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import type { EstimateRange } from "@/lib/pricing/types";
+import type { EstimateRange, MovePackageLevel } from "@/lib/pricing/types";
 import { buildCalculationInput } from "./build-calculation-input";
 import { calculateEstimateWithComparison } from "./estimate-with-comparison";
 import { buildQuoteRequestRow } from "./build-quote-request-row";
@@ -54,6 +54,10 @@ export type SubmitInstantQuoteResult =
       manualReviewReasons: InstantQuoteManualReviewReasonCode[];
       /** Whether the $99 minimum-service floor capped this calculation's discount — see calculate-estimate.ts. */
       minimumServiceTotalApplied: boolean;
+      /** Null unless cleaningType === "move". */
+      movePackageLevel: MovePackageLevel | null;
+      /** False only when Complete was requested but square footage is beyond the configured upgrade bands. Null unless movePackageLevel is non-null. */
+      moveCompleteUpgradeConfigured: boolean | null;
     }
   | { ok: false; stage: "validation"; errors: string[] }
   | { ok: false; stage: "persistence"; error: string }
@@ -199,6 +203,8 @@ export async function submitInstantQuote(
       manualReviewRequired: calculationResult.manualReviewRequired || identityConflict,
       manualReviewReasons: row.manual_review_reasons,
       minimumServiceTotalApplied: calculationResult.minimumServiceTotalApplied,
+      movePackageLevel: calculationResult.movePackageLevel,
+      moveCompleteUpgradeConfigured: calculationResult.moveCompleteUpgradeConfigured,
     };
   } catch (err) {
     return {

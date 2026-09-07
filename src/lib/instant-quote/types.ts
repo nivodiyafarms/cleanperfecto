@@ -1,4 +1,15 @@
-import type { AddOnId, CleaningType, Condition, FrequencyId, ManualReviewReasonCode } from "@/lib/pricing/types";
+import type {
+  AddOnId,
+  CleaningType,
+  Condition,
+  FrequencyId,
+  ManualReviewReasonCode,
+  MoveDirection,
+  MovePackageLevel,
+  OutdoorSelection,
+  QuantifiedAddOnSelection,
+  SpecialRoomId,
+} from "@/lib/pricing/types";
 
 /**
  * The pricing engine's own ManualReviewReasonCode, plus reasons that
@@ -62,6 +73,14 @@ export interface InstantQuoteRawInput {
   visitCount: number;
   addOnIds: AddOnId[];
   visitAddOns?: AddOnId[][];
+  /** Optional dedicated Game Room / Media-Theater Room selections. */
+  specialRooms?: SpecialRoomId[];
+  /** Only meaningful when cleaningType === "move"; defaults to "basic" when omitted. */
+  movePackageLevel?: MovePackageLevel;
+  /** Cosmetic pass-through only — pricing is identical for both directions. */
+  moveDirection?: MoveDirection;
+  outdoorSelection?: OutdoorSelection;
+  quantifiedAddOns?: QuantifiedAddOnSelection[];
 
   name: string;
   /** Raw as typed by the customer. At least one of phone/email is required. */
@@ -97,6 +116,11 @@ export interface ValidatedInstantQuoteInput {
   visitCount: number;
   addOnIds: AddOnId[];
   visitAddOns: AddOnId[][] | null;
+  specialRooms: SpecialRoomId[];
+  movePackageLevel: MovePackageLevel | null;
+  moveDirection: MoveDirection | null;
+  outdoorSelection: OutdoorSelection | null;
+  quantifiedAddOns: QuantifiedAddOnSelection[];
 
   name: string;
   phone: string | null;

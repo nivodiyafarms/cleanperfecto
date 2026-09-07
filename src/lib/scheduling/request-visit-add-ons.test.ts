@@ -99,7 +99,7 @@ describe("requestVisitAddOns", () => {
     });
 
     expect(result.pricing.addOnIds).toEqual(["inside_oven"]);
-    expect(result.pricing.addOnAmount).toBe(35);
+    expect(result.pricing.addOnAmount).toBe(30);
     expect(result.manualQuoteAddOnIds).toEqual(["boxing_packing"]);
   });
 

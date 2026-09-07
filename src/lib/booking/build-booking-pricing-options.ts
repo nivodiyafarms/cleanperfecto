@@ -1,5 +1,14 @@
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
-import type { AddOnId, CalculationInput, CalculationResult, FrequencyId } from "@/lib/pricing/types";
+import type {
+  AddOnId,
+  CalculationInput,
+  CalculationResult,
+  FrequencyId,
+  MovePackageLevel,
+  OutdoorSelection,
+  QuantifiedAddOnSelection,
+  SpecialRoomId,
+} from "@/lib/pricing/types";
 import type { BookingPricingOptions, PrepaidFrequency } from "./types";
 
 const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "every_4_weeks"];
@@ -16,6 +25,11 @@ export interface BuildBookingPricingOptionsParams {
   firstCleaningEligible: boolean;
   /** Raw add-on ids carried from the quote's post-estimate customization, re-priced here via the trusted catalog. Applied to normal options only — a prepaid package purchase never collects add-ons (see business rule in the approved plan). */
   addOnIds: AddOnId[];
+  /** The rest of the post-estimate customization selection — same "normal options only" rule as addOnIds above. */
+  specialRooms?: SpecialRoomId[];
+  movePackageLevel?: MovePackageLevel;
+  outdoorSelection?: OutdoorSelection;
+  quantifiedAddOns?: QuantifiedAddOnSelection[];
   asOf: Date;
 }
 
@@ -29,7 +43,8 @@ export interface BuildBookingPricingOptionsParams {
  * caching or per-tab round trip is needed.
  */
 export function buildBookingPricingOptions(params: BuildBookingPricingOptionsParams): BookingPricingOptions {
-  const { baseInput, firstCleaningEligible, addOnIds, asOf } = params;
+  const { baseInput, firstCleaningEligible, addOnIds, specialRooms, movePackageLevel, outdoorSelection, quantifiedAddOns, asOf } =
+    params;
 
   const normal = {} as Record<FrequencyId, CalculationResult>;
   for (const frequency of NORMAL_FREQUENCIES) {
@@ -39,6 +54,10 @@ export function buildBookingPricingOptions(params: BuildBookingPricingOptionsPar
       isPrepaidPackage: false,
       visitCount: 1,
       addOnIds,
+      specialRooms,
+      movePackageLevel,
+      outdoorSelection,
+      quantifiedAddOns,
       visitAddOns: undefined,
       firstCleaningEligible,
       asOf,
@@ -59,6 +78,10 @@ export function buildBookingPricingOptions(params: BuildBookingPricingOptionsPar
       isPrepaidPackage: false,
       visitCount: 1,
       addOnIds,
+      specialRooms,
+      movePackageLevel,
+      outdoorSelection,
+      quantifiedAddOns,
       visitAddOns: undefined,
       firstCleaningEligible: false,
       asOf,

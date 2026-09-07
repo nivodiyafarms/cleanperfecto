@@ -3,8 +3,7 @@
 import { redirect } from "next/navigation";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
-import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
-import type { AddOnId, FrequencyId } from "@/lib/pricing/types";
+import type { FrequencyId } from "@/lib/pricing/types";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
@@ -16,10 +15,16 @@ import { getStripeClient } from "./stripe/client";
 import { resolveStripeCustomerId } from "./stripe/customers";
 import { createSupabaseBookingRepository } from "./supabase-booking-repository";
 import type { NormalBookingSelectionInput, NotBookableReason } from "./types";
+import {
+  validateAddOnIds,
+  validateMovePackageLevel,
+  validateOutdoorSelection,
+  validateQuantifiedAddOns,
+  validateSpecialRooms,
+} from "./validate-customization-selection";
 
 const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "every_4_weeks"];
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const KNOWN_ADD_ON_IDS = new Set(Object.keys(ADD_ON_CATALOG) as AddOnId[]);
 
 const GENERIC_ERROR_MESSAGE = `We couldn't start your booking right now. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
 
@@ -69,7 +74,11 @@ export async function createNormalBookingCheckout(
   }
   const quote = quoteResult.quote;
 
-  const addOnIds = raw.addOnIds.filter((id) => KNOWN_ADD_ON_IDS.has(id));
+  const addOnIds = validateAddOnIds(raw.addOnIds);
+  const specialRooms = validateSpecialRooms(raw.specialRooms);
+  const movePackageLevel = validateMovePackageLevel(raw.movePackageLevel);
+  const outdoorSelection = validateOutdoorSelection(raw.outdoorSelection);
+  const quantifiedAddOns = validateQuantifiedAddOns(raw.quantifiedAddOns);
 
   let sessionUrl: string;
   try {
@@ -90,6 +99,10 @@ export async function createNormalBookingCheckout(
       isPrepaidPackage: false,
       visitCount: 1,
       addOnIds,
+      specialRooms,
+      movePackageLevel,
+      outdoorSelection,
+      quantifiedAddOns,
       visitAddOns: undefined,
       firstCleaningEligible: eligibility.eligible,
       asOf,

@@ -1,4 +1,4 @@
-import type { CleaningType, Condition } from "@/lib/pricing/types";
+import type { CleaningType, Condition, MoveDirection } from "@/lib/pricing/types";
 import type { InstantQuotePropertyType, LeadSource } from "@/lib/instant-quote/types";
 
 /**
@@ -30,6 +30,8 @@ export interface WizardFormState {
   squareFeet: string; // raw text field value — parsed at submission time; "" means not provided
   condition: Condition;
   zip: string;
+  /** Only meaningful when cleaningType === "move" — cosmetic only, pricing is identical for both directions. */
+  moveDirection: MoveDirection;
 
   // Step 2 — Where should we send your estimate?
   firstName: string;
@@ -49,6 +51,7 @@ export const DEFAULT_WIZARD_FORM_STATE: WizardFormState = {
   squareFeet: "",
   condition: "light",
   zip: "",
+  moveDirection: "move_out",
 
   firstName: "",
   phone: "",

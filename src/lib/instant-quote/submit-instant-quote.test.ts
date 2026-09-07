@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CustomerContactPatch, CustomerRecord, NewCustomerInput } from "./customer-repository";
 import type { InsertQuoteRequestResult, InstantQuoteRepository } from "./repository";
 import type { QuoteRequestRow } from "./build-quote-request-row";
+import { mapToCustomerSafeResult } from "./instant-quote-request-result";
 import { submitInstantQuote, type SubmitInstantQuoteInternalDependencies } from "./submit-instant-quote";
 import type { InstantQuoteRawInput } from "./types";
 import { buildServiceAddressIdentity } from "./normalize-address";
@@ -243,7 +244,7 @@ describe("submitInstantQuote", () => {
       deps({ repo })
     );
     const snapshot = repo.insertedRows[0].pricing_snapshot.result;
-    expect(snapshot.packageAddOnsTotal).toBe(35);
+    expect(snapshot.packageAddOnsTotal).toBe(30);
   });
 
   it("maps a one-time deep clean to the legacy service_id 'deep'", async () => {
@@ -524,5 +525,198 @@ describe("submitInstantQuote", () => {
       expect("entryChannel" in input).toBe(false);
       expect("asOf" in input).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backward compatibility (2026-08-30 pricing hotfix): the pre-hotfix live
+// wizard sends a payload shaped exactly like `rawInput()` above — no
+// specialRooms/movePackageLevel/moveDirection/outdoorSelection/
+// quantifiedAddOns at all. That old-shaped payload must keep validating and
+// calculating successfully with safe defaults, since these new selections
+// are additive and never mandatory for an existing caller that doesn't know
+// about them.
+// ---------------------------------------------------------------------------
+
+describe("backward compatibility with the pre-hotfix payload shape", () => {
+  it("an old-shape (no new hotfix fields) one-time Standard quote still submits successfully", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput(), deps({ repo }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.estimateType).toBe("instant_range");
+    }
+  });
+
+  it("an old-shape Move-In/Move-Out quote (no movePackageLevel sent at all) defaults to Basic and prices/persists correctly", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(rawInput({ cleaningType: "move" }), deps({ repo }));
+    expect(result.ok).toBe(true);
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.input.movePackageLevel).toBeUndefined();
+    expect(snapshot.result.movePackageLevel).toBe("basic");
+    expect(snapshot.result.moveCompleteUpgrade).toBe(0);
+    expect(snapshot.result.includedByCompletePackage).toEqual([]);
+  });
+
+  it("every new selection defaults to none/zero on the persisted result when the old payload shape is used", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput(), deps({ repo }));
+    const result = repo.insertedRows[0].pricing_snapshot.result;
+    expect(result.specialRoomCharges).toEqual([]);
+    expect(result.specialRoomChargesTotal).toBe(0);
+    expect(result.quantifiedAddOns).toEqual([]);
+    expect(result.quantifiedAddOnsTotal).toBe(0);
+    expect(result.outdoorCharges).toEqual([]);
+    expect(result.outdoorChargesTotal).toBe(0);
+    expect(result.outdoorManualCharges).toEqual([]);
+    expect(result.movePackageLevel).toBeNull(); // not a move request
+    expect(result.moveDirection).toBeNull();
+    expect(result.includedByCompletePackage).toEqual([]);
+    expect(result.completePackageRecommended).toBe(false);
+  });
+
+  it("produces the same deterministic total as every other test using this exact old-shape payload (Standard, 1BR, light, one-time, first-cleaning eligible)", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput(), deps({ repo }));
+    // Matches the figure other pre-existing tests in this file already rely
+    // on for this exact rawInput()/deps() combination (e.g. the "smuggled
+    // pricing_snapshot" test above) — 30% first-cleaning off $129, +$15 flat supplies.
+    expect(repo.insertedRows[0].calculated_total).toBe(105.3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence verification (2026-08-30 pricing hotfix): every new selection/
+// quantity/package choice must survive the full path from raw customer
+// input through calculateEstimate to quote_requests.pricing_snapshot,
+// without any DB migration (pricing_snapshot is an existing jsonb column
+// that stores { input, result } verbatim).
+// ---------------------------------------------------------------------------
+
+describe("new hotfix selections survive persistence end-to-end", () => {
+  it("Game Room / Media Room selections survive into pricing_snapshot.input and .result", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(rawInput({ specialRooms: ["game_room", "media_room"] }), deps({ repo }));
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.input.specialRooms).toEqual(["game_room", "media_room"]);
+    expect(snapshot.result.specialRoomCharges.map((c) => c.id).sort()).toEqual(["game_room", "media_room"]);
+    expect(snapshot.result.specialRoomChargesTotal).toBeGreaterThan(0);
+  });
+
+  it("Move package level, direction, and the Complete upgrade survive into pricing_snapshot", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(
+      rawInput({ cleaningType: "move", movePackageLevel: "complete", moveDirection: "move_out", squareFeet: 1300 }),
+      deps({ repo })
+    );
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.input.movePackageLevel).toBe("complete");
+    expect(snapshot.input.moveDirection).toBe("move_out");
+    expect(snapshot.result.movePackageLevel).toBe("complete");
+    expect(snapshot.result.moveDirection).toBe("move_out");
+    expect(snapshot.result.moveCompleteUpgrade).toBe(50);
+    expect(repo.insertedRows[0].calculated_total).toBe(snapshot.result.calculatedTotal);
+  });
+
+  it("outdoor selections (Trio + condition treatments) survive into pricing_snapshot", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(
+      rawInput({ outdoorSelection: { trio: "small", algaeMildewTreatmentSize: "medium" } }),
+      deps({ repo })
+    );
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.input.outdoorSelection).toEqual({ trio: "small", algaeMildewTreatmentSize: "medium" });
+    expect(snapshot.result.outdoorChargesTotal).toBe(99 + 75);
+  });
+
+  it("quantified (per-unit) add-ons survive into pricing_snapshot with their quantity intact", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(
+      rawInput({ quantifiedAddOns: [{ id: "interior_window_detailing", quantity: 4 }] }),
+      deps({ repo })
+    );
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.input.quantifiedAddOns).toEqual([{ id: "interior_window_detailing", quantity: 4 }]);
+    expect(snapshot.result.quantifiedAddOns).toEqual([
+      { id: "interior_window_detailing", label: "Interior Window Detailing", quantity: 4, amount: 40 },
+    ]);
+    expect(snapshot.result.quantifiedAddOnsTotal).toBe(40);
+  });
+
+  it("Complete package double-charge prevention survives end-to-end: includedByCompletePackage is persisted, not merely computed and discarded", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    await submitInstantQuote(
+      rawInput({
+        cleaningType: "move",
+        movePackageLevel: "complete",
+        addOnIds: ["inside_refrigerator", "inside_oven", "inside_cabinets_drawers"],
+      }),
+      deps({ repo })
+    );
+    const snapshot = repo.insertedRows[0].pricing_snapshot;
+    expect(snapshot.result.pricedAddOnsTotal).toBe(0);
+    expect(snapshot.result.includedByCompletePackage.map((a) => a.id).sort()).toEqual(
+      ["inside_cabinets_drawers", "inside_oven", "inside_refrigerator"].sort()
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Complete >4,500 sq ft submission safety (owner audit request, 2026-08-31):
+// under REAL production config, a >4,500 sq ft request hits the general
+// square-footage ceiling before ever reaching the Complete-specific branch
+// (both ceilings coincide at 4,500 sq ft for the largest tier) — the whole
+// request becomes manual-review, so the customer-safe result never exposes
+// ANY calculatedTotal/range at all, not Basic's and not a fabricated
+// Complete figure. This is a stronger guarantee than the isolated
+// engine-level "Complete unconfigured, Basic still priced" case covered by
+// hotfix-2026-08-30.test.ts (which requires an isolated config override to
+// even construct, since real production config never reaches it).
+// ---------------------------------------------------------------------------
+
+describe("Complete >4,500 sq ft submission safety", () => {
+  it("a >4,500 sq ft Move-In/Move-Out Complete request never presents or persists a fabricated instant total", async () => {
+    const repo = new FakeInstantQuoteRepository();
+    const result = await submitInstantQuote(
+      rawInput({
+        cleaningType: "move",
+        movePackageLevel: "complete",
+        rooms: { bedrooms: 4, fullBathrooms: 3, halfBathrooms: 0 }, // resolves to the 4br_plus tier (4,500 sq ft ceiling)
+        squareFeet: 4600,
+      }),
+      deps({ repo })
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The customer-safe result carries no usable instant price for this request.
+      expect(result.estimateType).toBe("manual_review");
+      expect(result.manualReviewRequired).toBe(true);
+      expect(result.range).toBeNull();
+    }
+
+    // The persisted row is unambiguously flagged manual-review — an admin
+    // resolves the real scope/price by hand; nothing here is presentable as
+    // an automatic quote.
+    const row = repo.insertedRows[0];
+    expect(row.estimate_type).toBe("manual_review");
+    expect(row.display_range_lower).toBeNull();
+    expect(row.display_range_upper).toBeNull();
+    expect(row.manual_review_reasons).toEqual(
+      expect.arrayContaining(["SQUARE_FOOTAGE_BEYOND_CONFIGURED_LIMIT", "MOVE_COMPLETE_UPGRADE_NOT_CONFIGURED"])
+    );
+
+    // The customer-safe mapper — what the actual public submission path
+    // (submitInstantQuoteRequest -> mapToCustomerSafeResult) hands to the
+    // UI — never exposes calculatedTotal/displayRange fields for a
+    // manual_review result at all, verified structurally, not just by value.
+    if (result.ok) {
+      const customerSafe = mapToCustomerSafeResult(result);
+      expect(customerSafe.estimateType).toBe("manual_review");
+      expect(customerSafe).not.toHaveProperty("displayRangeLower");
+      expect(customerSafe).not.toHaveProperty("displayRangeUpper");
+      expect(customerSafe).not.toHaveProperty("calculatedTotal");
+    }
   });
 });

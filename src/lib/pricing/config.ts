@@ -22,7 +22,7 @@ export const RANGE_MINIMUM_GAP: Record<Condition, number> = {
 };
 
 export const PACKAGE_MIN_VISITS = 6;
-/** Owner-approved 2026-08-19: additional 10% off (was 20%) for a 6+ prepaid package, applied sequentially after recurring-cycle pricing. */
+/** Finalized owner-approved 2026-08-31: an additional 10% off (was 20%) for a 6+ prepaid package, applied sequentially after recurring-cycle pricing — see discount-program.ts. */
 export const PACKAGE_DISCOUNT_MULTIPLIER = 0.9;
 
 /**

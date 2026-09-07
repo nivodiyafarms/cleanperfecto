@@ -30,6 +30,21 @@ export type { FrequencyId };
 
 export type EstimateType = "instant-range" | "manual-review";
 
+/** Optional dedicated rooms, priced through the same generic room-adjustment mechanism as bedrooms/bathrooms — see room-adjustments.ts's getSpecialRoomCharges. */
+export type SpecialRoomId = "game_room" | "media_room";
+
+/**
+ * Move-In/Move-Out package tier (owner-approved hotfix, 2026-08-30). Only
+ * meaningful when cleaningType === "move" — ignored otherwise. Defaults to
+ * "basic" when omitted on a move request. Complete = Basic + a square-
+ * footage-banded upgrade (see move-package.ts) and folds Refrigerator/Oven/
+ * Cabinet Interior into the package instead of charging them standalone.
+ */
+export type MovePackageLevel = "basic" | "complete";
+
+/** Cosmetic pass-through only — pricing is identical for both directions. Carried so persistence/UI can label "Move-In" vs "Move-Out" without inventing a second CleaningType. */
+export type MoveDirection = "move_in" | "move_out";
+
 export type DiscountProgram =
   | "none"
   | "first_cleaning"
@@ -46,11 +61,18 @@ export type ManualReviewReasonCode =
   | "SQUARE_FOOTAGE_BEYOND_CONFIGURED_LIMIT"
   | "ROOM_ADJUSTMENT_NOT_CONFIGURED"
   | "MANUAL_QUOTE_ADD_ON_SELECTED"
-  | "ADD_ON_VISIT_ASSIGNMENT_REQUIRED";
+  | "ADD_ON_VISIT_ASSIGNMENT_REQUIRED"
+  | "MOVE_COMPLETE_UPGRADE_NOT_CONFIGURED"
+  | "PORCH_BEYOND_CONFIGURED_LIMIT"
+  | "PATIO_BEYOND_CONFIGURED_LIMIT"
+  | "GARAGE_BEYOND_CONFIGURED_LIMIT"
+  | "TRIO_CAPACITY_EXCEEDED"
+  | "OIL_DEGREASE_BAYS_EXCEED_GARAGE_CAPACITY";
 
 export type AddOnId =
   | "inside_oven"
   | "inside_refrigerator"
+  | "refrigerator_oven_bundle"
   | "inside_cabinets_drawers"
   | "extra_pet_hair_removal"
   | "carpet_shampooing"
@@ -58,10 +80,68 @@ export type AddOnId =
   | "additional_interior_window_detailing"
   | "boxing_packing";
 
+/** Priced per unit (e.g. per pane) rather than as a flat presence/absence charge — see add-ons.ts's QUANTIFIED_ADD_ON_CATALOG. */
+export type QuantifiedAddOnId = "interior_window_detailing" | "exterior_window_cleaning";
+
+export interface QuantifiedAddOnSelection {
+  id: QuantifiedAddOnId;
+  /** Count of units (e.g. windows). Must be a positive integer. */
+  quantity: number;
+}
+
+export interface SpecialRoomChargeResult {
+  id: SpecialRoomId;
+  label: string;
+  amount: number;
+}
+
+export interface QuantifiedAddOnResult {
+  id: QuantifiedAddOnId;
+  label: string;
+  quantity: number;
+  amount: number;
+}
+
+export interface OutdoorChargeResult {
+  id: string;
+  label: string;
+  amount: number;
+}
+
+export interface OutdoorManualChargeResult {
+  id: string;
+  label: string;
+}
+
 export interface RoomCounts {
   bedrooms: number;
   fullBathrooms: number;
   halfBathrooms: number;
+}
+
+export type PorchSize = "small" | "medium" | "large";
+export type PatioSize = "small" | "medium" | "large";
+export type TrioSize = "small" | "medium" | "large";
+export type AlgaeMildewTreatmentSize = "small" | "medium" | "large";
+
+/**
+ * Outdoor add-ons — an entirely separate pricing category from indoor
+ * add-ons/room adjustments (owner-approved hotfix, 2026-08-30). A Trio is an
+ * EXPLICIT customer selection, never auto-bundled from individually chosen
+ * dimensions (see outdoor-add-ons.ts). When `trio` is set, `porchSqFt`/
+ * `patioSqFt`/`garageCars` (if also provided) are used only to validate they
+ * fit the selected Trio's capacity — they never add a second, separate
+ * charge on top of the Trio's flat price.
+ */
+export interface OutdoorSelection {
+  porchSqFt?: number;
+  patioSqFt?: number;
+  /** 1, 2, or 3 cars are priced; more than 3 requires manual/custom pricing. */
+  garageCars?: number;
+  trio?: TrioSize;
+  /** Number of garage bays affected by heavy oil/grease buildup — must not exceed the known garage capacity (garageCars, or the Trio's included garage size). */
+  oilDegreaseAffectedBays?: number;
+  algaeMildewTreatmentSize?: AlgaeMildewTreatmentSize;
 }
 
 export interface CalculationInput {
@@ -71,12 +151,22 @@ export interface CalculationInput {
   sizeTier: SizeTier;
   /** Actual bedroom/bathroom counts, only needed once they exceed the size tier's baseline (see config.ts SIZE_TIER_BASELINE_ROOMS). */
   rooms?: RoomCounts;
+  /** Optional dedicated Game Room / Media-Theater Room selections — priced through room-adjustments.ts's getSpecialRoomCharges, folded into roomAdjustments. */
+  specialRooms?: SpecialRoomId[];
   /** Approximate square footage. Omit entirely when the customer hasn't provided it — the multiplier then stays neutral (1.00) with no manual-review flag. */
   squareFeet?: number;
   zip: string;
   frequency: FrequencyId;
   isPrepaidPackage: boolean;
   visitCount: number;
+  /** Only meaningful when cleaningType === "move"; defaults to "basic" when omitted. See MovePackageLevel. */
+  movePackageLevel?: MovePackageLevel;
+  /** Cosmetic pass-through only — see MoveDirection. */
+  moveDirection?: MoveDirection;
+  /** Porch/Patio/Garage/Trio + condition-treatment selections. See OutdoorSelection. */
+  outdoorSelection?: OutdoorSelection;
+  /** Per-unit priced add-ons (e.g. windows). Not per-visit-assignable for a prepaid package — same one-off-only scope as addOnIds. */
+  quantifiedAddOns?: QuantifiedAddOnSelection[];
   /**
    * Add-ons for a single, one-off cleaning (one-time or plain recurring —
    * NOT a 6+ prepaid package). Ignored when the request resolves to the
@@ -138,6 +228,11 @@ export interface CalculationResult {
   roomAdjustments: number;
   roomAdjustmentConfigured: boolean;
 
+  /** Game Room / Media-Theater Room charges — already folded into roomAdjustments above (same generic pre-multiplier mechanism); broken out here only so a customer breakdown can label them separately. */
+  specialRoomCharges: SpecialRoomChargeResult[];
+  specialRoomChargesTotal: number;
+  specialRoomsConfigured: boolean;
+
   squareFootageMultiplier: number;
   squareFootageConfigured: boolean;
 
@@ -169,6 +264,43 @@ export interface CalculationResult {
   packagePricedAddOns: PricedAddOnResult[];
   /** Manual-quote add-ons selected across `visitAddOns`, each tagged with its 1-based visitNumber. Empty unless discountProgram === "prepaid_package". */
   packageManualQuoteAddOns: ManualQuoteAddOnResult[];
+
+  /** Per-unit priced add-ons (e.g. windows). Reflects `quantifiedAddOns`; not package-visit-assignable. */
+  quantifiedAddOns: QuantifiedAddOnResult[];
+  quantifiedAddOnsTotal: number;
+
+  /** Null unless cleaningType === "move". Echoes the resolved package level (defaults to "basic"). */
+  movePackageLevel: MovePackageLevel | null;
+  /** Cosmetic pass-through of the input field — null unless cleaningType === "move" and it was supplied. */
+  moveDirection: MoveDirection | null;
+  /**
+   * The equivalent Deep Cleaning total for this exact request (same
+   * property/rooms/special rooms/sqft/condition/zip/travel/frequency/
+   * eligibility — no add-ons), used to enforce "Basic Move-In/Out >=
+   * equivalent Deep". Null unless cleaningType === "move".
+   */
+  moveEquivalentDeepTotal: number | null;
+  /** True when the equivalent-Deep floor (not the $99 minimum) is what raised Basic Move's total above its own raw calculation. Null unless cleaningType === "move". */
+  moveFloorApplied: boolean | null;
+  /** The square-footage-banded Complete package upgrade actually applied (0 for Basic). Null unless cleaningType === "move". */
+  moveCompleteUpgrade: number | null;
+  /** False when Complete was requested but square footage is beyond the configured upgrade bands (manual/custom quote) — see MOVE_COMPLETE_UPGRADE_NOT_CONFIGURED. Null unless cleaningType === "move". */
+  moveCompleteUpgradeConfigured: boolean | null;
+  /** Refrigerator/Oven/Cabinet-Interior add-ons folded into a Complete package instead of charged standalone — never double-charged even if submitted in addOnIds. Empty unless movePackageLevel === "complete". */
+  includedByCompletePackage: ManualQuoteAddOnResult[];
+  /**
+   * True when a Basic Move-In/Out request selected all three standalone
+   * interior add-ons (Refrigerator, Oven or the bundle, Cabinets) for a
+   * combined price exceeding the Complete package upgrade — informational
+   * only, never auto-switches movePackageLevel or pricing.
+   */
+  completePackageRecommended: boolean;
+
+  /** Porch/Patio/Garage/Trio/condition-treatment charges. Reflects `outdoorSelection`. */
+  outdoorCharges: OutdoorChargeResult[];
+  outdoorChargesTotal: number;
+  /** Outdoor components that exceed configured limits/capacity and require a custom quote — excluded from outdoorChargesTotal, never guessed at. */
+  outdoorManualCharges: OutdoorManualChargeResult[];
 
   activeFirstCleaningOfferPercent: number | null;
   firstCleaningEligible: boolean;

@@ -207,7 +207,7 @@ describe("confirmVisitPricingAction", () => {
     const pricing = fake.state.servicePricingByVisitId.get(visit.id);
     expect(pricing?.priceStatus).toBe("confirmed");
     expect(pricing?.confirmedBy).toBe("admin:admin-1");
-    expect(pricing?.totalAmount).toBe(185); // 150 base + 35 inside_oven
+    expect(pricing?.totalAmount).toBe(180); // 150 base + 30 inside_oven
   });
 
   it("requires a visit id", async () => {

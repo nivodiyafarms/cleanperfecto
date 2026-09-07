@@ -52,6 +52,15 @@ describe("dispatchDueNotifications", () => {
     expect(emailState.sentEmails[0].to).toBe(CONTACT.email);
   });
 
+  // NOTE: claim due-ness is evaluated by claimDueServiceVisitNotifications
+  // itself (the fake mirrors the real Postgres RPC's use of `now()`) against
+  // the REAL wall clock — never against the `now` parameter passed to
+  // dispatchDueNotifications, which only ever affects retry-backoff
+  // scheduling math (see recordOutcome above). So every fixture below uses
+  // an offset relative to Date.now(), never a fixed calendar date — a fixed
+  // future date eventually becomes the past as real time advances, which is
+  // exactly what caused this test to start failing.
+
   it("does not claim a pending row whose scheduled_send_at is still in the future", async () => {
     const { repo } = createFakeSchedulingRepository();
     const visit = await seedVisit(repo);
@@ -60,14 +69,109 @@ describe("dispatchDueNotifications", () => {
       customerId: "customer-1",
       notificationType: "reminder_24h",
       channel: "email",
-      scheduledSendAt: new Date("2026-09-01T00:00:00Z"),
+      scheduledSendAt: new Date(Date.now() + 24 * 60 * 60_000),
       versionKey: "v1",
     });
     const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
     const { sender: email } = createFakeEmailSender();
     const { sender: sms } = createFakeSmsSender();
 
-    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T00:00:00Z"));
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup);
+    expect(result.claimed).toBe(0);
+  });
+
+  it("claims a pending row whose scheduled_send_at is exactly now", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    const exactlyNow = new Date();
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "email",
+      scheduledSendAt: exactlyNow,
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup);
+    expect(result.claimed).toBe(1);
+  });
+
+  // A true 1ms boundary can't be asserted reliably against the real wall
+  // clock without mocking it (no fake-timer convention exists elsewhere in
+  // this suite) — real execution time between enqueueing and dispatching
+  // would make a 1ms-wide window flaky in either direction. This uses a
+  // margin generous enough to never be crossed by normal test execution,
+  // while still being far short of any real dispatch cadence (the cron runs
+  // every 5 minutes), so it still meaningfully exercises the boundary.
+  const SAFE_TEST_MARGIN_MS = 60_000;
+
+  it("claims a pending row scheduled shortly in the past, and never claims one scheduled shortly in the future", async () => {
+    const { repo: pastRepo } = createFakeSchedulingRepository();
+    const pastVisit = await seedVisit(pastRepo);
+    await enqueueNotification(pastRepo, {
+      serviceVisitId: pastVisit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "email",
+      scheduledSendAt: new Date(Date.now() - SAFE_TEST_MARGIN_MS),
+      versionKey: "v1",
+    });
+    const { repo: pastPreferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const pastResult = await dispatchDueNotifications(
+      pastRepo,
+      pastPreferencesRepo,
+      { email: createFakeEmailSender().sender, sms: createFakeSmsSender().sender },
+      contactLookup
+    );
+    expect(pastResult.claimed).toBe(1);
+
+    const { repo: futureRepo } = createFakeSchedulingRepository();
+    const futureVisit = await seedVisit(futureRepo);
+    await enqueueNotification(futureRepo, {
+      serviceVisitId: futureVisit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "email",
+      scheduledSendAt: new Date(Date.now() + SAFE_TEST_MARGIN_MS),
+      versionKey: "v1",
+    });
+    const { repo: futurePreferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const futureResult = await dispatchDueNotifications(
+      futureRepo,
+      futurePreferencesRepo,
+      { email: createFakeEmailSender().sender, sms: createFakeSmsSender().sender },
+      contactLookup
+    );
+    expect(futureResult.claimed).toBe(0);
+  });
+
+  it("gates claiming on the absolute instant, never on the ISO string's timezone offset", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    // Same absolute instant as `Date.now() + 2 hours`, merely expressed with
+    // a non-UTC offset — must still be treated as 2 hours in the future, not
+    // "already due" due to any naive string/local-time comparison.
+    const twoHoursFromNow = new Date(Date.now() + 2 * 60 * 60_000);
+    const nonUtcIso = new Date(twoHoursFromNow.getTime() + 5 * 60 * 60_000).toISOString().replace("Z", "+05:00");
+    expect(new Date(nonUtcIso).getTime()).toBe(twoHoursFromNow.getTime());
+
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "reminder_24h",
+      channel: "email",
+      scheduledSendAt: new Date(nonUtcIso),
+      versionKey: "v1",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup);
     expect(result.claimed).toBe(0);
   });
 
