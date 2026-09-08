@@ -168,6 +168,10 @@ export interface BookingOrderRow {
   cancellationPolicyVersion: string | null;
   /** The exact Payment Authorization copy shown for THIS booking (SAVED_PAYMENT_AUTHORIZATION_COPY or PREPAID_PAYMENT_AUTHORIZATION_COPY), frozen verbatim at booking creation — durable evidence of the exact wording accepted, not just a version tag. Null for rows created before this evidence was captured. See 20260827090400's migration comment. */
   paymentAuthorizationTextSnapshot: string | null;
+  /** Which consent_versions row (Service Terms) applied to THIS booking's combined checkbox — the same server-validated active-version id used for the customer's customer_consents row in the same request. consent_versions rows are immutable, so this is a durable pointer to the exact text shown. Null for rows created before this evidence was captured. See 20260827090500's migration comment. */
+  consentVersionId: string | null;
+  /** The exact cancellation/rescheduling/no-access wording shown for THIS booking, frozen verbatim (see formatCancellationPolicySnapshot). cancellationPolicyVersion alone is only a version tag, not durably-versioned text. Null for rows created before this evidence was captured. */
+  cancellationPolicyTextSnapshot: string | null;
 }
 
 export interface NewBookingOrderRow {
@@ -200,6 +204,10 @@ export interface NewBookingOrderRow {
   cancellationPolicyVersion: string | null;
   /** Optional — defaults to null in the repository when omitted, so every pre-existing caller/test stays valid. Real booking-creation callers (createNormalBookingCheckout/createPrepaidPackageCheckout) always pass it explicitly. */
   paymentAuthorizationTextSnapshot?: string | null;
+  /** Optional — defaults to null when omitted. Server-derived only (from acceptConsentClickwrap's validated return value) — never accepted as raw client input. */
+  consentVersionId?: string | null;
+  /** Optional — defaults to null when omitted. Server-derived only (formatCancellationPolicySnapshot) — never accepted as raw client input. */
+  cancellationPolicyTextSnapshot?: string | null;
 }
 
 export interface PaymentAttemptRow {

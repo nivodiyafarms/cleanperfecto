@@ -36,6 +36,8 @@ function fakeDetails(): BookingEmailDetails {
     requestedStartTime: "14:00",
     cancellationPolicyVersion: "2026-08-19",
     paymentAuthorizationTextSnapshot: "test payment authorization copy",
+    consentVersionId: "version-1",
+    cancellationPolicyTextSnapshot: "test cancellation policy snapshot",
   };
 
   return { bookingOrder, customerName: "Jamie Customer", customerEmail: "jamie@example.com", customerPhone: "+14695551234" };

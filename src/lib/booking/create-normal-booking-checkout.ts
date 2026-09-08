@@ -11,7 +11,7 @@ import { captureAuditHeaders } from "@/lib/consent/capture-audit-headers";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
-import { CANCELLATION_POLICY_VERSION, SAVED_PAYMENT_AUTHORIZATION_COPY } from "./cancellation-policy";
+import { CANCELLATION_POLICY_VERSION, SAVED_PAYMENT_AUTHORIZATION_COPY, formatCancellationPolicySnapshot } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { getSiteUrl } from "./site-url";
@@ -111,7 +111,11 @@ export async function createNormalBookingCheckout(
     // the same clientRequestId simply finds the customer already signed
     // for the active version and returns unchanged.
     const { ipAddress, userAgent } = await captureAuditHeaders();
-    await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
+    // Captured (not discarded) so booking_orders.consent_version_id is
+    // always the server-CONFIRMED active version — never the raw,
+    // merely-validated client-supplied id — even though the two are
+    // guaranteed equal by acceptConsentClickwrap's own check.
+    const consentAcceptance = await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
       customerId: quote.customerId,
       presentedConsentVersionId: raw.presentedConsentVersionId,
       ipAddress,
@@ -152,6 +156,11 @@ export async function createNormalBookingCheckout(
       // 20260827090400's migration comment for why this exists alongside
       // cancellationPolicyVersion rather than replacing it.
       paymentAuthorizationTextSnapshot: SAVED_PAYMENT_AUTHORIZATION_COPY,
+      // Booking-level evidence closing the last gap: which Service Terms
+      // version applied, and the exact cancellation wording shown — both
+      // server-derived, never accepted from raw client input.
+      consentVersionId: consentAcceptance.consentVersionId,
+      cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(false),
     });
 
     const stripe = getStripeClient();

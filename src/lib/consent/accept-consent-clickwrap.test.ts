@@ -81,6 +81,18 @@ describe("acceptConsentClickwrap", () => {
     ).rejects.toThrow(ConsentVersionChangedError);
   });
 
+  it("a browser-forged version id — a plausible-looking but wrong/stale id, not merely an empty one — never gets recorded as accepted (7); this is the exact shared mechanism both createNormalBookingCheckout and createPrepaidPackageCheckout rely on, since neither does any version-matching of its own", async () => {
+    const { repo: consentRepo, state } = createFakeConsentRepository();
+    const { repo: schedulingRepo } = createFakeSchedulingRepository();
+
+    await expect(
+      acceptConsentClickwrap(consentRepo, schedulingRepo, baseInput({ presentedConsentVersionId: "11111111-1111-1111-1111-111111111111" }))
+    ).rejects.toThrow(ConsentVersionChangedError);
+
+    // No consent row was created/signed for the forged id at all.
+    expect(state.consents.size).toBe(0);
+  });
+
   it("refuses to accept when no consent version is active at all", async () => {
     const { repo: consentRepo } = createFakeConsentRepository({ versions: [] });
     const { repo: schedulingRepo } = createFakeSchedulingRepository();

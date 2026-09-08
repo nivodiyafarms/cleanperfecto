@@ -12,7 +12,7 @@ import { createSupabaseConsentRepository } from "@/lib/consent/consent-repositor
 import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { applyAchIncentive } from "./ach-incentive";
-import { CANCELLATION_POLICY_VERSION, PREPAID_PAYMENT_AUTHORIZATION_COPY } from "./cancellation-policy";
+import { CANCELLATION_POLICY_VERSION, PREPAID_PAYMENT_AUTHORIZATION_COPY, formatCancellationPolicySnapshot } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { PREPAID_FREQUENCY_LABELS } from "./labels";
@@ -101,7 +101,7 @@ export async function createPrepaidPackageCheckout(
     // order exists so a version-race rejection never leaves a
     // half-created booking behind.
     const { ipAddress, userAgent } = await captureAuditHeaders();
-    await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
+    const consentAcceptance = await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
       customerId: quote.customerId,
       presentedConsentVersionId: raw.presentedConsentVersionId,
       ipAddress,
@@ -116,7 +116,14 @@ export async function createPrepaidPackageCheckout(
       cleaningType: quote.cleaningType,
       frequency: raw.frequency,
       visitCount: PREPAID_VISIT_COUNT,
-      paymentAuthorizationAcceptedAt: null,
+      // Now populated (previously null): a prepaid purchase also requires
+      // the same combined clickwrap checkbox, so this timestamp
+      // legitimately represents that same combined-acceptance instant
+      // here too — see 20260827090500's updated column comment. The DB
+      // constraint (booking_orders_payment_authorization_required_for_normal)
+      // only requires this to be non-null for a normal booking; it never
+      // forbade a prepaid row from also carrying a real value.
+      paymentAuthorizationAcceptedAt: asOf.toISOString(),
       pricingVersion: result.pricingVersion,
       pricingSnapshot: { input: calculationInput, result },
       calculatedTotal: result.calculatedTotal,
@@ -145,6 +152,8 @@ export async function createPrepaidPackageCheckout(
       // Payment Authorization wording shown for this booking. See
       // 20260827090400's migration comment.
       paymentAuthorizationTextSnapshot: PREPAID_PAYMENT_AUTHORIZATION_COPY,
+      consentVersionId: consentAcceptance.consentVersionId,
+      cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(true),
     });
 
     const stripe = getStripeClient();

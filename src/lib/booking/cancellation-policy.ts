@@ -55,3 +55,21 @@ export const COMBINED_CONSENT_CHECKBOX_COPY =
  */
 export const PREPAID_PAYMENT_AUTHORIZATION_COPY =
   "You are paying your full prepaid package total today by the payment method you select below. No further charge is authorized here — any material change to your package scope requires your separate approval before an additional amount is owed.";
+
+/**
+ * Renders the exact cancellation-policy wording shown to the customer
+ * (the same CANCELLATION_POLICY_TIERS array the dialog/disclosure UI
+ * renders from, plus PREPAID_PACKAGE_CANCELLATION_NOTE for a package) as
+ * one stable text block — frozen verbatim into
+ * booking_orders.cancellation_policy_text_snapshot at booking creation.
+ * Never a second, independently-maintained copy of the wording: this
+ * reads the same source constants the UI does, so storage and display can
+ * never drift apart in content, only in formatting.
+ */
+export function formatCancellationPolicySnapshot(forPrepaidPackage: boolean): string {
+  const lines = CANCELLATION_POLICY_TIERS.map((tier) => `${tier.window}: ${tier.fee}`);
+  if (forPrepaidPackage) {
+    lines.push(PREPAID_PACKAGE_CANCELLATION_NOTE);
+  }
+  return lines.join("\n");
+}
