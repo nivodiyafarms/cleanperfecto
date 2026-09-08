@@ -46,6 +46,7 @@ function toBookingOrderRow(row: Record<string, unknown>): BookingOrderRow {
     requestedTimeWindow: (row.requested_time_window as BookingOrderRow["requestedTimeWindow"]) ?? null,
     requestedStartTime: (row.requested_start_time as string | null) ?? null,
     cancellationPolicyVersion: (row.cancellation_policy_version as string | null) ?? null,
+    paymentAuthorizationTextSnapshot: (row.payment_authorization_text_snapshot as string | null) ?? null,
   };
 }
 
@@ -199,6 +200,7 @@ export function createSupabaseBookingRepository(): BookingRepository {
         requested_time_window: row.requestedTimeWindow,
         requested_start_time: row.requestedStartTime,
         cancellation_policy_version: row.cancellationPolicyVersion,
+        payment_authorization_text_snapshot: row.paymentAuthorizationTextSnapshot ?? null,
       };
 
       // Insert-or-fetch by client_request_id: `upsert` with

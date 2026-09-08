@@ -70,6 +70,7 @@ export function createFakeConsentRepository(options: FakeConsentRepositoryOption
         signedAt: null,
         acceptedTextSnapshot: null,
         signedName: null,
+        acceptanceMethod: null,
         ipAddress: null,
         userAgent: null,
         signedDocumentPath: null,
@@ -103,6 +104,7 @@ export function createFakeConsentRepository(options: FakeConsentRepositoryOption
           c.signedAt = new Date();
           c.signedName = input.signedName;
           c.acceptedTextSnapshot = input.acceptedTextSnapshot;
+          c.acceptanceMethod = input.acceptanceMethod ?? "clickwrap";
           c.ipAddress = input.ipAddress;
           c.userAgent = input.userAgent;
           return c;

@@ -166,6 +166,8 @@ export interface BookingOrderRow {
   requestedStartTime: string | null;
   /** Which cancellation-policy text version the customer accepted, recorded alongside paymentAuthorizationAcceptedAt. Null for rows created before this policy existed or for a prepaid package (no saved-payment authorization checkbox — see cancellation-policy.ts). */
   cancellationPolicyVersion: string | null;
+  /** The exact Payment Authorization copy shown for THIS booking (SAVED_PAYMENT_AUTHORIZATION_COPY or PREPAID_PAYMENT_AUTHORIZATION_COPY), frozen verbatim at booking creation — durable evidence of the exact wording accepted, not just a version tag. Null for rows created before this evidence was captured. See 20260827090400's migration comment. */
+  paymentAuthorizationTextSnapshot: string | null;
 }
 
 export interface NewBookingOrderRow {
@@ -196,6 +198,8 @@ export interface NewBookingOrderRow {
   requestedTimeWindow: TimeWindow | null;
   requestedStartTime: string | null;
   cancellationPolicyVersion: string | null;
+  /** Optional — defaults to null in the repository when omitted, so every pre-existing caller/test stays valid. Real booking-creation callers (createNormalBookingCheckout/createPrepaidPackageCheckout) always pass it explicitly. */
+  paymentAuthorizationTextSnapshot?: string | null;
 }
 
 export interface PaymentAttemptRow {

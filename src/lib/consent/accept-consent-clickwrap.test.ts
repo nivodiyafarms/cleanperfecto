@@ -54,6 +54,15 @@ describe("acceptConsentClickwrap", () => {
     // all (enforced by TypeScript) — this is clickwrap, not a signature.
   });
 
+  it("records acceptanceMethod='clickwrap' — durable evidence that signedName was system-populated, never a typed signature (consent evidence audit)", async () => {
+    const { repo: consentRepo } = createFakeConsentRepository({ customerNames: { "customer-1": "Jane Doe" } });
+    const { repo: schedulingRepo } = createFakeSchedulingRepository();
+
+    const record = await acceptConsentClickwrap(consentRepo, schedulingRepo, baseInput());
+
+    expect(record.acceptanceMethod).toBe("clickwrap");
+  });
+
   it("falls back to a generic name when the customer has none on record, rather than failing", async () => {
     const { repo: consentRepo } = createFakeConsentRepository();
     const { repo: schedulingRepo } = createFakeSchedulingRepository();

@@ -12,7 +12,7 @@ import { createSupabaseConsentRepository } from "@/lib/consent/consent-repositor
 import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { applyAchIncentive } from "./ach-incentive";
-import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
+import { CANCELLATION_POLICY_VERSION, PREPAID_PAYMENT_AUTHORIZATION_COPY } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { PREPAID_FREQUENCY_LABELS } from "./labels";
@@ -141,6 +141,10 @@ export async function createPrepaidPackageCheckout(
       // fee schedule now IS accepted here too (via the required consent
       // checkbox above), so its version is recorded like a normal booking.
       cancellationPolicyVersion: CANCELLATION_POLICY_VERSION,
+      // Frozen verbatim — durable evidence of the EXACT prepaid-specific
+      // Payment Authorization wording shown for this booking. See
+      // 20260827090400's migration comment.
+      paymentAuthorizationTextSnapshot: PREPAID_PAYMENT_AUTHORIZATION_COPY,
     });
 
     const stripe = getStripeClient();

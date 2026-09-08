@@ -38,6 +38,13 @@ describe("signConsent", () => {
     expect(record.acceptedTextSnapshot).toBeTruthy();
   });
 
+  it("records acceptanceMethod='typed_signature' — distinguishable in raw data from a clickwrap acceptance (consent evidence audit)", async () => {
+    const { repo: consentRepo } = createFakeConsentRepository();
+    const { repo: schedulingRepo } = createFakeSchedulingRepository();
+    const record = await signConsent(consentRepo, schedulingRepo, baseInput());
+    expect(record.acceptanceMethod).toBe("typed_signature");
+  });
+
   it("does not block signing when IP/user-agent are unavailable", async () => {
     const { repo: consentRepo } = createFakeConsentRepository();
     const { repo: schedulingRepo } = createFakeSchedulingRepository();

@@ -77,6 +77,7 @@ export async function acceptConsentClickwrap(
   const accepted = await consentRepo.sign(existing.id, {
     signedName: customerName,
     acceptedTextSnapshot: activeVersion.bodyText,
+    acceptanceMethod: "clickwrap",
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
   });

@@ -71,6 +71,7 @@ export async function signConsent(
   const signed = await consentRepo.sign(existing.id, {
     signedName: trimmedName,
     acceptedTextSnapshot: activeVersion.bodyText,
+    acceptanceMethod: "typed_signature",
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
   });

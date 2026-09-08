@@ -63,6 +63,7 @@ describe("enqueueConsentRequest", () => {
       signedAt: new Date(),
       acceptedTextSnapshot: "old text",
       signedName: "Jane Doe",
+      acceptanceMethod: "clickwrap",
       ipAddress: null,
       userAgent: null,
       signedDocumentPath: null,

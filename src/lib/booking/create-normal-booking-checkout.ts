@@ -11,7 +11,7 @@ import { captureAuditHeaders } from "@/lib/consent/capture-audit-headers";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
-import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
+import { CANCELLATION_POLICY_VERSION, SAVED_PAYMENT_AUTHORIZATION_COPY } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { getSiteUrl } from "./site-url";
@@ -147,6 +147,11 @@ export async function createNormalBookingCheckout(
       requestedTimeWindow: null,
       requestedStartTime: raw.requestedStartTime,
       cancellationPolicyVersion: CANCELLATION_POLICY_VERSION,
+      // Frozen verbatim — durable evidence of the EXACT wording shown for
+      // this booking's Payment Authorization, not just a version tag. See
+      // 20260827090400's migration comment for why this exists alongside
+      // cancellationPolicyVersion rather than replacing it.
+      paymentAuthorizationTextSnapshot: SAVED_PAYMENT_AUTHORIZATION_COPY,
     });
 
     const stripe = getStripeClient();

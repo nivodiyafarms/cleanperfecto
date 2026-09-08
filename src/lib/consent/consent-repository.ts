@@ -4,6 +4,16 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type ConsentState = "sent" | "viewed" | "declined" | "signed";
 
+/**
+ * How a 'signed' row's acceptance was actually captured — see the
+ * acceptance_method column comment (20260827090400 migration). clickwrap:
+ * a required checkbox, signedName populated from customers.name, never
+ * typed by the customer. typed_signature: the customer typed their own
+ * legal name (sign-consent.ts) — authored but currently unreachable from
+ * any live caller.
+ */
+export type ConsentAcceptanceMethod = "clickwrap" | "typed_signature";
+
 export interface ConsentVersionRecord {
   id: string;
   versionLabel: string;
@@ -25,6 +35,8 @@ export interface CustomerConsentRecord {
   signedAt: Date | null;
   acceptedTextSnapshot: string | null;
   signedName: string | null;
+  /** Null until signed (state='sent'/'viewed'/'declined'); always populated once state='signed' — see ConsentAcceptanceMethod. */
+  acceptanceMethod: ConsentAcceptanceMethod | null;
   ipAddress: string | null;
   userAgent: string | null;
   /** Path/hash of the retained signed-document PDF (private signed-consents Storage bucket). Both null until generated; set together, exactly once. */
@@ -36,6 +48,15 @@ export interface SignConsentInput {
   signedName: string;
   /** The frozen, exact text of the SINGLE agreement being accepted — no per-clause acceptance, this is all-or-nothing. */
   acceptedTextSnapshot: string;
+  /**
+   * How this specific call is capturing acceptance. Optional — defaults to
+   * 'clickwrap' (the only path with a live caller today) when omitted, so
+   * this stays additive against every pre-existing caller/test. The two
+   * real domain callers (accept-consent-clickwrap.ts, sign-consent.ts)
+   * always pass it explicitly rather than relying on the default, so a raw
+   * DB row is never ambiguous about which mechanism actually ran.
+   */
+  acceptanceMethod?: ConsentAcceptanceMethod;
   /** Supplemental audit evidence only — never required. */
   ipAddress: string | null;
   userAgent: string | null;
@@ -106,6 +127,7 @@ function toConsentRecord(row: Record<string, unknown>): CustomerConsentRecord {
     signedAt: row.signed_at ? new Date(row.signed_at as string) : null,
     acceptedTextSnapshot: (row.accepted_text_snapshot as string | null) ?? null,
     signedName: (row.signed_name as string | null) ?? null,
+    acceptanceMethod: (row.acceptance_method as ConsentAcceptanceMethod | null) ?? null,
     ipAddress: (row.ip_address as string | null) ?? null,
     userAgent: (row.user_agent as string | null) ?? null,
     signedDocumentPath: (row.signed_document_path as string | null) ?? null,
@@ -201,6 +223,7 @@ export function createSupabaseConsentRepository(): ConsentRepository {
           signed_at: new Date().toISOString(),
           signed_name: input.signedName,
           accepted_text_snapshot: input.acceptedTextSnapshot,
+          acceptance_method: input.acceptanceMethod ?? "clickwrap",
           ip_address: input.ipAddress,
           user_agent: input.userAgent,
         })

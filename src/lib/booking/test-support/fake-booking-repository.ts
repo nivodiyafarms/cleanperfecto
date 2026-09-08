@@ -91,7 +91,7 @@ export function createFakeBookingRepository(
       }
 
       const id = randomUUID();
-      const created: BookingOrderRow = { id, status: "draft", ...row };
+      const created: BookingOrderRow = { id, status: "draft", paymentAuthorizationTextSnapshot: null, ...row };
       bookingOrdersById.set(id, created);
       bookingOrdersByClientRequestId.set(row.clientRequestId, id);
       return created;
