@@ -35,7 +35,6 @@ import type {
 } from "./domain-types";
 import type {
   CalendarDate,
-  FeeAssessmentState,
   PackageAmendmentApprovalState,
   PackageAmendmentPaymentState,
   PackageVisitPlanStatus,
@@ -89,8 +88,23 @@ export interface SchedulingRepository {
   // -- events / fees / reminders ---------------------------------------
   insertServiceVisitEvent(row: ServiceVisitEventRow): Promise<void>;
   insertServiceFeeAssessment(row: NewServiceFeeAssessmentRow): Promise<ServiceFeeAssessmentRow>;
-  /** Workflow-state transition only (assessed -> waived/paid/void) — never touches amount/feeType/policyVersion, which stay a frozen record of what was actually assessed. reasonAppend, if given, is appended to the existing reason (e.g. why a fee was waived) rather than overwriting the original assessment reason. */
-  updateServiceFeeAssessmentState(id: string, state: FeeAssessmentState, reasonAppend?: string): Promise<ServiceFeeAssessmentRow | null>;
+  /**
+   * Atomically waives a fee assessment AND writes the required
+   * financial_audit_log actor-attribution row, via a single Postgres RPC
+   * (waive_service_fee_assessment_with_audit) — either both commit or
+   * neither does. Refuses (throws) unless the row is currently
+   * state='assessed', so a duplicate/replayed waiver can never grow the
+   * reason text or double-audit the same logical action. Never touches
+   * amount/feeType/policyVersion, which stay a frozen record of what was
+   * actually assessed. The given reason is appended to any existing
+   * assessment reason (e.g. why the fee was waived) rather than
+   * overwriting it.
+   */
+  waiveServiceFeeAssessmentWithAudit(
+    id: string,
+    reason: string,
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceFeeAssessmentRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
@@ -206,8 +220,23 @@ export interface SchedulingRepository {
     id: string,
     patch: { status: ServiceVisitPaymentRow["status"]; failureCode?: string | null; failureMessage?: string | null; paidAt?: Date | null }
   ): Promise<ServiceVisitPaymentRow | null>;
-  /** Atomic external (zelle/cash) settlement — freezes the row (if not already), sets status='paid'/paidAt, and initializes taxTransactionStatus='pending' in one write, per the two-phase external-payment design. Refuses if a tip was never selected, or the row is already settled/mid-Stripe-attempt. */
-  recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch): Promise<ServiceVisitPaymentRow>;
+  /**
+   * Atomically settles an external (zelle/cash) payment AND writes the
+   * required financial_audit_log actor-attribution row, via a single
+   * Postgres RPC (record_external_visit_payment_with_audit) — either both
+   * commit or neither does. Freezes the row (if not already), sets
+   * status='paid'/paidAt, initializes taxTransactionStatus='pending', and
+   * transitions service_visit_pricing.payment_status to 'paid', all in one
+   * transaction. Refuses if the row is already settled/mid-Stripe-attempt.
+   * The Stripe Tax transaction commit itself remains a separate,
+   * deliberately best-effort step after this call returns — see
+   * record-external-payment.ts.
+   */
+  recordExternalServiceVisitPaymentWithAudit(
+    id: string,
+    patch: ServiceVisitPaymentExternalSettlementPatch,
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceVisitPaymentRow>;
   /** Tax-sync-only update — never touches status/paidAt/any frozen financial fact. Used by both the stripe_card reconciliation path and the external retry-tax-sync path. */
   updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch): Promise<ServiceVisitPaymentRow | null>;
   /** Refund reconciliation from charge.refunded — never touches tip/tax/total, only refund + status fields. */

@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
 import type { FrequencyId } from "@/lib/pricing/types";
+import { assertCanCreateStripeSetup } from "@/lib/config/payment-capabilities";
+import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
@@ -27,6 +29,8 @@ const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "ev
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const GENERIC_ERROR_MESSAGE = `We couldn't start your booking right now. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
+/** Customer-safe — never repeats internal configuration jargon (PAYMENT_MODE) to the customer. */
+const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE = `Online booking is temporarily unavailable. Please contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay} to schedule.`;
 
 export type CreateNormalBookingCheckoutResult =
   | { ok: false; stage: "validation"; errors: string[] }
@@ -82,6 +86,11 @@ export async function createNormalBookingCheckout(
 
   let sessionUrl: string;
   try {
+    // Every normal booking creates a setup-mode Checkout Session (no
+    // charge) — checked before any state mutation below so a disabled
+    // PAYMENT_MODE never leaves a half-created booking order behind.
+    assertCanCreateStripeSetup();
+
     const asOf = new Date();
 
     const eligibility = await checkFirstCleaningEligibility(
@@ -176,7 +185,10 @@ export async function createNormalBookingCheckout(
     // transition (findActivePaymentAttempt above already reused that
     // attempt's session in that case).
     await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
-  } catch {
+  } catch (error) {
+    if (error instanceof RuntimeConfigurationError) {
+      return { ok: false, stage: "failed", message: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
+    }
     return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
   }
 

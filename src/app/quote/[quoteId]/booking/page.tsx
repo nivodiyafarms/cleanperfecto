@@ -9,6 +9,7 @@ import {
 import { getQuoteForBooking } from "@/lib/booking/get-quote-for-booking";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
+import { canCreateStripeCharge, canCreateStripeSetup } from "@/lib/config/payment-capabilities";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import BookingPaymentClient from "@/components/booking/BookingPaymentClient";
 import GlassPanel from "@/components/ui/GlassPanel";
@@ -99,6 +100,8 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
         futureRecurringOptions={options.futureRecurring}
         packageOptions={options.packages}
         achPackageOptions={achPackageOptions}
+        stripeSetupAvailable={canCreateStripeSetup()}
+        stripeChargeAvailable={canCreateStripeCharge()}
       />
     </div>
   );

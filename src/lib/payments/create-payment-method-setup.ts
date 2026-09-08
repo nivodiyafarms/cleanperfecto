@@ -4,6 +4,7 @@ import type Stripe from "stripe";
 import type { BookingRepository } from "@/lib/booking/repository";
 import { getSiteUrl } from "@/lib/booking/site-url";
 import { resolveStripeCustomerId } from "@/lib/booking/stripe/customers";
+import { assertCanCreateStripeSetup } from "@/lib/config/payment-capabilities";
 import type { ServiceVisitRow } from "@/lib/scheduling/domain-types";
 
 /**
@@ -28,6 +29,8 @@ export async function createPaymentMethodSetupCheckoutSession(
   visit: Pick<ServiceVisitRow, "serviceAddressLine1" | "serviceAddressLine2" | "serviceCity" | "serviceState">,
   zip: string
 ): Promise<string> {
+  assertCanCreateStripeSetup();
+
   const stripeCustomerId = await resolveStripeCustomerId(
     stripe,
     customerId,

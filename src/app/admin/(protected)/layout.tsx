@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { signOutAction } from "@/lib/admin/actions/auth-actions";
 import { AdminUnauthorizedError, requireAdmin } from "@/lib/admin/require-admin";
+import EnvironmentBanner from "@/components/admin/EnvironmentBanner";
 
 const NAV_ITEMS = [
   { href: "/admin", label: "Schedule" },
@@ -54,6 +55,7 @@ export default async function AdminProtectedLayout({ children }: { children: Rea
 
   return (
     <div className="flex min-h-screen flex-col bg-background-alt">
+      <EnvironmentBanner />
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-3">
           <div className="flex flex-wrap items-center gap-6">

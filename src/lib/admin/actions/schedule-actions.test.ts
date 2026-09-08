@@ -3,6 +3,7 @@ import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fa
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import { confirmServiceVisit } from "@/lib/scheduling/confirm-service-visit";
 import { AdminUnauthorizedError } from "@/lib/admin/require-admin";
+import { AdminForbiddenError } from "@/lib/admin/rbac/capabilities";
 
 const DURATION_INPUT = { cleaningType: "standard" as const, sizeTier: "2br_2ba" as const, condition: "light" as const };
 
@@ -184,30 +185,127 @@ describe("completeVisitAction", () => {
 });
 
 describe("waiveFeeAction", () => {
-  it("rejects when unauthorized", async () => {
+  async function seedFee(overrides: Partial<Parameters<typeof fake.repo.insertServiceFeeAssessment>[0]> = {}) {
+    return fake.repo.insertServiceFeeAssessment({
+      serviceVisitId: "visit-x",
+      feeType: "cancellation",
+      amount: 25,
+      policyVersion: "test",
+      reason: "Late cancellation",
+      ...overrides,
+    });
+  }
+
+  it("rejects when unauthorized (D)", async () => {
     mockUnauthorized();
     await expect(waiveFeeAction(null, formData({ feeAssessmentId: "f", visitId: "v", reason: "goodwill" }))).rejects.toThrow(
       AdminUnauthorizedError
     );
+    expect(fake.state.financialAuditLog).toHaveLength(0);
   });
 
   it("requires a reason to waive a fee", async () => {
     mockAuthorized();
     const result = await waiveFeeAction(null, formData({ feeAssessmentId: "f", visitId: "v", reason: "" }));
     expect(result.ok).toBe(false);
+    expect(fake.state.financialAuditLog).toHaveLength(0);
   });
 
-  it("waives an existing fee assessment when a reason is given", async () => {
-    mockAuthorized();
-    const created = await fake.repo.insertServiceFeeAssessment({
-      serviceVisitId: "visit-x",
-      feeType: "cancellation",
-      amount: 25,
-      policyVersion: "test",
-      reason: "Late cancellation",
-    });
+  it("owner_admin: waives an existing fee assessment and persists actor audit atomically (A, F)", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "owner-1", supabaseUserId: "user-owner", role: "owner_admin" });
+    const created = await seedFee();
     const result = await waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Customer goodwill" }));
     expect(result.ok).toBe(true);
     expect(fake.state.feeAssessments.find((f) => f.id === created.id)?.state).toBe("waived");
+
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    const audit = fake.state.financialAuditLog[0];
+    expect(audit.actorAdminUserId).toBe("owner-1");
+    expect(audit.actorRole).toBe("owner_admin");
+    expect(audit.actionType).toBe("fee_waived");
+    expect(audit.targetEntityType).toBe("service_fee_assessment");
+    expect(audit.targetEntityId).toBe(created.id);
+    expect(audit.serviceVisitId).toBe("visit-x");
+    expect(audit.reason).toBe("Customer goodwill");
+    expect(audit.metadata).toMatchObject({ feeType: "cancellation", amount: 25, policyVersion: "test" });
+  });
+
+  it("legacy admin: transitionally behaves the same as owner_admin (B)", async () => {
+    mockAuthorized(); // role: "admin" — see mockAuthorized()
+    const created = await seedFee();
+    const result = await waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Customer goodwill" }));
+    expect(result.ok).toBe(true);
+    expect(fake.state.feeAssessments.find((f) => f.id === created.id)?.state).toBe("waived");
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    expect(fake.state.financialAuditLog[0]?.actorRole).toBe("admin");
+  });
+
+  it("Phase 2 RBAC: an operations-role admin CANNOT waive a fee — owner-only financial waiver (C)", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+    const created = await seedFee();
+    await expect(
+      waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Customer goodwill" }))
+    ).rejects.toThrow(AdminForbiddenError);
+    expect(fake.state.feeAssessments.find((f) => f.id === created.id)?.state).not.toBe("waived");
+    expect(fake.state.financialAuditLog).toHaveLength(0);
+  });
+
+  it("rolls back the waiver when the audit write fails — mutation and audit commit together or not at all (E)", async () => {
+    mockAuthorized();
+    const created = await seedFee();
+    fake.state.financialAuditControl.simulateFailure = true;
+
+    const result = await waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Customer goodwill" }));
+    expect(result.ok).toBe(false);
+    expect(fake.state.feeAssessments.find((f) => f.id === created.id)?.state).toBe("assessed");
+    expect(fake.state.financialAuditLog).toHaveLength(0);
+  });
+
+  it("rejects a duplicate/replayed waiver on an already-waived fee without creating a second audit row (G)", async () => {
+    mockAuthorized();
+    const created = await seedFee();
+    const first = await waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Customer goodwill" }));
+    expect(first.ok).toBe(true);
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+
+    const second = await waiveFeeAction(null, formData({ feeAssessmentId: created.id, visitId: "visit-x", reason: "Second attempt" }));
+    expect(second.ok).toBe(false);
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    expect(fake.state.feeAssessments.find((f) => f.id === created.id)?.reason).toBe("Late cancellation — Waived: Customer goodwill");
+  });
+});
+
+describe("Phase 2 RBAC: operations may perform permitted operational actions", () => {
+  it("an operations-role admin CAN complete a service visit", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+    const visit = await fake.repo.insertServiceVisit({
+      customerId: "customer-1",
+      quoteRequestId: null,
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      recurringScheduleId: null,
+      visitNumber: null,
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedStartAt: new Date(),
+      timezone: "America/Chicago",
+      serviceAddressLine1: "123 Main St",
+      serviceAddressLine2: null,
+      serviceCity: "Frisco",
+      serviceState: "TX",
+      serviceAddressIdentity: "75056|123 MAIN ST|",
+    });
+    const { confirmServiceVisit: confirm } = await import("@/lib/scheduling/confirm-service-visit");
+    await confirm(fake.repo, {
+      serviceVisitId: visit.id,
+      date: "2026-10-01",
+      startTime: "09:00",
+      cleanerIds: ["cleaner-1"],
+      durationInput: DURATION_INPUT,
+      actor: "admin:ops-1",
+    });
+
+    const result = await completeVisitAction(null, formData({ visitId: visit.id }));
+    expect(result.ok).toBe(true);
   });
 });

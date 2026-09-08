@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
+import { assertCapability } from "@/lib/admin/rbac/capabilities";
 import { findServiceVisitDetail } from "@/lib/admin/queries/service-visits";
 import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
 import { cancelServiceVisit } from "@/lib/scheduling/cancel-service-visit";
@@ -55,6 +56,7 @@ async function loadDurationInputOrError(visitId: string): Promise<LoadedDuration
  */
 export async function confirmVisitAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
+  assertCapability(admin.role, "schedule_visit_operations");
   const visitId = String(formData.get("visitId") ?? "");
   const date = String(formData.get("date") ?? "");
   const startTime = String(formData.get("startTime") ?? "");
@@ -93,6 +95,7 @@ export async function confirmVisitAction(_prevState: ActionResult | null, formDa
 
 export async function rescheduleVisitAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
+  assertCapability(admin.role, "schedule_visit_operations");
   const visitId = String(formData.get("visitId") ?? "");
   const date = String(formData.get("date") ?? "");
   const startTime = String(formData.get("startTime") ?? "");
@@ -131,6 +134,7 @@ export async function rescheduleVisitAction(_prevState: ActionResult | null, for
 
 export async function reassignCleanersAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
+  assertCapability(admin.role, "schedule_visit_operations");
   const visitId = String(formData.get("visitId") ?? "");
   const cleanerIds = parseCleanerIds(formData);
 
@@ -157,6 +161,7 @@ export async function reassignCleanersAction(_prevState: ActionResult | null, fo
 
 export async function cancelVisitAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
+  assertCapability(admin.role, "schedule_visit_operations");
   const visitId = String(formData.get("visitId") ?? "");
   const noAccess = formData.get("noAccess") === "on";
   const reason = String(formData.get("reason") ?? "").trim() || undefined;
@@ -189,6 +194,7 @@ export async function cancelVisitAction(_prevState: ActionResult | null, formDat
  */
 export async function completeVisitAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
+  assertCapability(admin.role, "complete_service_visit");
   const visitId = String(formData.get("visitId") ?? "");
   if (!visitId) return actionError("Visit not found.");
 
@@ -200,8 +206,10 @@ export async function completeVisitAction(_prevState: ActionResult | null, formD
   return actionOk(changed ? "Marked completed." : "This visit was already completed (or isn't currently scheduled).");
 }
 
+/** Waiving a fee is a financial waiver/correction — explicitly owner-only per the Phase 2 RBAC split; operations cannot call this. */
 export async function waiveFeeAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "waive_fee");
   const feeAssessmentId = String(formData.get("feeAssessmentId") ?? "");
   const visitId = String(formData.get("visitId") ?? "");
   const reason = String(formData.get("reason") ?? "").trim();
@@ -211,9 +219,20 @@ export async function waiveFeeAction(_prevState: ActionResult | null, formData: 
   }
 
   const repo = createSupabaseSchedulingRepository();
-  const updated = await repo.updateServiceFeeAssessmentState(feeAssessmentId, "waived", `Waived: ${reason}`);
-  if (!updated) {
-    return actionError("Fee assessment not found.");
+  try {
+    // Actor identity comes only from the authenticated requireAdmin() result
+    // above — never from client-supplied form fields — and is written
+    // atomically with the fee-state transition itself (see
+    // waiveServiceFeeAssessmentWithAudit / financial_audit_log).
+    await repo.waiveServiceFeeAssessmentWithAudit(feeAssessmentId, reason, {
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) {
+      return actionError(error.message);
+    }
+    return actionError(GENERIC_ERROR);
   }
 
   if (visitId) revalidateVisitPaths(visitId);

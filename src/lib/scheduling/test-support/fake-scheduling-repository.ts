@@ -34,7 +34,7 @@ import type {
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "../domain-types";
-import { SchedulingConflictError } from "../errors";
+import { InvalidVisitStateError, SchedulingConflictError } from "../errors";
 import type { SchedulingRepository } from "../repository";
 
 interface FakeAssignment {
@@ -48,6 +48,25 @@ interface FakeAssignment {
 }
 
 type FakeNotification = ServiceVisitNotificationRow;
+
+/**
+ * In-memory mirror of financial_audit_log — this fake has no real Postgres
+ * table backing it, so recordExternalServiceVisitPaymentWithAudit simulates
+ * the real RPC's transactional guarantee itself (see financialAuditControl
+ * below) rather than relying on a real database transaction.
+ */
+export interface FakeFinancialAuditLogRow {
+  id: string;
+  actorAdminUserId: string;
+  actorRole: string;
+  actionType: string;
+  targetEntityType: string;
+  targetEntityId: string;
+  serviceVisitId: string | null;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+}
 
 /** One-sided-buffer overlap check, mirroring service_visit_assignments_no_overlap's buffered_range math (see the migration). */
 function occupancyOverlap(existing: FakeAssignment, candidateStart: Date, candidateEnd: Date, candidateBufferMinutes: number): boolean {
@@ -102,6 +121,15 @@ export function createFakeSchedulingRepository(
   const recurringScopeVersionsById = new Map<string, RecurringScopeVersionRow>();
   const servicePricingByVisitId = new Map<string, ServiceVisitPricingRow>();
   const paymentsByVisitId = new Map<string, ServiceVisitPaymentRow>();
+  const financialAuditLog: FakeFinancialAuditLogRow[] = [];
+  // A live-reference object (not a plain boolean) so a test can flip
+  // `state.financialAuditControl.simulateFailure = true` AFTER this fake
+  // was constructed and have the repo closure below observe it — mirrors
+  // the real RPC's atomicity: when true, recordExternalServiceVisitPaymentWithAudit
+  // throws WITHOUT mutating paymentsByVisitId, servicePricingByVisitId, or
+  // financialAuditLog at all (every mutation is computed first, then
+  // committed together only if nothing failed).
+  const financialAuditControl = { simulateFailure: false };
 
   const repo: SchedulingRepository = {
     async listActiveCleaners() {
@@ -295,16 +323,43 @@ export function createFakeSchedulingRepository(
       feeAssessments.push(created);
       return created;
     },
-    async updateServiceFeeAssessmentState(id, state, reasonAppend) {
+    async waiveServiceFeeAssessmentWithAudit(id, reason, audit) {
       const index = feeAssessments.findIndex((f) => f.id === id);
-      if (index === -1) return null;
+      if (index === -1) throw new InvalidVisitStateError(`service_fee_assessments ${id} not found`);
       const existing = feeAssessments[index];
+      if (existing.state !== "assessed") {
+        throw new InvalidVisitStateError(
+          `service_fee_assessments ${id} is not eligible for waiver (state=${existing.state})`
+        );
+      }
+
+      // Mirrors the real RPC: compute the effect first, into a local
+      // value only — nothing is written to feeAssessments or
+      // financialAuditLog until both are ready to commit together.
       const updated: ServiceFeeAssessmentRow = {
         ...existing,
-        state,
-        reason: reasonAppend ? (existing.reason ? `${existing.reason} — ${reasonAppend}` : reasonAppend) : existing.reason,
+        state: "waived",
+        reason: existing.reason ? `${existing.reason} — Waived: ${reason}` : `Waived: ${reason}`,
       };
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "fee_waived",
+        targetEntityType: "service_fee_assessment",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.serviceVisitId,
+        reason,
+        metadata: { feeType: existing.feeType, amount: existing.amount, policyVersion: existing.policyVersion },
+        createdAt: new Date(),
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
       feeAssessments[index] = updated;
+      financialAuditLog.push(auditRow);
       return updated;
     },
     async insertServiceVisitNotification(row: NewServiceVisitNotificationRow) {
@@ -791,12 +846,24 @@ export function createFakeSchedulingRepository(
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;
     },
-    async recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch) {
+    async recordExternalServiceVisitPaymentWithAudit(
+      id: string,
+      patch: ServiceVisitPaymentExternalSettlementPatch,
+      audit: { actorAdminUserId: string; actorRole: string }
+    ) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
       if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
       if (existing.status !== "created") throw new Error(`[fake-scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
+
+      // Mirrors the real RPC: compute every effect first, into local
+      // values only — nothing is written to paymentsByVisitId,
+      // servicePricingByVisitId, or financialAuditLog until every step has
+      // succeeded. If financialAuditControl.simulateFailure is set (a test
+      // simulating the audit half of the real transaction failing), throw
+      // here, BEFORE any commit — proving the same all-or-nothing guarantee
+      // a real Postgres transaction rollback would give.
       const now = new Date();
-      const updated: ServiceVisitPaymentRow = {
+      const updatedPayment: ServiceVisitPaymentRow = {
         ...existing,
         paymentMethodType: patch.paymentMethodType,
         externalPaymentReference: patch.externalPaymentReference,
@@ -805,8 +872,34 @@ export function createFakeSchedulingRepository(
         taxTransactionStatus: "pending",
         tipConfirmedAt: existing.tipConfirmedAt ?? now,
       };
-      paymentsByVisitId.set(existing.serviceVisitId, updated);
-      return updated;
+
+      const existingPricing = servicePricingByVisitId.get(existing.serviceVisitId);
+      const updatedPricing: ServiceVisitPricingRow | null = existingPricing
+        ? { ...existingPricing, paymentStatus: "paid" }
+        : null;
+
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "external_payment_recorded",
+        targetEntityType: "service_visit_payment",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.serviceVisitId,
+        reason: patch.externalPaymentReference,
+        metadata: { paymentMethodType: patch.paymentMethodType, totalAmount: existing.totalAmount },
+        createdAt: now,
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      paymentsByVisitId.set(existing.serviceVisitId, updatedPayment);
+      if (updatedPricing) servicePricingByVisitId.set(existing.serviceVisitId, updatedPricing);
+      financialAuditLog.push(auditRow);
+
+      return updatedPayment;
     },
     async updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
@@ -856,6 +949,8 @@ export function createFakeSchedulingRepository(
       recurringVisitPlanHistory,
       recurringScopeVersionsById,
       servicePricingByVisitId,
+      financialAuditLog,
+      financialAuditControl,
     },
   };
 }

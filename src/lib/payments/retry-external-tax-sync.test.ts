@@ -48,7 +48,13 @@ async function seedExternallyPaidVisit(gatewayOptions: Parameters<typeof createF
   const { gateway, state: gatewayState } = createFakeVisitPaymentGateway(gatewayOptions);
   await prepareVisitPaymentReview(repo, gateway, visit.id);
   await selectVisitTip(repo, gateway, { serviceVisitId: visit.id, tipSelectionType: "percentage_15" });
-  await recordExternalPayment(repo, createFakeVisitPaymentGateway({ failNextTaxTransactionCreate: true, ...gatewayOptions }).gateway, { serviceVisitId: visit.id, paymentMethodType: "cash", externalPaymentReference: null }).catch(() => {});
+  await recordExternalPayment(repo, createFakeVisitPaymentGateway({ failNextTaxTransactionCreate: true, ...gatewayOptions }).gateway, {
+    serviceVisitId: visit.id,
+    paymentMethodType: "cash",
+    externalPaymentReference: null,
+    actorAdminUserId: "admin-1",
+    actorRole: "operations",
+  }).catch(() => {});
 
   const payment = (await repo.findServiceVisitPaymentByVisitId(visit.id))!;
   return { repo, gateway, gatewayState, visitId: visit.id, paymentId: payment.id };

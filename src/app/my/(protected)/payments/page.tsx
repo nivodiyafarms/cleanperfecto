@@ -4,11 +4,13 @@ import { approveVisitPricingIncreaseAction } from "@/lib/customer-portal/actions
 import { getPaymentsSummary } from "@/lib/customer-portal/queries";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
+import { canCreateStripeCharge } from "@/lib/config/payment-capabilities";
 import VisitPaymentFlow from "@/components/customer-portal/VisitPaymentFlow";
 
 export default async function MyPaymentsPage() {
   const session = await requireCustomer();
   const summary = await getPaymentsSummary(session.customerId);
+  const stripeChargesAvailable = canCreateStripeCharge();
 
   const repo = createSupabaseSchedulingRepository();
   const visits = await repo.listServiceVisitsForCustomer(session.customerId);
@@ -29,7 +31,7 @@ export default async function MyPaymentsPage() {
         <section className="space-y-4">
           <h2 className="text-lg font-semibold text-foreground">Review Charges &amp; Pay</h2>
           {visitsNeedingPayment.map((serviceVisitId) => (
-            <VisitPaymentFlow key={serviceVisitId} serviceVisitId={serviceVisitId} />
+            <VisitPaymentFlow key={serviceVisitId} serviceVisitId={serviceVisitId} stripeChargesAvailable={stripeChargesAvailable} />
           ))}
         </section>
       )}

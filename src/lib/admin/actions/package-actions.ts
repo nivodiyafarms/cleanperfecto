@@ -1,5 +1,19 @@
 "use server";
 
+/**
+ * Phase 2 RBAC classification note: every action in this file remains
+ * any-admin (unchanged), classified as AMBIGUOUS rather than restricted.
+ * Package amendments reprice remaining visits and involve real money
+ * (increases require the customer's additional payment first — see
+ * apply-package-amendment.ts's own DB-enforced gate), which could read as
+ * "financial correction" (owner-only); but they're also a routine,
+ * customer-initiated-or-approved operational workflow with no admin
+ * discretion over the amount itself (calculateEstimate() is always the
+ * authority). Per Phase 2 instructions, an ambiguous case is preserved as
+ * today's behavior and classified here rather than given an arbitrary new
+ * restriction — Phase 3 can revisit with real usage data.
+ */
+
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { resolvePackageSchedulingContext } from "@/lib/admin/queries/visit-scope";

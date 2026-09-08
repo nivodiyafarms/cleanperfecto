@@ -1,6 +1,7 @@
 ﻿import { describe, expect, it, vi } from "vitest";
 import type Stripe from "stripe";
 import { createFakeBookingRepository } from "../test-support/fake-booking-repository";
+import { claimWebhookEvent } from "./claim-webhook-event";
 import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
 import { createFakeVisitPaymentGateway } from "@/lib/payments/test-support/fake-visit-payment-gateway";
 import { prepareVisitPaymentReview } from "@/lib/payments/prepare-visit-payment-review";
@@ -359,6 +360,46 @@ describe("processStripeWebhookEvent — payment_intent.* (Pay Per Cleaning + Tip
       processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }))
     ).resolves.toBeUndefined();
   });
+
+  it("PAYMENT_MODE=stripe_sandbox never fulfills a LIVE-mode event — explicit mode mismatch is a safe no-op", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    const liveEvent = { ...paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), livemode: true };
+
+    await processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, liveEvent, schedulingRepo, undefined, gateway, "stripe_sandbox");
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).not.toBe("paid");
+  });
+
+  it("PAYMENT_MODE=stripe_enabled never fulfills a TEST-mode event — explicit mode mismatch is a safe no-op", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    const testEvent = { ...paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), livemode: false };
+
+    await processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, testEvent, schedulingRepo, undefined, gateway, "stripe_enabled");
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).not.toBe("paid");
+  });
+
+  it("PAYMENT_MODE=disabled never fulfills any Stripe card event, even a correctly-matched livemode", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    const event = { ...paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), livemode: false };
+
+    await processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, event, schedulingRepo, undefined, gateway, "disabled");
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).not.toBe("paid");
+  });
+
+  it("a correctly-matched livemode still fulfills normally", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    const event = { ...paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), livemode: false };
+
+    await processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, event, schedulingRepo, undefined, gateway, "stripe_sandbox");
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("paid");
+  });
 });
 
 describe("processStripeWebhookEvent — charge.refunded", () => {
@@ -384,5 +425,35 @@ describe("processStripeWebhookEvent — charge.refunded", () => {
     await expect(
       processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, chargeRefundedEvent({ id: "ch_2", payment_intent: paymentIntentId, amount: 100, amount_refunded: 100 }))
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("processStripeWebhookEvent — mode-mismatch cannot later fulfill after PAYMENT_MODE changes", () => {
+  it("a skipped mode-mismatched event, once marked processed (replicating route.ts's exact sequence), is a permanent no-op even after the mode changes to one that would have matched", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    const bookingRepo = createFakeBookingRepository().repo;
+    const liveEvent = { ...paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), livemode: true };
+
+    // --- First delivery, replicating route.ts: claim -> process -> mark processed ---
+    const claim1 = await claimWebhookEvent(bookingRepo, liveEvent.id, liveEvent.type, liveEvent as unknown as Record<string, unknown>);
+    expect(claim1.shouldProcess).toBe(true);
+    await processStripeWebhookEvent(fakeStripe(), bookingRepo, liveEvent, schedulingRepo, undefined, gateway, "stripe_sandbox");
+    await bookingRepo.markWebhookEventProcessed(claim1.eventRowId);
+
+    const paymentAfterFirstDelivery = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(paymentAfterFirstDelivery!.status).not.toBe("paid"); // never fulfilled — mode mismatch
+
+    // --- Stripe redelivers the SAME event id; meanwhile PAYMENT_MODE has
+    // changed to stripe_enabled, which WOULD now match this live event.
+    // The ledger's own dedup must still refuse to reprocess it, regardless. ---
+    const claim2 = await claimWebhookEvent(bookingRepo, liveEvent.id, liveEvent.type, liveEvent as unknown as Record<string, unknown>);
+    expect(claim2.shouldProcess).toBe(false); // permanent no-op — route.ts would return 200 without ever calling processStripeWebhookEvent again
+
+    // Sanity: even if something did call the domain function again with
+    // the now-matching mode, this proves the reason the visit stays
+    // unfulfilled is the ledger's dedup, not a coincidental second guard
+    // failure — the schedulingRepo state was genuinely never mutated.
+    const paymentAfterRedelivery = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(paymentAfterRedelivery!.status).not.toBe("paid");
   });
 });

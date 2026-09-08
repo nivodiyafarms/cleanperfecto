@@ -62,6 +62,9 @@ interface BookingPaymentClientProps {
   packageOptions: BookingPricingOptions["packages"];
   /** Server-authoritative ACH display pricing per package frequency — see ach-package-options.ts. Never computed client-side. */
   achPackageOptions: Record<PrepaidFrequency, AchPackagePricing | null>;
+  /** Server-computed via canCreateStripeSetup()/canCreateStripeCharge() — see the booking page. When false, the matching section's Stripe action is replaced with an unavailable message rather than inviting a flow that would only fail server-side. */
+  stripeSetupAvailable: boolean;
+  stripeChargeAvailable: boolean;
 }
 
 /** Collapsed by default — the customer must still be able to open and review this before accepting the authorization checkbox below it. */
@@ -99,6 +102,8 @@ export default function BookingPaymentClient({
   futureRecurringOptions,
   packageOptions,
   achPackageOptions,
+  stripeSetupAvailable,
+  stripeChargeAvailable,
 }: BookingPaymentClientProps) {
   // One token per visit to this page — resent unchanged on every retry of
   // the same submission (double click, slow network) so the server can
@@ -197,7 +202,10 @@ export default function BookingPaymentClient({
   const activePackage = packageOptions[activePackageTab];
   const activeAchPackage = achPackageOptions[activePackageTab];
   const cardBuyable =
-    !activePackage.manualReviewRequired && activePackage.prepaidPackageTotal !== null && activePackage.effectivePricePerVisit !== null;
+    stripeChargeAvailable &&
+    !activePackage.manualReviewRequired &&
+    activePackage.prepaidPackageTotal !== null &&
+    activePackage.effectivePricePerVisit !== null;
   const showingAch = selectedPaymentMethod === "us_bank_account" && activeAchPackage !== null;
   const displayedTotal = showingAch ? (activeAchPackage as AchPackagePricing).achSubtotal : (activePackage.prepaidPackageTotal as number);
   const displayedPerVisit = showingAch
@@ -280,6 +288,13 @@ export default function BookingPaymentClient({
           </div>
         )}
 
+        {!stripeSetupAvailable ? (
+          <div className="mt-6 rounded-2xl border border-border bg-background-alt p-4 text-sm text-muted">
+            Online booking is temporarily unavailable. Please contact CleanPerfecto at {SITE_CONTACT.phoneDisplay} to
+            schedule.
+          </div>
+        ) : (
+        <>
         <div className="mt-6 grid gap-5 sm:grid-cols-2">
           <div>
             <label htmlFor="booking-date" className="mb-2 block text-sm font-medium text-foreground">
@@ -349,6 +364,8 @@ export default function BookingPaymentClient({
         >
           {normalSubmitting ? "Please wait…" : "Secure My Booking"}
         </button>
+        </>
+        )}
       </GlassPanel>
 
       {/* B. Prepay 6 Cleanings & Save an Extra 10% */}

@@ -5,12 +5,14 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { RecurringCadence } from "@/lib/scheduling/types";
 import { enqueueConsentRequest } from "@/lib/consent/enqueue-consent-request";
 import type { ConsentRepository } from "@/lib/consent/consent-repository";
+import { type PaymentMode, resolvePaymentMode } from "@/lib/config/runtime-env";
 import { sendNormalBookingConfirmationEmails } from "../email/send-normal-booking-confirmation-emails";
 import { sendPrepaidPackageSuccessEmails } from "../email/send-prepaid-package-success-emails";
 import type { BookingRepository } from "../repository";
 import type { PrepaidFrequency } from "../types";
 import { reconcileVisitPayment, reconcileVisitPaymentRefund } from "@/lib/payments/reconcile-visit-payment";
 import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
+import { resolveWebhookFulfillmentDecision } from "./webhook-fulfillment-guard";
 
 const PREPAID_FREQUENCIES = new Set<PrepaidFrequency>(["weekly", "biweekly", "every_4_weeks"]);
 
@@ -280,8 +282,30 @@ export async function processStripeWebhookEvent(
   event: Stripe.Event,
   schedulingRepo?: SchedulingRepository,
   consentRepo?: ConsentRepository,
-  paymentGateway?: VisitPaymentGateway
+  paymentGateway?: VisitPaymentGateway,
+  paymentMode: PaymentMode = resolvePaymentMode()
 ): Promise<void> {
+  // Checked once, before any dispatch — see webhook-fulfillment-guard.ts.
+  // A denied decision is a safe no-op: the caller (route.ts) already
+  // recorded this verified event in the audit ledger (full payload,
+  // including event.livemode) and will still mark it 'processed' — the
+  // cleanest state this ledger's existing received/processing/processed/
+  // failed machine supports for "seen, deliberately not acted on," and the
+  // only one that both returns success to Stripe (no retry storm over a
+  // decision we will never revisit) and permanently forbids that exact
+  // event id from later reaching fulfillment on any redelivery, including
+  // one arriving after PAYMENT_MODE changes (claimWebhookEvent only ever
+  // reprocesses a 'received' or 'failed' row, never 'processed'). The
+  // warning below is an operational log only, not a ledger column change,
+  // so an operator can see WHY a given delivery was skipped in real time.
+  const fulfillmentDecision = resolveWebhookFulfillmentDecision(paymentMode, event);
+  if (!fulfillmentDecision.allowed) {
+    console.warn(
+      `[stripe-webhook] skipped fulfillment for ${event.type} (eventId=${event.id}, livemode=${event.livemode}, PAYMENT_MODE=${paymentMode}): ${fulfillmentDecision.reason}`
+    );
+    return;
+  }
+
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;

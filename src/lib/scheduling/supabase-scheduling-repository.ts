@@ -35,7 +35,7 @@ import type {
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
-import { SchedulingConflictError } from "./errors";
+import { InvalidVisitStateError, SchedulingConflictError } from "./errors";
 import type { SchedulingRepository } from "./repository";
 
 function toServiceVisitRow(row: Record<string, unknown>): ServiceVisitRow {
@@ -453,48 +453,37 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       if (error) throw new Error(`[scheduling] setting review_request_suppressed failed: ${error.message}`);
     },
 
-    async updateServiceFeeAssessmentState(id, state, reasonAppend) {
-      if (reasonAppend) {
-        const { data: existing, error: fetchError } = await supabase
-          .from("service_fee_assessments")
-          .select("reason")
-          .eq("id", id)
-          .maybeSingle();
-        if (fetchError) throw new Error(`[scheduling] service_fee_assessments lookup before state update failed: ${fetchError.message}`);
-        if (!existing) return null;
-        const nextReason = existing.reason ? `${existing.reason} — ${reasonAppend}` : reasonAppend;
-        const { data, error } = await supabase
-          .from("service_fee_assessments")
-          .update({ state, reason: nextReason })
-          .eq("id", id)
-          .select()
-          .maybeSingle();
-        if (error) throw new Error(`[scheduling] service_fee_assessments state update failed: ${error.message}`);
-        return data
-          ? {
-              id: data.id,
-              serviceVisitId: data.service_visit_id,
-              feeType: data.fee_type,
-              amount: Number(data.amount),
-              policyVersion: data.policy_version,
-              reason: data.reason,
-              state: data.state,
-            }
-          : null;
+    async waiveServiceFeeAssessmentWithAudit(id, reason, audit) {
+      // Single atomic Postgres RPC — see its migration for why this
+      // replaced a two-step application-level read-then-update (which also
+      // had no guard against re-waiving an already-waived/paid/void row)
+      // with one transaction that also writes the required
+      // financial_audit_log actor-attribution row.
+      const { data, error } = await supabase.rpc("waive_service_fee_assessment_with_audit", {
+        p_fee_assessment_id: id,
+        p_reason: reason,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error) {
+        // Same convention as set_service_visit_schedule's exclusion_violation
+        // translation below: a known, domain-meaningful RPC exception is
+        // translated to a typed error the caller can present cleanly;
+        // anything else (a genuine DB/network failure) stays a generic Error.
+        if (/not found|not eligible for waiver|a reason is required/i.test(error.message ?? "")) {
+          throw new InvalidVisitStateError(error.message);
+        }
+        throw new Error(`[scheduling] waive_service_fee_assessment_with_audit failed: ${error.message}`);
       }
-      const { data, error } = await supabase.from("service_fee_assessments").update({ state }).eq("id", id).select().maybeSingle();
-      if (error) throw new Error(`[scheduling] service_fee_assessments state update failed: ${error.message}`);
-      return data
-        ? {
-            id: data.id,
-            serviceVisitId: data.service_visit_id,
-            feeType: data.fee_type,
-            amount: Number(data.amount),
-            policyVersion: data.policy_version,
-            reason: data.reason,
-            state: data.state,
-          }
-        : null;
+      return {
+        id: data.id,
+        serviceVisitId: data.service_visit_id,
+        feeType: data.fee_type,
+        amount: Number(data.amount),
+        policyVersion: data.policy_version,
+        reason: data.reason,
+        state: data.state,
+      };
     },
 
     async insertServiceVisitEvent(row) {
@@ -1223,42 +1212,24 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return data ? toServiceVisitPaymentRow(data) : null;
     },
 
-    async recordExternalServiceVisitPayment(id: string, patch: ServiceVisitPaymentExternalSettlementPatch) {
-      const nowIso = new Date().toISOString();
-      const { data, error } = await supabase
-        .from("service_visit_payments")
-        .update({
-          payment_method_type: patch.paymentMethodType,
-          external_payment_reference: patch.externalPaymentReference,
-          status: "paid",
-          paid_at: nowIso,
-          tax_transaction_status: "pending",
-        })
-        .eq("id", id)
-        .in("status", ["created"])
-        .select()
-        .maybeSingle();
-      if (error) throw new Error(`[scheduling] recordExternalServiceVisitPayment failed: ${error.message}`);
-      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
-
-      // tip_confirmed_at freezes on this same settlement if a tip was
-      // already selected pre-freeze but the customer never clicked a
-      // Stripe Confirm & Pay — a second, separate update (not combined
-      // above) because the trigger only allows setting it from null, and
-      // combining both writes in one UPDATE risks the trigger seeing an
-      // already-non-null tip_confirmed_at from a stale read; a WHERE
-      // tip_confirmed_at IS NULL guard makes this safe/idempotent.
-      if (!data.tip_confirmed_at) {
-        const frozen = await supabase
-          .from("service_visit_payments")
-          .update({ tip_confirmed_at: nowIso })
-          .eq("id", id)
-          .is("tip_confirmed_at", null)
-          .select()
-          .maybeSingle();
-        if (frozen.error) throw new Error(`[scheduling] recordExternalServiceVisitPayment tip-freeze failed: ${frozen.error.message}`);
-        if (frozen.data) return toServiceVisitPaymentRow(frozen.data);
-      }
+    async recordExternalServiceVisitPaymentWithAudit(
+      id: string,
+      patch: ServiceVisitPaymentExternalSettlementPatch,
+      audit: { actorAdminUserId: string; actorRole: string }
+    ) {
+      // Single atomic Postgres RPC — see its migration for why this
+      // replaced two separate application-level writes (the settlement
+      // update and a separate financial_audit_log insert) that previously
+      // left a window where a genuinely-paid visit could end up with no
+      // audit row at all.
+      const { data, error } = await supabase.rpc("record_external_visit_payment_with_audit", {
+        p_service_visit_payment_id: id,
+        p_payment_method_type: patch.paymentMethodType,
+        p_external_payment_reference: patch.externalPaymentReference,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error) throw new Error(`[scheduling] record_external_visit_payment_with_audit failed: ${error.message}`);
       return toServiceVisitPaymentRow(data);
     },
 

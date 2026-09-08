@@ -119,6 +119,50 @@ describe("recordExternalPaymentAction", () => {
     expect(payment!.externalPaymentReference).toBe("ZL-9");
   });
 
+  it("Phase 2: a successful external-payment recording is traceable to its actor in the financial audit log", async () => {
+    mockAuthorized();
+    const visitId = await seedVisitWithTipSelected();
+    const result = await recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "cash", externalPaymentReference: "note" }));
+    expect(result.ok).toBe(true);
+
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    const [entry] = fake.state.financialAuditLog;
+    expect(entry.actorAdminUserId).toBe("admin-1");
+    expect(entry.actorRole).toBe("admin");
+    expect(entry.actionType).toBe("external_payment_recorded");
+    expect(entry.targetEntityType).toBe("service_visit_payment");
+    expect(entry.serviceVisitId).toBe(visitId);
+    expect(entry.metadata).toMatchObject({ paymentMethodType: "cash" });
+  });
+
+  it("does not write a financial audit row when the recording fails before any financial mutation", async () => {
+    mockAuthorized();
+    const visitId = await seedVisitWithTipSelected();
+    // First call settles the payment; a second call for the same
+    // already-settled row is rejected before any further mutation.
+    await recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "cash" }));
+    fake.state.financialAuditLog.length = 0;
+
+    const result = await recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "zelle" }));
+    expect(result.ok).toBe(false);
+    expect(fake.state.financialAuditLog).toHaveLength(0);
+  });
+
+  it("Phase 2 money-path integrity: an audit-write failure leaves the payment unsettled, not silently paid-without-audit", async () => {
+    mockAuthorized();
+    const visitId = await seedVisitWithTipSelected();
+    fake.state.financialAuditControl.simulateFailure = true;
+
+    // The action's generic catch rethrows anything that isn't
+    // InvalidVisitStateError, so this surfaces as a thrown error here —
+    // proving the failure is never silently swallowed into a false "ok".
+    await expect(recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "cash" }))).rejects.toThrow();
+
+    const payment = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("created");
+    expect(fake.state.financialAuditLog).toHaveLength(0);
+  });
+
   it("surfaces a domain InvalidVisitStateError as a clean, non-throwing action error", async () => {
     mockAuthorized();
     const visitId = await seedVisitWithTipSelected();
@@ -126,6 +170,16 @@ describe("recordExternalPaymentAction", () => {
 
     const result = await recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "zelle" }));
     expect(result.ok).toBe(false);
+  });
+
+  it("Phase 2 RBAC: an operations-role admin CAN record a genuine external receipt through the frozen amount flow", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+    const visitId = await seedVisitWithTipSelected();
+    const result = await recordExternalPaymentAction(null, formData({ serviceVisitId: visitId, paymentMethodType: "cash" }));
+    expect(result.ok).toBe(true);
+
+    const payment = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("paid");
   });
 });
 
@@ -146,7 +200,13 @@ describe("retryTaxSyncAction", () => {
     const visitId = await seedVisitWithTipSelected();
     const failingGateway = createFakeVisitPaymentGateway({ failNextTaxTransactionCreate: true });
     const { recordExternalPayment } = await import("@/lib/payments/record-external-payment");
-    await recordExternalPayment(fake.repo, failingGateway.gateway, { serviceVisitId: visitId, paymentMethodType: "cash", externalPaymentReference: null });
+    await recordExternalPayment(fake.repo, failingGateway.gateway, {
+      serviceVisitId: visitId,
+      paymentMethodType: "cash",
+      externalPaymentReference: null,
+      actorAdminUserId: "admin-1",
+      actorRole: "admin",
+    });
 
     const payment = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
     expect(payment!.taxTransactionStatus).toBe("failed");

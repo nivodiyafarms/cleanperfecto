@@ -2,6 +2,7 @@ import "server-only";
 
 import { getStripeClient } from "@/lib/booking/stripe/client";
 import { RESIDENTIAL_CLEANING_TAX_CODE } from "@/lib/booking/stripe/checkout-sessions";
+import { assertCanCalculateStripeTax, assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
 import { OPTIONAL_GRATUITY_TAX_CODE } from "./tax-codes";
 
 export interface TaxLocationAddress {
@@ -88,6 +89,7 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
 
   return {
     async createTaxCalculation(input) {
+      assertCanCalculateStripeTax();
       const calculation = await stripe.tax.calculations.create({
         currency: "usd",
         line_items: buildLineItems(input),
@@ -115,6 +117,7 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
     },
 
     async createPaymentIntent(input) {
+      assertCanCreateStripeCharge();
       const intent = await stripe.paymentIntents.create(
         {
           amount: input.amountCents,
@@ -155,6 +158,7 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
     },
 
     async createTaxTransactionFromCalculation(params) {
+      assertCanCalculateStripeTax();
       const transaction = await stripe.tax.transactions.createFromCalculation(
         { calculation: params.calculationId, reference: params.reference },
         { idempotencyKey: params.idempotencyKey }

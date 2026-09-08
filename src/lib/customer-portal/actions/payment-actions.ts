@@ -10,14 +10,20 @@ import { selectVisitTip, type SelectVisitTipResult } from "@/lib/payments/select
 import { createVisitPaymentIntent, type CreateVisitPaymentIntentOutcome } from "@/lib/payments/create-visit-payment-intent";
 import { createPaymentMethodSetupCheckoutSession } from "@/lib/payments/create-payment-method-setup";
 import { getStripeClient } from "@/lib/booking/stripe/client";
+import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import type { TipSelectionType } from "@/lib/scheduling/types";
 import { assertVisitBelongsToCustomer } from "@/lib/customer-portal/ownership";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
 
 export type PaymentActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
+/** Customer-safe message — never repeats internal configuration jargon (PAYMENT_MODE/TAX_MODE) to the customer; the detailed reason is still on the underlying RuntimeConfigurationError for server-side logs. */
+const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE =
+  "Online payment is temporarily unavailable. Please contact CleanPerfecto for help completing this payment.";
+
 function toErrorResult(error: unknown): { ok: false; error: string } {
   if (error instanceof InvalidVisitStateError) return { ok: false, error: error.message };
+  if (error instanceof RuntimeConfigurationError) return { ok: false, error: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
   throw error;
 }
 

@@ -34,7 +34,13 @@ const TIP_OPTIONS: { type: TipSelectionType; label: string }[] = [
   { type: "custom", label: "Custom" },
 ];
 
-export default function VisitPaymentFlow({ serviceVisitId }: { serviceVisitId: string }) {
+interface VisitPaymentFlowProps {
+  serviceVisitId: string;
+  /** Server-computed via canCreateStripeCharge() — see the page component. When false, the interactive Review/Tip/Confirm-&-Pay flow is replaced with a message rather than inviting a card charge that would only fail server-side. Historical/no_payment_due results still display regardless — this only gates NEW charge attempts. */
+  stripeChargesAvailable: boolean;
+}
+
+export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailable }: VisitPaymentFlowProps) {
   const [step, setStep] = useState<Step>("loading");
   const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<{ approvedAmount: number; tipBasisAmount: number; previewTaxAmount: number; previewAmountDueBeforeTip: number } | null>(null);
@@ -204,6 +210,15 @@ export default function VisitPaymentFlow({ serviceVisitId }: { serviceVisitId: s
           {processing ? "Working…" : "Complete payment"}
         </button>
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      </div>
+    );
+  }
+
+  if (!stripeChargesAvailable && (step === "review" || step === "tip" || step === "confirm")) {
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-5">
+        <p className="text-sm font-medium text-foreground">Online payment is temporarily unavailable</p>
+        <p className="mt-1 text-sm text-muted">Please contact CleanPerfecto to arrange payment for this cleaning.</p>
       </div>
     );
   }

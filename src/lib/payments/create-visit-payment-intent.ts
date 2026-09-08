@@ -2,6 +2,7 @@ import type { BookingRepository } from "@/lib/booking/repository";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
 import { refreshExpiredTaxCalculationIfNeeded } from "./refresh-expired-tax-calculation";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
@@ -81,6 +82,13 @@ export async function createVisitPaymentIntent(
   if (!customer || !customer.stripeCustomerId || !customer.stripeDefaultPaymentMethodId) {
     return { outcome: "needs_payment_method" };
   }
+
+  // Checked here — after every early-return path that doesn't create a NEW
+  // charge (no_payment_due, needs_payment_method, and the idempotent
+  // already-frozen reuse above, which only retrieves an existing
+  // PaymentIntent) — so a kill-switched PAYMENT_MODE blocks new charges
+  // without stranding a payment already legitimately in flight.
+  assertCanCreateStripeCharge();
 
   const frozen = await repo.freezeServiceVisitPaymentForStripeCard(payment.id, {
     stripeCustomerId: customer.stripeCustomerId,

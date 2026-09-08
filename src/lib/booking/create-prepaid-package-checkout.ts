@@ -3,6 +3,8 @@
 import { redirect } from "next/navigation";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
+import { assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
+import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import { applyAchIncentive } from "./ach-incentive";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
@@ -20,6 +22,8 @@ const PAYMENT_METHODS: PaymentMethodType[] = ["card", "us_bank_account"];
 const PREPAID_VISIT_COUNT = 6;
 
 const GENERIC_ERROR_MESSAGE = `We couldn't start your package purchase right now. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
+/** Customer-safe — never repeats internal configuration jargon (PAYMENT_MODE) to the customer. */
+const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE = `Online prepaid package purchases are temporarily unavailable. Please contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
 
 export type CreatePrepaidPackageCheckoutResult =
   | { ok: false; stage: "validation"; errors: string[] }
@@ -61,6 +65,10 @@ export async function createPrepaidPackageCheckout(
 
   let sessionUrl: string;
   try {
+    // A prepaid package purchase is a real payment-mode Checkout Session —
+    // checked before any state mutation below.
+    assertCanCreateStripeCharge();
+
     const asOf = new Date();
 
     const eligibility = await checkFirstCleaningEligibility(
@@ -181,7 +189,10 @@ export async function createPrepaidPackageCheckout(
     });
 
     await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment");
-  } catch {
+  } catch (error) {
+    if (error instanceof RuntimeConfigurationError) {
+      return { ok: false, stage: "failed", message: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
+    }
     return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
   }
 
