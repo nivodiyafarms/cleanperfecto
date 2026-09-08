@@ -3,11 +3,14 @@ import type { ConsentRepository, ConsentVersionRecord, CustomerConsentRecord } f
 
 export interface FakeConsentRepositoryOptions {
   versions?: ConsentVersionRecord[];
+  /** customerId -> name, for findCustomerNameById. */
+  customerNames?: Record<string, string>;
 }
 
 export interface FakeConsentRepositoryState {
   versions: Map<string, ConsentVersionRecord>;
   consents: Map<string, CustomerConsentRecord>;
+  customerNames: Map<string, string>;
 }
 
 const DEFAULT_VERSION: ConsentVersionRecord = {
@@ -24,6 +27,7 @@ export function createFakeConsentRepository(options: FakeConsentRepositoryOption
   const versions = new Map<string, ConsentVersionRecord>();
   for (const v of options.versions ?? [DEFAULT_VERSION]) versions.set(v.id, v);
   const consents = new Map<string, CustomerConsentRecord>();
+  const customerNames = new Map<string, string>(Object.entries(options.customerNames ?? {}));
 
   function keyOf(customerId: string, consentVersionId: string) {
     return `${customerId}:${consentVersionId}`;
@@ -46,6 +50,9 @@ export function createFakeConsentRepository(options: FakeConsentRepositoryOption
     async findById(id) {
       for (const c of consents.values()) if (c.id === id) return c;
       return null;
+    },
+    async findCustomerNameById(customerId) {
+      return customerNames.get(customerId) ?? null;
     },
     async insertSentRequest(input) {
       const key = keyOf(input.customerId, input.consentVersionId);
@@ -115,5 +122,5 @@ export function createFakeConsentRepository(options: FakeConsentRepositoryOption
     },
   };
 
-  return { repo, state: { versions, consents } };
+  return { repo, state: { versions, consents, customerNames } };
 }

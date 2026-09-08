@@ -8,6 +8,7 @@ import {
 } from "@/lib/booking/customization-selection-params";
 import { getQuoteForBooking } from "@/lib/booking/get-quote-for-booking";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { canCreateStripeCharge, canCreateStripeSetup } from "@/lib/config/payment-capabilities";
 import { SITE_CONTACT } from "@/lib/site-contact";
@@ -90,6 +91,12 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
   });
   const achPackageOptions = buildAchPackageOptions(options.packages);
 
+  // Resolved server-side, once, at page render — the client never fetches
+  // or invents this itself (see acceptConsentClickwrap's version-race
+  // guard, which re-validates this exact id at submission time).
+  const consentRepo = createSupabaseConsentRepository();
+  const activeVersion = await consentRepo.findActiveVersion();
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-16 sm:py-20 lg:px-8">
       <BookingPaymentClient
@@ -102,6 +109,17 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
         achPackageOptions={achPackageOptions}
         stripeSetupAvailable={canCreateStripeSetup()}
         stripeChargeAvailable={canCreateStripeCharge()}
+        activeConsentVersion={
+          activeVersion
+            ? {
+                id: activeVersion.id,
+                versionLabel: activeVersion.versionLabel,
+                title: activeVersion.title,
+                bodyText: activeVersion.bodyText,
+                isLegallyReviewed: activeVersion.isLegallyReviewed,
+              }
+            : null
+        }
       />
     </div>
   );

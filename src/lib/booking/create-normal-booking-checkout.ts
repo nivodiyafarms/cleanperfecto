@@ -3,20 +3,24 @@
 import { redirect } from "next/navigation";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
-import type { FrequencyId } from "@/lib/pricing/types";
 import { assertCanCreateStripeSetup } from "@/lib/config/payment-capabilities";
 import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { SITE_CONTACT } from "@/lib/site-contact";
+import { acceptConsentClickwrap } from "@/lib/consent/accept-consent-clickwrap";
+import { captureAuditHeaders } from "@/lib/consent/capture-audit-headers";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
+import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
+import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
-import { isWithinOperatingHours } from "./operating-hours";
 import { getSiteUrl } from "./site-url";
 import { createSetupCheckoutSession } from "./stripe/checkout-sessions";
 import { getStripeClient } from "./stripe/client";
 import { resolveStripeCustomerId } from "./stripe/customers";
 import { createSupabaseBookingRepository } from "./supabase-booking-repository";
-import type { NormalBookingSelectionInput, NotBookableReason } from "./types";
+import type { ConsentVersionSummary, NormalBookingSelectionInput, NotBookableReason } from "./types";
+import { validateNormalBookingSelection } from "./validate-normal-booking-selection";
 import {
   validateAddOnIds,
   validateMovePackageLevel,
@@ -25,9 +29,6 @@ import {
   validateSpecialRooms,
 } from "./validate-customization-selection";
 
-const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "every_4_weeks"];
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
 const GENERIC_ERROR_MESSAGE = `We couldn't start your booking right now. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
 /** Customer-safe — never repeats internal configuration jargon (PAYMENT_MODE) to the customer. */
 const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE = `Online booking is temporarily unavailable. Please contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay} to schedule.`;
@@ -35,25 +36,10 @@ const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE = `Online booking is temporarily u
 export type CreateNormalBookingCheckoutResult =
   | { ok: false; stage: "validation"; errors: string[] }
   | { ok: false; stage: "not_bookable"; reason: NotBookableReason }
+  | { ok: false; stage: "consent_changed"; currentVersion: ConsentVersionSummary }
   | { ok: false; stage: "failed"; message: string };
 // ok:true is never returned — success ends in redirect(), which throws
 // internally and is handled by the framework, not returned to the caller.
-
-function validate(raw: NormalBookingSelectionInput): string[] {
-  const errors: string[] = [];
-  if (!raw.clientRequestId) errors.push("Missing request id.");
-  if (!NORMAL_FREQUENCIES.includes(raw.frequency)) errors.push("Please choose a valid cleaning frequency.");
-  if (!DATE_PATTERN.test(raw.requestedDate)) errors.push("Please choose a preferred date.");
-  if (!isWithinOperatingHours(raw.requestedStartTime)) {
-    errors.push("Please choose a preferred start time between 8:00 AM and 6:00 PM.");
-  }
-  if (!raw.paymentMethodSaveAuthorized) {
-    errors.push(
-      "Please authorize CleanPerfecto to securely save your payment method and accept the cancellation/rescheduling policy to continue."
-    );
-  }
-  return errors;
-}
 
 /**
  * Server action for the Normal Cleaning booking path: recomputes pricing
@@ -66,7 +52,7 @@ function validate(raw: NormalBookingSelectionInput): string[] {
 export async function createNormalBookingCheckout(
   raw: NormalBookingSelectionInput
 ): Promise<CreateNormalBookingCheckoutResult> {
-  const errors = validate(raw);
+  const errors = validateNormalBookingSelection(raw);
   if (errors.length > 0) {
     return { ok: false, stage: "validation", errors };
   }
@@ -117,6 +103,20 @@ export async function createNormalBookingCheckout(
       asOf,
     };
     const result = calculateEstimate(calculationInput);
+
+    // Required clickwrap acceptance (Service Terms + Cancellation/
+    // Rescheduling Policy + Payment Authorization) — recorded before the
+    // booking order exists so a version-race rejection never leaves a
+    // half-created booking behind. Idempotent: a retried submission with
+    // the same clientRequestId simply finds the customer already signed
+    // for the active version and returns unchanged.
+    const { ipAddress, userAgent } = await captureAuditHeaders();
+    await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
+      customerId: quote.customerId,
+      presentedConsentVersionId: raw.presentedConsentVersionId,
+      ipAddress,
+      userAgent,
+    });
 
     const bookingOrder = await repo.insertBookingOrder({
       customerId: quote.customerId,
@@ -188,6 +188,27 @@ export async function createNormalBookingCheckout(
   } catch (error) {
     if (error instanceof RuntimeConfigurationError) {
       return { ok: false, stage: "failed", message: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
+    }
+    if (error instanceof ConsentVersionChangedError) {
+      const consentRepo = createSupabaseConsentRepository();
+      const currentVersion = await consentRepo.findVersionById(error.currentVersionId);
+      if (currentVersion) {
+        return {
+          ok: false,
+          stage: "consent_changed",
+          currentVersion: {
+            id: currentVersion.id,
+            versionLabel: currentVersion.versionLabel,
+            title: currentVersion.title,
+            bodyText: currentVersion.bodyText,
+            isLegallyReviewed: currentVersion.isLegallyReviewed,
+          },
+        };
+      }
+      return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
+    }
+    if (error instanceof InvalidConsentStateError) {
+      return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
     }
     return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
   }

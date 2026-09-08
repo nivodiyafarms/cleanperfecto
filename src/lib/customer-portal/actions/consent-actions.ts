@@ -1,58 +1,48 @@
 "use server";
 
-import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { actionError, actionOk, type ActionResult } from "@/lib/admin/actions/types";
+import { acceptConsentClickwrap } from "@/lib/consent/accept-consent-clickwrap";
+import { captureAuditHeaders } from "@/lib/consent/capture-audit-headers";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { declineConsent } from "@/lib/consent/decline-consent";
-import { InvalidConsentStateError } from "@/lib/consent/errors";
-import { signConsent } from "@/lib/consent/sign-consent";
-import { createSupabaseSignedConsentDocumentStore } from "@/lib/consent/pdf/signed-consent-document-store";
+import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
 
 /**
- * IP/user-agent are supplemental audit evidence only (see consent-
- * repository.ts) — best-effort from request headers, never required.
- * x-forwarded-for can carry a comma-separated proxy chain; only the
- * client-facing first entry is kept.
+ * Portal fallback acceptance — for the rare case a customer reaches
+ * /my/consent without having already accepted inline at booking (e.g. an
+ * account created before this flow existed, or the active version changed
+ * after their last booking). Clickwrap only, same as the booking flow: no
+ * typed name, no signature — see acceptConsentClickwrap.
  */
-async function captureAuditHeaders(): Promise<{ ipAddress: string | null; userAgent: string | null }> {
-  const headerList = await headers();
-  const forwardedFor = headerList.get("x-forwarded-for");
-  const ipAddress = forwardedFor ? forwardedFor.split(",")[0]?.trim() || null : null;
-  const userAgent = headerList.get("user-agent");
-  return { ipAddress, userAgent };
-}
-
 export async function signConsentAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const session = await requireCustomer();
   const consentRepo = createSupabaseConsentRepository();
   const schedulingRepo = createSupabaseSchedulingRepository();
-  const documentStore = createSupabaseSignedConsentDocumentStore();
 
-  const signedName = String(formData.get("signedName") ?? "");
   const agreedToTerms = formData.get("agreedToTerms") === "true";
+  const presentedConsentVersionId = String(formData.get("consentVersionId") ?? "");
+
+  if (!agreedToTerms || !presentedConsentVersionId) {
+    return actionError("Please check the box to accept the agreement.");
+  }
 
   const { ipAddress, userAgent } = await captureAuditHeaders();
 
   try {
-    await signConsent(
-      consentRepo,
-      schedulingRepo,
-      {
-        customerId: session.customerId,
-        signedName,
-        agreedToTerms,
-        ipAddress,
-        userAgent,
-      },
-      documentStore
-    );
+    await acceptConsentClickwrap(consentRepo, schedulingRepo, {
+      customerId: session.customerId,
+      presentedConsentVersionId,
+      ipAddress,
+      userAgent,
+    });
     revalidatePath("/my/consent");
     revalidatePath("/my/profile");
-    return actionOk("Signed — thank you.");
+    return actionOk("Accepted — thank you.");
   } catch (error) {
+    if (error instanceof ConsentVersionChangedError) return actionError(error.message);
     if (error instanceof InvalidConsentStateError) return actionError(error.message);
     throw error;
   }

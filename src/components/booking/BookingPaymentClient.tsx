@@ -3,15 +3,22 @@
 import { useMemo, useState } from "react";
 import { createNormalBookingCheckout } from "@/lib/booking/create-normal-booking-checkout";
 import { createPrepaidPackageCheckout } from "@/lib/booking/create-prepaid-package-checkout";
-import { CANCELLATION_POLICY_TIERS, PREPAID_PACKAGE_CANCELLATION_NOTE, SAVED_PAYMENT_AUTHORIZATION_COPY } from "@/lib/booking/cancellation-policy";
+import {
+  CANCELLATION_POLICY_TIERS,
+  COMBINED_CONSENT_CHECKBOX_COPY,
+  PREPAID_PACKAGE_CANCELLATION_NOTE,
+  PREPAID_PAYMENT_AUTHORIZATION_COPY,
+  SAVED_PAYMENT_AUTHORIZATION_COPY,
+} from "@/lib/booking/cancellation-policy";
 import type { AchPackagePricing } from "@/lib/booking/ach-package-options";
 import { NORMAL_FREQUENCY_LABELS, PREPAID_FREQUENCY_LABELS } from "@/lib/booking/labels";
 import { OPERATING_HOURS_END, OPERATING_HOURS_START } from "@/lib/booking/operating-hours";
-import type { BookingPricingOptions, PaymentMethodType, PrepaidFrequency } from "@/lib/booking/types";
+import type { BookingPricingOptions, ConsentVersionSummary, PaymentMethodType, PrepaidFrequency } from "@/lib/booking/types";
 import type { CalculationResult, FrequencyId } from "@/lib/pricing/types";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import type { AddOnSelection } from "@/components/quote-wizard/map-form-to-raw-input";
 import GlassPanel from "@/components/ui/GlassPanel";
+import TermsConsentDialog from "@/components/booking/TermsConsentDialog";
 
 const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "every_4_weeks"];
 const PACKAGE_FREQUENCIES: PrepaidFrequency[] = ["weekly", "biweekly", "every_4_weeks"];
@@ -65,30 +72,49 @@ interface BookingPaymentClientProps {
   /** Server-computed via canCreateStripeSetup()/canCreateStripeCharge() — see the booking page. When false, the matching section's Stripe action is replaced with an unavailable message rather than inviting a flow that would only fail server-side. */
   stripeSetupAvailable: boolean;
   stripeChargeAvailable: boolean;
+  /** The currently active consent_versions row, resolved server-side (see the booking page) — never fetched client-side. Null when no consent template is configured, in which case booking is unavailable rather than silently skipping the required acceptance. */
+  activeConsentVersion: ConsentVersionSummary | null;
 }
 
-/** Collapsed by default — the customer must still be able to open and review this before accepting the authorization checkbox below it. */
-function CancellationPolicyDisclosure() {
-  const [expanded, setExpanded] = useState(false);
+interface RequiredConsentCheckboxProps {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  onViewTerms: () => void;
+  showValidationError: boolean;
+}
+
+/**
+ * The single required clickwrap checkbox — unchecked by default, never
+ * pre-checked or implicitly accepted by any other action. "View Terms &
+ * Consent" is a separate control that only opens the read-only dialog; it
+ * never toggles or implies acceptance of the checkbox itself.
+ */
+function RequiredConsentCheckbox({ id, checked, onChange, onViewTerms, showValidationError }: RequiredConsentCheckboxProps) {
   return (
-    <div className="mt-3">
-      <p className="text-xs text-muted">Free changes 48+ hours before your appointment.</p>
+    <div className="mt-4">
+      <label htmlFor={id} className="flex items-start gap-3 text-sm text-foreground">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+          aria-invalid={showValidationError}
+          className="mt-0.5 h-4 w-4 rounded border-border text-secondary focus:ring-primary/50"
+        />
+        <span>{COMBINED_CONSENT_CHECKBOX_COPY}</span>
+      </label>
       <button
         type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-        className="mt-1 text-xs font-medium text-secondary underline decoration-secondary/40 underline-offset-2"
+        onClick={onViewTerms}
+        className="mt-1.5 ml-7 text-xs font-medium text-secondary underline decoration-secondary/40 underline-offset-2"
       >
-        {expanded ? "Hide cancellation & rescheduling policy" : "View cancellation & rescheduling policy"}
+        View Terms &amp; Consent
       </button>
-      {expanded && (
-        <ul className="mt-2 flex flex-col gap-1 rounded-2xl bg-background-alt p-3 text-xs text-muted">
-          {CANCELLATION_POLICY_TIERS.map((tier) => (
-            <li key={tier.window}>
-              <span className="text-foreground">{tier.window}:</span> {tier.fee}
-            </li>
-          ))}
-        </ul>
+      {showValidationError && (
+        <p role="alert" className="mt-1.5 ml-7 text-xs font-medium text-red-700">
+          Please check the box above to continue.
+        </p>
       )}
     </div>
   );
@@ -104,6 +130,7 @@ export default function BookingPaymentClient({
   achPackageOptions,
   stripeSetupAvailable,
   stripeChargeAvailable,
+  activeConsentVersion,
 }: BookingPaymentClientProps) {
   // One token per visit to this page — resent unchanged on every retry of
   // the same submission (double click, slow network) so the server can
@@ -115,21 +142,46 @@ export default function BookingPaymentClient({
   const [normalFrequency, setNormalFrequency] = useState<FrequencyId>(defaultFrequency);
   const [requestedDate, setRequestedDate] = useState("");
   const [requestedStartTime, setRequestedStartTime] = useState("");
-  const [authorized, setAuthorized] = useState(false);
   const [normalSubmitting, setNormalSubmitting] = useState(false);
   const [normalErrors, setNormalErrors] = useState<string[] | null>(null);
+  // The ONE required checkbox for this panel — represents the customer's
+  // combined acceptance of Service Terms, the Cancellation/Rescheduling
+  // Policy, AND payment-method-save authorization together. It drives both
+  // paymentMethodSaveAuthorized and consentAccepted server-side (two named
+  // fields for two audit-relevant facts), never two separate checkboxes.
+  const [normalConsentChecked, setNormalConsentChecked] = useState(false);
+  const [normalConsentInvalid, setNormalConsentInvalid] = useState(false);
+  const [normalTermsOpen, setNormalTermsOpen] = useState(false);
 
   const [activePackageTab, setActivePackageTab] = useState<PrepaidFrequency>("weekly");
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [packageSubmitting, setPackageSubmitting] = useState(false);
   const [packageError, setPackageError] = useState<string | null>(null);
+  const [packageConsentChecked, setPackageConsentChecked] = useState(false);
+  const [packageConsentInvalid, setPackageConsentInvalid] = useState(false);
+  const [packageTermsOpen, setPackageTermsOpen] = useState(false);
+
+  // Mutable so a version-race response (the terms changed between page
+  // load and submission) can swap in the now-current version for the
+  // customer to review, rather than silently signing the stale one they
+  // never actually saw. See createNormalBookingCheckout's "consent_changed" stage.
+  const [consentVersion, setConsentVersion] = useState(activeConsentVersion);
 
   const selectedNormalOption = normalOptions[normalFrequency];
   const selectedFutureOption = isRecurring(normalFrequency) ? futureRecurringOptions[normalFrequency] : null;
 
+  function handleConsentVersionChanged(currentVersion: ConsentVersionSummary, resetChecked: (checked: boolean) => void) {
+    setConsentVersion(currentVersion);
+    resetChecked(false);
+    return [
+      "Our terms were just updated. Please review the current Terms & Consent and check the box again before continuing.",
+    ];
+  }
+
   async function handleNormalSubmit() {
     if (normalSubmitting) return;
     setNormalErrors(null);
+    setNormalConsentInvalid(false);
 
     if (!requestedDate) {
       setNormalErrors(["Please choose a preferred date."]);
@@ -139,10 +191,13 @@ export default function BookingPaymentClient({
       setNormalErrors(["Please choose a preferred start time."]);
       return;
     }
-    if (!authorized) {
-      setNormalErrors([
-        "Please authorize CleanPerfecto to securely save your payment method and accept the cancellation/rescheduling policy to continue.",
-      ]);
+    if (!consentVersion) {
+      setNormalErrors([GENERIC_ERROR_MESSAGE]);
+      return;
+    }
+    if (!normalConsentChecked) {
+      setNormalConsentInvalid(true);
+      setNormalErrors(["Please agree to CleanPerfecto's Service Terms, Cancellation & Rescheduling Policy, and Payment Authorization to continue."]);
       return;
     }
 
@@ -159,11 +214,15 @@ export default function BookingPaymentClient({
         movePackageLevel: selection.movePackageLevel,
         outdoorSelection: selection.outdoorSelection,
         quantifiedAddOns: selection.quantifiedAddOns,
-        paymentMethodSaveAuthorized: authorized,
+        paymentMethodSaveAuthorized: normalConsentChecked,
+        consentAccepted: normalConsentChecked,
+        presentedConsentVersionId: consentVersion.id,
       });
       // A successful call redirects server-side and never returns here.
       if (result.stage === "validation") {
         setNormalErrors(result.errors);
+      } else if (result.stage === "consent_changed") {
+        setNormalErrors(handleConsentVersionChanged(result.currentVersion, setNormalConsentChecked));
       } else {
         setNormalErrors([GENERIC_ERROR_MESSAGE]);
       }
@@ -177,6 +236,18 @@ export default function BookingPaymentClient({
   async function handlePackageSubmit() {
     if (packageSubmitting || !selectedPaymentMethod) return;
     setPackageError(null);
+    setPackageConsentInvalid(false);
+
+    if (!consentVersion) {
+      setPackageError(GENERIC_ERROR_MESSAGE);
+      return;
+    }
+    if (!packageConsentChecked) {
+      setPackageConsentInvalid(true);
+      setPackageError("Please agree to CleanPerfecto's Service Terms, Cancellation & Rescheduling Policy, and Payment Authorization to continue.");
+      return;
+    }
+
     setPackageSubmitting(true);
     try {
       const result = await createPrepaidPackageCheckout({
@@ -184,11 +255,17 @@ export default function BookingPaymentClient({
         clientRequestId,
         frequency: activePackageTab,
         paymentMethod: selectedPaymentMethod,
+        consentAccepted: packageConsentChecked,
+        presentedConsentVersionId: consentVersion.id,
       });
       if (result.stage === "manual_review_required") {
         setPackageError(
           `This package needs a quick manual review. Please contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`
         );
+      } else if (result.stage === "consent_changed") {
+        setPackageError(handleConsentVersionChanged(result.currentVersion, setPackageConsentChecked)[0]);
+      } else if (result.stage === "validation") {
+        setPackageError(result.errors[0] ?? GENERIC_ERROR_MESSAGE);
       } else {
         setPackageError(GENERIC_ERROR_MESSAGE);
       }
@@ -334,17 +411,24 @@ export default function BookingPaymentClient({
           </p>
         </div>
 
-        <label className="mt-4 flex items-start gap-3 text-sm text-foreground">
-          <input
-            type="checkbox"
-            checked={authorized}
-            onChange={(event) => setAuthorized(event.target.checked)}
-            className="mt-0.5 h-4 w-4 rounded border-border text-secondary focus:ring-primary/50"
+        <RequiredConsentCheckbox
+          id="normal-consent-checkbox"
+          checked={normalConsentChecked}
+          onChange={setNormalConsentChecked}
+          onViewTerms={() => setNormalTermsOpen(true)}
+          showValidationError={normalConsentInvalid}
+        />
+        {consentVersion && (
+          <TermsConsentDialog
+            open={normalTermsOpen}
+            onClose={() => setNormalTermsOpen(false)}
+            serviceTermsTitle={consentVersion.title}
+            serviceTermsBody={consentVersion.bodyText}
+            isLegallyReviewed={consentVersion.isLegallyReviewed}
+            cancellationPolicyTiers={CANCELLATION_POLICY_TIERS}
+            paymentAuthorizationCopy={SAVED_PAYMENT_AUTHORIZATION_COPY}
           />
-          <span>{SAVED_PAYMENT_AUTHORIZATION_COPY}</span>
-        </label>
-
-        <CancellationPolicyDisclosure />
+        )}
 
         {normalErrors && (
           <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -454,6 +538,30 @@ export default function BookingPaymentClient({
         )}
 
         <p className="mt-4 text-xs text-muted">{PREPAID_PACKAGE_CANCELLATION_NOTE}</p>
+
+        {cardBuyable && (
+          <>
+            <RequiredConsentCheckbox
+              id="package-consent-checkbox"
+              checked={packageConsentChecked}
+              onChange={setPackageConsentChecked}
+              onViewTerms={() => setPackageTermsOpen(true)}
+              showValidationError={packageConsentInvalid}
+            />
+            {consentVersion && (
+              <TermsConsentDialog
+                open={packageTermsOpen}
+                onClose={() => setPackageTermsOpen(false)}
+                serviceTermsTitle={consentVersion.title}
+                serviceTermsBody={consentVersion.bodyText}
+                isLegallyReviewed={consentVersion.isLegallyReviewed}
+                cancellationPolicyTiers={CANCELLATION_POLICY_TIERS}
+                packageCancellationNote={PREPAID_PACKAGE_CANCELLATION_NOTE}
+                paymentAuthorizationCopy={PREPAID_PAYMENT_AUTHORIZATION_COPY}
+              />
+            )}
+          </>
+        )}
 
         {packageError && (
           <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">

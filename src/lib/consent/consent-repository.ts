@@ -55,6 +55,8 @@ export interface ConsentRepository {
   /** Newest first — for the portal history view and admin display. */
   listByCustomerId(customerId: string): Promise<CustomerConsentRecord[]>;
   findById(id: string): Promise<CustomerConsentRecord | null>;
+  /** The customer's name of record (customers.name) — used only to populate the existing signed_name evidence column for a clickwrap acceptance; never a typed/handwritten signature. Null if the customer row is somehow missing. */
+  findCustomerNameById(customerId: string): Promise<string | null>;
   /**
    * Insert-or-no-op via the unique (customer_id, consent_version_id)
    * constraint — the idempotency mechanism for "don't re-request a
@@ -148,6 +150,12 @@ export function createSupabaseConsentRepository(): ConsentRepository {
       const { data, error } = await supabase.from("customer_consents").select().eq("id", id).maybeSingle();
       if (error) throw new Error(`[consent] customer_consents lookup by id failed: ${error.message}`);
       return data ? toConsentRecord(data) : null;
+    },
+
+    async findCustomerNameById(customerId) {
+      const { data, error } = await supabase.from("customers").select("name").eq("id", customerId).maybeSingle();
+      if (error) throw new Error(`[consent] customers name lookup failed: ${error.message}`);
+      return (data?.name as string | undefined) ?? null;
     },
 
     async insertSentRequest(input) {

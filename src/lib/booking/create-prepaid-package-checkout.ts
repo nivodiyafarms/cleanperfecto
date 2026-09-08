@@ -6,7 +6,13 @@ import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
 import { assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
 import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { SITE_CONTACT } from "@/lib/site-contact";
+import { acceptConsentClickwrap } from "@/lib/consent/accept-consent-clickwrap";
+import { captureAuditHeaders } from "@/lib/consent/capture-audit-headers";
+import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
+import { ConsentVersionChangedError, InvalidConsentStateError } from "@/lib/consent/errors";
+import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { applyAchIncentive } from "./ach-incentive";
+import { CANCELLATION_POLICY_VERSION } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { PREPAID_FREQUENCY_LABELS } from "./labels";
@@ -15,10 +21,9 @@ import { createPrepaidAchCheckoutSession, createPrepaidCardCheckoutSession } fro
 import { getStripeClient } from "./stripe/client";
 import { resolveStripeCustomerId } from "./stripe/customers";
 import { createSupabaseBookingRepository } from "./supabase-booking-repository";
-import type { NotBookableReason, PaymentMethodType, PrepaidBookingSelectionInput, PrepaidFrequency } from "./types";
+import type { ConsentVersionSummary, NotBookableReason, PrepaidBookingSelectionInput } from "./types";
+import { validatePrepaidBookingSelection } from "./validate-prepaid-booking-selection";
 
-const PACKAGE_FREQUENCIES: PrepaidFrequency[] = ["weekly", "biweekly", "every_4_weeks"];
-const PAYMENT_METHODS: PaymentMethodType[] = ["card", "us_bank_account"];
 const PREPAID_VISIT_COUNT = 6;
 
 const GENERIC_ERROR_MESSAGE = `We couldn't start your package purchase right now. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
@@ -29,16 +34,9 @@ export type CreatePrepaidPackageCheckoutResult =
   | { ok: false; stage: "validation"; errors: string[] }
   | { ok: false; stage: "not_bookable"; reason: NotBookableReason }
   | { ok: false; stage: "manual_review_required" }
+  | { ok: false; stage: "consent_changed"; currentVersion: ConsentVersionSummary }
   | { ok: false; stage: "failed"; message: string };
 // ok:true is never returned — success ends in redirect().
-
-function validate(raw: PrepaidBookingSelectionInput): string[] {
-  const errors: string[] = [];
-  if (!raw.clientRequestId) errors.push("Missing request id.");
-  if (!PACKAGE_FREQUENCIES.includes(raw.frequency)) errors.push("Please choose a valid package frequency.");
-  if (!PAYMENT_METHODS.includes(raw.paymentMethod)) errors.push("Please choose a payment method.");
-  return errors;
-}
 
 /**
  * Server action for the 6+ Cleaning Prepaid Package path: recomputes the
@@ -51,7 +49,7 @@ function validate(raw: PrepaidBookingSelectionInput): string[] {
 export async function createPrepaidPackageCheckout(
   raw: PrepaidBookingSelectionInput
 ): Promise<CreatePrepaidPackageCheckoutResult> {
-  const errors = validate(raw);
+  const errors = validatePrepaidBookingSelection(raw);
   if (errors.length > 0) {
     return { ok: false, stage: "validation", errors };
   }
@@ -97,6 +95,19 @@ export async function createPrepaidPackageCheckout(
     }
     const prepaidPackageTotal = result.prepaidPackageTotal;
 
+    // Required clickwrap acceptance — same architecture as the normal
+    // booking path, worded for the prepaid payment model (see
+    // PREPAID_PAYMENT_AUTHORIZATION_COPY). Recorded before the booking
+    // order exists so a version-race rejection never leaves a
+    // half-created booking behind.
+    const { ipAddress, userAgent } = await captureAuditHeaders();
+    await acceptConsentClickwrap(createSupabaseConsentRepository(), createSupabaseSchedulingRepository(), {
+      customerId: quote.customerId,
+      presentedConsentVersionId: raw.presentedConsentVersionId,
+      ipAddress,
+      userAgent,
+    });
+
     const bookingOrder = await repo.insertBookingOrder({
       customerId: quote.customerId,
       quoteRequestId: quote.quoteId,
@@ -124,10 +135,12 @@ export async function createPrepaidPackageCheckout(
       requestedDate: null,
       requestedTimeWindow: null,
       requestedStartTime: null,
-      // No saved-payment-method authorization checkbox for a prepaid
-      // purchase (requirement: the Stripe Checkout payment itself is the
-      // authorization) — no policy version to record here.
-      cancellationPolicyVersion: null,
+      // Still no saved-payment-method authorization checkbox for a prepaid
+      // purchase — the Stripe Checkout payment itself is that
+      // authorization. The disclosed cancellation/rescheduling/no-access
+      // fee schedule now IS accepted here too (via the required consent
+      // checkbox above), so its version is recorded like a normal booking.
+      cancellationPolicyVersion: CANCELLATION_POLICY_VERSION,
     });
 
     const stripe = getStripeClient();
@@ -192,6 +205,27 @@ export async function createPrepaidPackageCheckout(
   } catch (error) {
     if (error instanceof RuntimeConfigurationError) {
       return { ok: false, stage: "failed", message: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
+    }
+    if (error instanceof ConsentVersionChangedError) {
+      const consentRepo = createSupabaseConsentRepository();
+      const currentVersion = await consentRepo.findVersionById(error.currentVersionId);
+      if (currentVersion) {
+        return {
+          ok: false,
+          stage: "consent_changed",
+          currentVersion: {
+            id: currentVersion.id,
+            versionLabel: currentVersion.versionLabel,
+            title: currentVersion.title,
+            bodyText: currentVersion.bodyText,
+            isLegallyReviewed: currentVersion.isLegallyReviewed,
+          },
+        };
+      }
+      return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
+    }
+    if (error instanceof InvalidConsentStateError) {
+      return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
     }
     return { ok: false, stage: "failed", message: GENERIC_ERROR_MESSAGE };
   }

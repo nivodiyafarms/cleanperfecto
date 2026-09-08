@@ -31,3 +31,27 @@ export const PREPAID_PACKAGE_CANCELLATION_NOTE =
 
 export const SAVED_PAYMENT_AUTHORIZATION_COPY =
   "I agree to the cancellation/rescheduling policy and authorize CleanPerfecto to securely save my payment method for the approved cleaning charge and applicable late-change fees.";
+
+/**
+ * The single required clickwrap checkbox label covering Service Terms +
+ * Cancellation/Rescheduling/No-Access Policy + Payment Authorization as
+ * ONE combined electronic acceptance — owner-approved wording, used
+ * identically for both Pay Per Cleaning and Prepaid Package (the "View
+ * Terms & Consent" content next to it is what differs per payment model,
+ * not this label). See BookingPaymentClient's checkbox + TermsConsentDialog.
+ */
+export const COMBINED_CONSENT_CHECKBOX_COPY =
+  "I agree to CleanPerfecto's Service Terms, Cancellation & Rescheduling Policy, and Payment Authorization.";
+
+/**
+ * Payment-authorization explanation shown inside the "View Terms &
+ * Consent" dialog for a Prepaid Package purchase — deliberately different
+ * wording from SAVED_PAYMENT_AUTHORIZATION_COPY (normal booking): a
+ * package is paid in full at checkout today, so there is no future
+ * post-completion charge being authorized here, and no saved-payment-
+ * method-for-later-use concept applies. Material scope/price changes to
+ * an active package still require the customer's approval before any
+ * additional amount is owed (see package_amendments' approval_state).
+ */
+export const PREPAID_PAYMENT_AUTHORIZATION_COPY =
+  "You are paying your full prepaid package total today by the payment method you select below. No further charge is authorized here — any material change to your package scope requires your separate approval before an additional amount is owed.";

@@ -63,6 +63,15 @@ export interface QuoteRequestForBookingRow {
 
 export type NotBookableReason = "not_found" | "manual_review" | "customer_identity_conflict";
 
+/** The active consent_versions row shape the booking page/client needs — never the full repository record. */
+export interface ConsentVersionSummary {
+  id: string;
+  versionLabel: string;
+  title: string;
+  bodyText: string;
+  isLegallyReviewed: boolean;
+}
+
 export interface BookableQuote {
   quoteId: string;
   customerId: string;
@@ -108,6 +117,10 @@ export interface NormalBookingSelectionInput {
   outdoorSelection?: OutdoorSelection;
   quantifiedAddOns?: QuantifiedAddOnSelection[];
   paymentMethodSaveAuthorized: boolean;
+  /** Required clickwrap acceptance of Service Terms + Cancellation/Rescheduling Policy + Payment Authorization — see BookingConsentCheckbox. */
+  consentAccepted: boolean;
+  /** The consent_versions.id actually rendered to the customer alongside the checkbox — validated server-side against the current active version, never trusted blindly. See acceptConsentClickwrap. */
+  presentedConsentVersionId: string;
 }
 
 export interface PrepaidBookingSelectionInput {
@@ -115,6 +128,9 @@ export interface PrepaidBookingSelectionInput {
   clientRequestId: string;
   frequency: PrepaidFrequency;
   paymentMethod: PaymentMethodType;
+  /** Required clickwrap acceptance — same semantics as NormalBookingSelectionInput, worded for the prepaid payment model. */
+  consentAccepted: boolean;
+  presentedConsentVersionId: string;
 }
 
 export interface BookingOrderRow {
