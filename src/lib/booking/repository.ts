@@ -51,7 +51,21 @@ export interface BookingRepository extends CompletedServiceHistoryRepository {
   /** Insert-or-fetch by client_request_id — see booking_orders migration comments. Always returns the single authoritative row for that token, whether this call created it or a prior one did. */
   insertBookingOrder(row: NewBookingOrderRow): Promise<BookingOrderRow>;
   findBookingOrderById(id: string): Promise<BookingOrderRow | null>;
-  /** Conditional UPDATE (`WHERE status = expectedStatus`). Returns whether a row actually changed, so callers only fire side effects (emails, package activation) on the run that performed the real transition. */
+  /**
+   * Conditional UPDATE (`WHERE status = expectedStatus`). Returns whether a
+   * row actually changed, so callers only fire side effects (emails,
+   * package activation) on the run that performed the real transition.
+   *
+   * Deliberately the ONLY update method this interface exposes for
+   * booking_orders. There is intentionally no method to change
+   * consentVersionId, cancellationPolicyVersion,
+   * cancellationPolicyTextSnapshot, paymentAuthorizationTextSnapshot, or
+   * paymentAuthorizationAcceptedAt after creation — those five fields are
+   * set once, at insertBookingOrder time, and are additionally enforced
+   * write-once at the DB level (booking_orders_protect_consent_evidence,
+   * see 20260827090600's migration) so even a direct service-role SQL
+   * statement bypassing this repository entirely cannot rewrite them.
+   */
   updateBookingOrderStatus(id: string, expectedStatus: BookingOrderStatus, nextStatus: BookingOrderStatus): Promise<boolean>;
 
   /** A still-open (created/processing) attempt for this booking order, if any — see the two-layer Checkout idempotency design. */
