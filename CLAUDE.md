@@ -28,9 +28,25 @@ The final platform will include:
 
 ## Current Milestone
 
-Work only on the project foundation and public homepage.
+The original homepage-only milestone is superseded on `feature/booking-payment-sandbox`:
+database, booking, and payment-schema work is authorized there under explicit,
+per-group production sign-off (see "Approved Production Migration Groups" below).
+AI chatbot and RAG remain out of scope until a future milestone. Homepage/marketing
+work on `main` is unaffected by this and still follows the rules below.
 
-Do not implement the database, authentication, payments, booking, AI chatbot, or RAG yet.
+## Approved Production Migration Groups
+
+Production Supabase project: `numabqpfnigejtdwpxng`. Migrations are applied in
+explicitly authorized, numbered groups — never ad hoc, never beyond the group's
+stated file range.
+
+- Group A/B/C — applied (47 migrations, through `20260827090700_protect_booking_identity_evidence`).
+- Group D (`20260828100000`–`20260828100300`, service_visit_payments + saved payment methods) — authorized.
+- Group E (`20260907090000`+) — NOT authorized until a separate explicit sign-off.
+
+Applying a group still requires: explicit user authorization in the conversation,
+independent pre-write verification against production (never trust an asserted
+migration count/SHA without checking), and read-only preflight before any write.
 
 ## Approved Launch Direction (current source of truth)
 
