@@ -40,9 +40,8 @@ Production Supabase project: `numabqpfnigejtdwpxng`. Migrations are applied in
 explicitly authorized, numbered groups — never ad hoc, never beyond the group's
 stated file range.
 
-- Group A/B/C — applied (47 migrations, through `20260827090700_protect_booking_identity_evidence`).
-- Group D (`20260828100000`–`20260828100300`, service_visit_payments + saved payment methods) — authorized.
-- Group E (`20260907090000`+) — NOT authorized until a separate explicit sign-off.
+- Groups A/B/C/D/E — applied. Production migration boundary: `20260907090300_create_waive_service_fee_assessment_with_audit_function.sql` (55 migrations total). Group E added the `owner_admin`/`operations` admin_users roles, the append-only `financial_audit_log`, and the two atomic `*_with_audit` RPCs (external-payment recording, fee waiver) — schema/RPC only, no admin rows seeded and no application deploy.
+- Next group beyond `20260907090300` — NOT authorized until a separate explicit sign-off.
 
 Applying a group still requires: explicit user authorization in the conversation,
 independent pre-write verification against production (never trust an asserted
