@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isPublicAdminPath } from "@/lib/admin/auth/is-public-admin-path";
 import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
@@ -24,8 +25,12 @@ export async function proxy(request: NextRequest) {
 
   // /admin/login must never be redirected to itself — an unauthenticated
   // visit there would otherwise loop forever, since the matcher below
-  // covers every /admin/* path including this one.
-  if (pathname === "/admin/login" || pathname.startsWith("/admin/login/")) {
+  // covers every /admin/* path including this one. /admin/auth/callback is
+  // the password-recovery code-exchange route, unauthenticated by
+  // definition until it runs — see is-public-admin-path.ts. Note
+  // /admin/reset-password itself is deliberately NOT in this exclusion —
+  // it still requires the normal authenticated-session check below.
+  if (isPublicAdminPath(pathname)) {
     return NextResponse.next();
   }
 
