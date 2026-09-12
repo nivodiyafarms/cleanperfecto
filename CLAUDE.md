@@ -40,8 +40,8 @@ Production Supabase project: `numabqpfnigejtdwpxng`. Migrations are applied in
 explicitly authorized, numbered groups — never ad hoc, never beyond the group's
 stated file range.
 
-- Groups A/B/C/D/E — applied. Audit privilege hardening — applied. Production migration boundary: `20260911090000_harden_financial_audit_log_privileges.sql` (56 migrations total). Group E added the `owner_admin`/`operations` admin_users roles, the append-only `financial_audit_log`, and the two atomic `*_with_audit` RPCs (external-payment recording, fee waiver). The hardening migration closed a gap where `service_role` had also inherited unrequested REFERENCES/TRIGGER/TRUNCATE on `financial_audit_log` from a schema-level default grant — `service_role` is now exactly SELECT+INSERT there. All of this is schema/RPC only — no admin rows seeded and no application deploy.
-- Next group beyond `20260911090000` — NOT authorized until a separate explicit sign-off.
+- Groups A/B/C/D/E — applied. `financial_audit_log` and `admin_users` privilege hardening — both applied. Production migration boundary: `20260912090000_harden_admin_users_privileges.sql` (57 migrations total). Group E added the `owner_admin`/`operations` admin_users roles, the append-only `financial_audit_log`, and the two atomic `*_with_audit` RPCs (external-payment recording, fee waiver). Both hardening migrations closed the same gap — `service_role` had inherited unrequested REFERENCES/TRIGGER/TRUNCATE (and, on `financial_audit_log`, no legitimate UPDATE need at all) from a schema-level default grant. `service_role` is now exactly SELECT+INSERT on `financial_audit_log` and exactly SELECT+INSERT+UPDATE on `admin_users`. All of this is schema/RPC only — `auth.users` and `admin_users` both remain at 0 rows; no admin has been created and no application deploy has happened.
+- Next group beyond `20260912090000` — NOT authorized until a separate explicit sign-off.
 
 Applying a group still requires: explicit user authorization in the conversation,
 independent pre-write verification against production (never trust an asserted
