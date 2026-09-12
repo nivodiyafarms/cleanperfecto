@@ -40,8 +40,8 @@ Production Supabase project: `numabqpfnigejtdwpxng`. Migrations are applied in
 explicitly authorized, numbered groups — never ad hoc, never beyond the group's
 stated file range.
 
-- Groups A/B/C/D/E — applied. Production migration boundary: `20260907090300_create_waive_service_fee_assessment_with_audit_function.sql` (55 migrations total). Group E added the `owner_admin`/`operations` admin_users roles, the append-only `financial_audit_log`, and the two atomic `*_with_audit` RPCs (external-payment recording, fee waiver) — schema/RPC only, no admin rows seeded and no application deploy.
-- Next group beyond `20260907090300` — NOT authorized until a separate explicit sign-off.
+- Groups A/B/C/D/E — applied. Audit privilege hardening — applied. Production migration boundary: `20260911090000_harden_financial_audit_log_privileges.sql` (56 migrations total). Group E added the `owner_admin`/`operations` admin_users roles, the append-only `financial_audit_log`, and the two atomic `*_with_audit` RPCs (external-payment recording, fee waiver). The hardening migration closed a gap where `service_role` had also inherited unrequested REFERENCES/TRIGGER/TRUNCATE on `financial_audit_log` from a schema-level default grant — `service_role` is now exactly SELECT+INSERT there. All of this is schema/RPC only — no admin rows seeded and no application deploy.
+- Next group beyond `20260911090000` — NOT authorized until a separate explicit sign-off.
 
 Applying a group still requires: explicit user authorization in the conversation,
 independent pre-write verification against production (never trust an asserted
