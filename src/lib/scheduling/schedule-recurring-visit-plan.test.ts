@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
 import { planRecurringVisitDates } from "./plan-recurring-visit-dates";
-import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import { scheduleRecurringVisitPlan } from "./schedule-recurring-visit-plan";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
 
