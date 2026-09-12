@@ -11,6 +11,10 @@ describe("isPublicAdminPath", () => {
     expect(isPublicAdminPath("/admin/auth/callback")).toBe(true);
   });
 
+  it("allows the forgot-password request page", () => {
+    expect(isPublicAdminPath("/admin/forgot-password")).toBe(true);
+  });
+
   it("keeps /admin/reset-password behind the normal authenticated-session check", () => {
     expect(isPublicAdminPath("/admin/reset-password")).toBe(false);
   });

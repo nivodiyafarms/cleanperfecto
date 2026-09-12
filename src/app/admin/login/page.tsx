@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 /**
@@ -73,6 +74,11 @@ export default function AdminLoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               className="mt-1 w-full rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:border-secondary focus:outline-none focus:ring-1 focus:ring-secondary"
             />
+            <p className="mt-1 text-right text-xs">
+              <Link href="/admin/forgot-password" className="font-medium text-secondary hover:underline">
+                Forgot password?
+              </Link>
+            </p>
           </div>
 
           {error && (
