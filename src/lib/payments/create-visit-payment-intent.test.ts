@@ -4,7 +4,7 @@ import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-boo
 import { createFakeVisitPaymentGateway } from "./test-support/fake-visit-payment-gateway";
 import { prepareVisitPaymentReview } from "./prepare-visit-payment-review";
 import { selectVisitTip } from "./select-visit-tip";
-import { createVisitPaymentIntent } from "./create-visit-payment-intent";
+import { createVisitPaymentIntent, DeadPaymentIntentError } from "./create-visit-payment-intent";
 import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 
 const NEW_VISIT: NewServiceVisitRow = {
@@ -142,5 +142,39 @@ describe("createVisitPaymentIntent", () => {
 
     const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
     expect(payment!.tipConfirmedAt).toBeNull(); // still not frozen — customer must confirm again
+  });
+
+  it("retry lifecycle: reuses the existing PaymentIntent when its Stripe status is safely reconfirmable (processing/requires_action/requires_payment_method/succeeded)", async () => {
+    for (const status of ["processing", "requires_action", "requires_payment_method", "succeeded"] as const) {
+      const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+      const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      if (first.outcome !== "ready") throw new Error("expected ready");
+
+      // Simulate Stripe now reporting this status for the existing intent.
+      for (const record of gatewayState.paymentIntents.values()) record.status = status;
+
+      const second = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      expect(second.outcome).toBe("ready");
+      expect(gatewayState.createPaymentIntentCallCount).toBe(1); // never a second intent, regardless of which safe status this is
+    }
+  });
+
+  it("retry lifecycle: a definitively dead PaymentIntent (canceled) throws DeadPaymentIntentError rather than silently returning a dead client_secret or creating a duplicate charge", async () => {
+    const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    if (first.outcome !== "ready") throw new Error("expected ready");
+
+    for (const record of gatewayState.paymentIntents.values()) record.status = "canceled";
+
+    await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" })).rejects.toThrow(
+      DeadPaymentIntentError
+    );
+    expect(gatewayState.createPaymentIntentCallCount).toBe(1); // still only the original — no duplicate-charge attempt
   });
 });

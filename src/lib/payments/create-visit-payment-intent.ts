@@ -3,6 +3,7 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
 import { assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
+import { decidePaymentIntentRetry } from "./payment-intent-retry-decision";
 import { refreshExpiredTaxCalculationIfNeeded } from "./refresh-expired-tax-calculation";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
@@ -11,6 +12,26 @@ export type CreateVisitPaymentIntentOutcome =
   | { outcome: "refreshed"; approvedAmount: number; tipAmount: number; taxAmount: number; totalAmount: number }
   | { outcome: "no_payment_due" }
   | { outcome: "ready"; clientSecret: string | null; totalAmount: number };
+
+/**
+ * Thrown when the frozen row's existing PaymentIntent is definitively dead
+ * (see payment-intent-retry-decision.ts) and no code path currently exists
+ * to safely replace it — service_visit_payments.stripe_payment_intent_id is
+ * immutable once set (DB trigger, see 20260828100300_create_service_visit_payments.sql).
+ * Creating a fresh intent for this row requires a migration relaxing that
+ * trigger (authored, not yet applied — see the live-payment hardening
+ * blocker register) plus a new repository method to perform the swap.
+ * Surfaced as a clear, distinct error rather than silently returning the
+ * dead intent's client_secret (which would previously fail confusingly at
+ * Stripe.js confirmation time instead of here).
+ */
+export class DeadPaymentIntentError extends InvalidVisitStateError {
+  constructor(serviceVisitId: string, stripePaymentIntentId: string, stripeStatus: string) {
+    super(
+      `service_visit ${serviceVisitId}'s existing PaymentIntent ${stripePaymentIntentId} is dead (Stripe status: ${stripeStatus}) and cannot be reused. Creating a fresh PaymentIntent for an already-frozen row requires admin/manual intervention pending the retry-lifecycle migration.`
+    );
+  }
+}
 
 /**
  * Step 3 — Confirm & Pay (stripe_card rail only). Ownership/session checks
@@ -55,6 +76,9 @@ export async function createVisitPaymentIntent(
     }
     if (payment.stripePaymentIntentId) {
       const intent = await gateway.retrievePaymentIntent(payment.stripePaymentIntentId);
+      if (decidePaymentIntentRetry(intent.status) === "fresh_intent_required") {
+        throw new DeadPaymentIntentError(input.serviceVisitId, payment.stripePaymentIntentId, intent.status);
+      }
       return { outcome: "ready", clientSecret: intent.clientSecret, totalAmount: payment.totalAmount ?? 0 };
     }
     throw new InvalidVisitStateError("This payment has already been settled through another method.");
