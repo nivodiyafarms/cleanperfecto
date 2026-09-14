@@ -192,6 +192,30 @@ export interface PrepaidPackageRow {
   cancellationReason?: string | null;
 }
 
+export type TaxReversalReconciliationTargetType = "service_visit_payment" | "prepaid_package";
+export type TaxReversalReconciliationStatus = "pending" | "succeeded" | "failed";
+export type TaxReversalReconciliationMode = "full" | "partial";
+
+/** Durable recovery record for one refund event's owed Stripe Tax reversal — see 20260914090300_create_tax_reversal_reconciliations.sql and attempt-tax-reversal.ts. */
+export interface NewTaxReversalReconciliationRow {
+  targetEntityType: TaxReversalReconciliationTargetType;
+  targetEntityId: string;
+  originalTransactionId: string;
+  intendedAmount: number;
+  mode: TaxReversalReconciliationMode;
+}
+
+export interface TaxReversalReconciliationRow extends NewTaxReversalReconciliationRow {
+  id: string;
+  status: TaxReversalReconciliationStatus;
+  stripeReversalId: string | null;
+  failureMessage: string | null;
+  retryCount: number;
+  createdAt: Date;
+  lastAttemptedAt: Date | null;
+  succeededAt: Date | null;
+}
+
 export interface ServiceFeeAssessmentRow {
   id: string;
   serviceVisitId: string;

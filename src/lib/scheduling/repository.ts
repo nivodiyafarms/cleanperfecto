@@ -15,6 +15,7 @@ import type {
   NewServiceVisitPaymentRow,
   NewServiceVisitPricingRow,
   NewServiceVisitRow,
+  NewTaxReversalReconciliationRow,
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
@@ -32,6 +33,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  TaxReversalReconciliationRow,
 } from "./domain-types";
 import type { ServiceVisitPaymentStatus } from "./types";
 import type {
@@ -281,4 +283,35 @@ export interface SchedulingRepository {
     patch: { refundAmount: number; stripeRefundId: string; reason: string },
     audit: { actorAdminUserId: string; actorRole: string }
   ): Promise<ServiceVisitPaymentRow>;
+
+  /**
+   * Phase F.1 — durably persists intent to reverse a Stripe Tax
+   * transaction BEFORE the Stripe API call is ever attempted. See
+   * src/lib/payments/attempt-tax-reversal.ts, the sole caller.
+   */
+  createTaxReversalReconciliation(input: NewTaxReversalReconciliationRow): Promise<TaxReversalReconciliationRow>;
+
+  findTaxReversalReconciliationById(id: string): Promise<TaxReversalReconciliationRow | null>;
+
+  /** Owner/admin visibility into pending/failed/succeeded reconciliation state for a given payment or package. */
+  listTaxReversalReconciliationsForTarget(
+    targetEntityType: "service_visit_payment" | "prepaid_package",
+    targetEntityId: string
+  ): Promise<TaxReversalReconciliationRow[]>;
+
+  /**
+   * Atomically records a successful Stripe Tax reversal AND the required
+   * financial_audit_log actor-attribution row, via a single Postgres RPC
+   * (mark_tax_reversal_reconciliation_succeeded). Idempotent — a no-op
+   * (no second audit row) if already succeeded. See
+   * src/lib/payments/attempt-tax-reversal.ts, the sole caller.
+   */
+  markTaxReversalReconciliationSucceeded(
+    id: string,
+    stripeReversalId: string,
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<TaxReversalReconciliationRow>;
+
+  /** Records a transient Stripe Tax reversal failure for later retry — never writes financial_audit_log. See src/lib/payments/attempt-tax-reversal.ts, the sole caller. */
+  markTaxReversalReconciliationFailed(id: string, failureMessage: string): Promise<TaxReversalReconciliationRow>;
 }

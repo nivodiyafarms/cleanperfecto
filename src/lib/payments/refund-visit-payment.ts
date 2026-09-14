@@ -3,6 +3,7 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceVisitPaymentRow } from "@/lib/scheduling/domain-types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { attemptTaxReversal } from "./attempt-tax-reversal";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundVisitPaymentInput {
@@ -37,13 +38,17 @@ export interface RefundVisitPaymentInput {
  * DB layer under a row lock) — this function's own pre-check is an
  * optimistic fast-fail, not the authoritative one.
  *
- * Phase F — Stripe Tax reversal: best-effort, AFTER the refund has
- * already committed, and never rolls it back on failure (same
- * "settlement is a payment fact; tax bookkeeping stays mutable and
- * best-effort" architecture as record-external-payment.ts's phase 2).
- * Skipped deterministically (not an error) when the original payment has
- * no committed Stripe Tax transaction to reverse — e.g. TAX_MODE was
- * disabled at the time of the original charge.
+ * Phase F / F.1 — Stripe Tax reversal: AFTER the refund has already
+ * committed, and never rolls it back on failure (same "settlement is a
+ * payment fact; tax bookkeeping stays mutable and best-effort"
+ * architecture as record-external-payment.ts's phase 2). Skipped
+ * deterministically (not an error) when the original payment has no
+ * committed Stripe Tax transaction to reverse — e.g. TAX_MODE was
+ * disabled at the time of the original charge. When a reversal IS owed,
+ * intent to reverse is durably persisted (createTaxReversalReconciliation)
+ * BEFORE the Stripe call is ever attempted — a transient Stripe failure
+ * is recorded for retry (see retry-tax-reversal.ts), never left as only a
+ * console.warn with no durable trace (Phase F.1, correcting that gap).
  */
 export async function refundVisitPayment(
   repo: SchedulingRepository,
@@ -86,26 +91,14 @@ export async function refundVisitPayment(
 
   if (updated.stripeTaxTransactionId && updated.taxTransactionStatus === "committed") {
     const isFullRefund = updated.status === "refunded";
-    try {
-      await gateway.reverseTaxTransaction({
-        originalTransactionId: updated.stripeTaxTransactionId,
-        mode: isFullRefund ? "full" : "partial",
-        refundAmountCents: isFullRefund ? undefined : toStripeCents(input.refundAmount),
-        reference: `refund-reversal:${updated.id}:${randomUUID()}`,
-        idempotencyKey: `tax-reversal:${randomUUID()}`,
-      });
-    } catch (error) {
-      // Best-effort, never rolls back the refund itself — see this
-      // function's own doc comment. Logged for manual follow-up; there is
-      // currently no dedicated retry queue for a failed reversal (unlike
-      // the forward tax-sync path's retryExternalTaxSync), which is a
-      // known gap for a future pass.
-      console.warn(
-        `[payments] Stripe Tax reversal failed for service_visit_payments ${updated.id} (originalTransactionId=${updated.stripeTaxTransactionId}): ${
-          error instanceof Error ? error.message : "unknown error"
-        }`
-      );
-    }
+    const reconciliation = await repo.createTaxReversalReconciliation({
+      targetEntityType: "service_visit_payment",
+      targetEntityId: updated.id,
+      originalTransactionId: updated.stripeTaxTransactionId,
+      intendedAmount: input.refundAmount,
+      mode: isFullRefund ? "full" : "partial",
+    });
+    await attemptTaxReversal(repo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
   }
 
   return updated;

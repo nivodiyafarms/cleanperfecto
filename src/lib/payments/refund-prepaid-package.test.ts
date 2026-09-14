@@ -200,12 +200,16 @@ describe("refundPrepaidPackage — Phase F: Stripe Tax reversal", () => {
     const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
     gatewayState.taxAssociationByPaymentIntentId.set("pi_package_full", { committedTransactionId: "txn_package_original", erroredReason: null });
 
-    await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, { prepaidPackageId: "pkg-1", reason: "full cancel with tax", actorAdminUserId: "owner-1", actorRole: "owner_admin" });
+    const { package: updated } = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, { prepaidPackageId: "pkg-1", reason: "full cancel with tax", actorAdminUserId: "owner-1", actorRole: "owner_admin" });
 
     expect(gatewayState.createTaxReversalCallCount).toBe(1);
     const [reversal] = gatewayState.taxReversals.values();
     expect(reversal.mode).toBe("full");
     expect(reversal.originalTransactionId).toBe("txn_package_original");
+
+    const reconciliations = await schedulingRepo.listTaxReversalReconciliationsForTarget("prepaid_package", updated.id);
+    expect(reconciliations).toHaveLength(1);
+    expect(reconciliations[0].status).toBe("succeeded");
   });
 
   it("partial-package refund (some completed) triggers a partial-mode reversal for exactly the refunded amount", async () => {

@@ -5,6 +5,7 @@ import type { PrepaidPackageRow } from "@/lib/scheduling/domain-types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { roundToCents } from "@/lib/pricing/money";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { attemptTaxReversal } from "./attempt-tax-reversal";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundPrepaidPackageInput {
@@ -91,28 +92,22 @@ export async function refundPrepaidPackage(
     { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole }
   );
 
-  // Phase F — Stripe Tax reversal, best-effort, same architecture as
-  // refund-visit-payment.ts: never rolls back the already-committed
-  // cancellation/refund on failure, and deterministically skipped (not an
-  // error) when there is nothing to reverse.
+  // Phase F / F.1 — Stripe Tax reversal: never rolls back the already-
+  // committed cancellation/refund on failure, deterministically skipped
+  // (not an error) when there is nothing to reverse. When a reversal IS
+  // owed, intent to reverse is durably persisted BEFORE the Stripe call
+  // is attempted — see attempt-tax-reversal.ts.
   if (refundAmount > 0 && stripePaymentIntentId) {
-    try {
-      const taxAssociation = await gateway.findTaxAssociation(stripePaymentIntentId);
-      if (taxAssociation?.committedTransactionId) {
-        await gateway.reverseTaxTransaction({
-          originalTransactionId: taxAssociation.committedTransactionId,
-          mode: isFullPackageRefund ? "full" : "partial",
-          refundAmountCents: isFullPackageRefund ? undefined : toStripeCents(refundAmount),
-          reference: `package-refund-reversal:${updated.id}:${randomUUID()}`,
-          idempotencyKey: `tax-reversal:${randomUUID()}`,
-        });
-      }
-    } catch (error) {
-      console.warn(
-        `[payments] Stripe Tax reversal failed for prepaid_packages ${updated.id} (stripePaymentIntentId=${stripePaymentIntentId}): ${
-          error instanceof Error ? error.message : "unknown error"
-        }`
-      );
+    const taxAssociation = await gateway.findTaxAssociation(stripePaymentIntentId);
+    if (taxAssociation?.committedTransactionId) {
+      const reconciliation = await schedulingRepo.createTaxReversalReconciliation({
+        targetEntityType: "prepaid_package",
+        targetEntityId: updated.id,
+        originalTransactionId: taxAssociation.committedTransactionId,
+        intendedAmount: refundAmount,
+        mode: isFullPackageRefund ? "full" : "partial",
+      });
+      await attemptTaxReversal(schedulingRepo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
     }
   }
 

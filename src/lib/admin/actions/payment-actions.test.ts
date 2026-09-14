@@ -31,7 +31,7 @@ vi.mock("@/lib/booking/supabase-booking-repository", () => ({
 }));
 
 const { requireAdmin } = await import("@/lib/admin/require-admin");
-const { recordExternalPaymentAction, retryTaxSyncAction, refundPaymentAction, refundPrepaidPackageAction } = await import("./payment-actions");
+const { recordExternalPaymentAction, retryTaxSyncAction, refundPaymentAction, refundPrepaidPackageAction, retryTaxReversalAction } = await import("./payment-actions");
 const { createVisitPaymentIntent } = await import("@/lib/payments/create-visit-payment-intent");
 const { reconcileVisitPayment } = await import("@/lib/payments/reconcile-visit-payment");
 const { createFakeBookingRepository } = await import("@/lib/booking/test-support/fake-booking-repository");
@@ -399,5 +399,78 @@ describe("refundPrepaidPackageAction", () => {
     expect(entry.targetEntityType).toBe("prepaid_package");
     expect(entry.actorAdminUserId).toBe("admin-1");
     expect(entry.reason).toBe("audited package cancel");
+  });
+});
+
+describe("retryTaxReversalAction", () => {
+  it("rejects when the caller is not an authorized admin", async () => {
+    mockUnauthorized();
+    await expect(retryTaxReversalAction(null, formData({ reconciliationId: "r-1" }))).rejects.toThrow(AdminUnauthorizedError);
+  });
+
+  it("Phase F.1 RBAC: owner-only — an operations-role admin is denied", async () => {
+    const reconciliation = await fake.repo.createTaxReversalReconciliation({
+      targetEntityType: "service_visit_payment",
+      targetEntityId: "payment-1",
+      originalTransactionId: "txn_original",
+      intendedAmount: 50,
+      mode: "full",
+    });
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+
+    await expect(retryTaxReversalAction(null, formData({ reconciliationId: reconciliation.id }))).rejects.toThrow(AdminForbiddenError);
+
+    const after = await fake.repo.findTaxReversalReconciliationById(reconciliation.id);
+    expect(after!.status).toBe("pending"); // untouched
+  });
+
+  it("an owner_admin can retry a failed reconciliation to success", async () => {
+    const reconciliation = await fake.repo.createTaxReversalReconciliation({
+      targetEntityType: "service_visit_payment",
+      targetEntityId: "payment-1",
+      originalTransactionId: "txn_original",
+      intendedAmount: 50,
+      mode: "full",
+    });
+    await fake.repo.markTaxReversalReconciliationFailed(reconciliation.id, "prior transient failure");
+    mockAuthorized();
+
+    const result = await retryTaxReversalAction(null, formData({ reconciliationId: reconciliation.id }));
+    expect(result.ok).toBe(true);
+
+    const after = await fake.repo.findTaxReversalReconciliationById(reconciliation.id);
+    expect(after!.status).toBe("succeeded");
+  });
+
+  it("requires a reconciliation id", async () => {
+    mockAuthorized();
+    const result = await retryTaxReversalAction(null, formData({ reconciliationId: "" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("surfaces an unknown reconciliation id as a clean action error, not a thrown exception", async () => {
+    mockAuthorized();
+    const result = await retryTaxReversalAction(null, formData({ reconciliationId: "does-not-exist" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("a still-failing retry returns a clean action error (not a thrown exception) describing the failure", async () => {
+    const reconciliation = await fake.repo.createTaxReversalReconciliation({
+      targetEntityType: "service_visit_payment",
+      targetEntityId: "payment-1",
+      originalTransactionId: "txn_original",
+      intendedAmount: 50,
+      mode: "full",
+    });
+    (gatewayBundle.gateway as unknown as { reverseTaxTransaction: () => Promise<never> }).reverseTaxTransaction = () => {
+      throw new Error("still down");
+    };
+    mockAuthorized();
+
+    const result = await retryTaxReversalAction(null, formData({ reconciliationId: reconciliation.id }));
+    expect(result.ok).toBe(false);
+
+    const after = await fake.repo.findTaxReversalReconciliationById(reconciliation.id);
+    expect(after!.status).toBe("failed");
   });
 });

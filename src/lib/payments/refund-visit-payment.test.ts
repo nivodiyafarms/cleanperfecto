@@ -230,10 +230,10 @@ describe("refundVisitPayment", () => {
 });
 
 describe("refundVisitPayment — Phase F: Stripe Tax reversal", () => {
-  it("full refund with a committed Stripe Tax transaction triggers a full-mode reversal", async () => {
+  it("full refund with a committed Stripe Tax transaction triggers a full-mode reversal and a succeeded reconciliation record", async () => {
     const { schedulingRepo, gateway, gatewayState, visitId, payment } = await seedPaidVisit({ withCommittedTax: true });
 
-    await refundVisitPayment(schedulingRepo, gateway, {
+    const updated = await refundVisitPayment(schedulingRepo, gateway, {
       serviceVisitId: visitId,
       refundAmount: payment.totalAmount!,
       reason: "full refund with tax",
@@ -246,6 +246,11 @@ describe("refundVisitPayment — Phase F: Stripe Tax reversal", () => {
     expect(reversal.originalTransactionId).toBe("txn_original");
     expect(reversal.mode).toBe("full");
     expect(reversal.refundAmountCents).toBeUndefined();
+
+    const reconciliations = await schedulingRepo.listTaxReversalReconciliationsForTarget("service_visit_payment", updated.id);
+    expect(reconciliations).toHaveLength(1);
+    expect(reconciliations[0].status).toBe("succeeded");
+    expect(reconciliations[0].mode).toBe("full");
   });
 
   it("partial refund with a committed Stripe Tax transaction triggers a partial-mode reversal for exactly the refunded amount", async () => {
@@ -281,7 +286,7 @@ describe("refundVisitPayment — Phase F: Stripe Tax reversal", () => {
     expect(gatewayState.createTaxReversalCallCount).toBe(0);
   });
 
-  it("a failed tax reversal never rolls back or blocks the already-committed refund", async () => {
+  it("a failed tax reversal never rolls back or blocks the already-committed refund, and is durably recorded (Phase F.1) rather than only logged", async () => {
     const { schedulingRepo, gateway, gatewayState, visitId, payment } = await seedPaidVisit({ withCommittedTax: true });
     gatewayState.taxReversals.clear();
     (gateway as unknown as { reverseTaxTransaction: () => Promise<never> }).reverseTaxTransaction = () => {
@@ -298,5 +303,11 @@ describe("refundVisitPayment — Phase F: Stripe Tax reversal", () => {
 
     expect(updated.status).toBe("refunded");
     expect(updated.refundedAmount).toBeCloseTo(payment.totalAmount!, 2);
+
+    const reconciliations = await schedulingRepo.listTaxReversalReconciliationsForTarget("service_visit_payment", updated.id);
+    expect(reconciliations).toHaveLength(1);
+    expect(reconciliations[0].status).toBe("failed");
+    expect(reconciliations[0].failureMessage).toContain("simulated Stripe Tax outage");
+    expect(reconciliations[0].retryCount).toBe(1);
   });
 });

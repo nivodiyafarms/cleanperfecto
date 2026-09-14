@@ -10,6 +10,7 @@ import { recordExternalPayment } from "@/lib/payments/record-external-payment";
 import { refundPrepaidPackage } from "@/lib/payments/refund-prepaid-package";
 import { refundVisitPayment } from "@/lib/payments/refund-visit-payment";
 import { retryExternalTaxSync } from "@/lib/payments/retry-external-tax-sync";
+import { retryTaxReversal } from "@/lib/payments/retry-tax-reversal";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { actionError, actionOk, type ActionResult } from "./types";
 
@@ -159,6 +160,37 @@ export async function refundPrepaidPackageAction(_prevState: ActionResult | null
     });
     revalidatePath("/admin");
     return actionOk(refundAmount > 0 ? `Package cancelled. $${refundAmount.toFixed(2)} refunded.` : "Package cancelled. No unused credits remained to refund.");
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
+}
+
+/**
+ * Admin "Retry Tax Reversal" — Phase F.1. Owner-only (same capability as
+ * issuing the refund itself — this action exists entirely to finish
+ * reconciling an already-issued refund's Stripe Tax bookkeeping, never to
+ * move money). Idempotent: retrying an already-succeeded reconciliation
+ * is a safe no-op (see retryTaxReversal / attemptTaxReversal).
+ */
+export async function retryTaxReversalAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "issue_refund");
+  const repo = createSupabaseSchedulingRepository();
+  const gateway = createStripeVisitPaymentGateway();
+
+  const reconciliationId = String(formData.get("reconciliationId") ?? "");
+  if (!reconciliationId) return actionError("Missing reconciliation id.");
+
+  try {
+    const result = await retryTaxReversal(repo, gateway, {
+      reconciliationId,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+    revalidatePath("/admin");
+    if (result.status === "succeeded") return actionOk("Tax reversal reconciled.");
+    return actionError(`Tax reversal still failing: ${result.failureMessage ?? "unknown error"}`);
   } catch (error) {
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
     throw error;

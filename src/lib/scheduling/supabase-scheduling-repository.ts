@@ -34,6 +34,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  TaxReversalReconciliationRow,
 } from "./domain-types";
 import { InvalidVisitStateError, SchedulingConflictError } from "./errors";
 import type { SchedulingRepository } from "./repository";
@@ -226,6 +227,24 @@ function toServiceVisitPaymentRow(row: Record<string, unknown>): ServiceVisitPay
     paidAt: row.paid_at ? new Date(row.paid_at as string) : null,
     createdAt: new Date(row.created_at as string),
     updatedAt: new Date(row.updated_at as string),
+  };
+}
+
+function toTaxReversalReconciliationRow(row: Record<string, unknown>): TaxReversalReconciliationRow {
+  return {
+    id: row.id as string,
+    targetEntityType: row.target_entity_type as TaxReversalReconciliationRow["targetEntityType"],
+    targetEntityId: row.target_entity_id as string,
+    originalTransactionId: row.original_transaction_id as string,
+    intendedAmount: Number(row.intended_amount),
+    mode: row.mode as TaxReversalReconciliationRow["mode"],
+    status: row.status as TaxReversalReconciliationRow["status"],
+    stripeReversalId: (row.stripe_reversal_id as string | null) ?? null,
+    failureMessage: (row.failure_message as string | null) ?? null,
+    retryCount: Number(row.retry_count),
+    createdAt: new Date(row.created_at as string),
+    lastAttemptedAt: row.last_attempted_at ? new Date(row.last_attempted_at as string) : null,
+    succeededAt: row.succeeded_at ? new Date(row.succeeded_at as string) : null,
   };
 }
 
@@ -1295,6 +1314,55 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       });
       if (error) throw new Error(`[scheduling] refund_visit_payment_with_audit failed: ${error.message}`);
       return toServiceVisitPaymentRow(data);
+    },
+
+    async createTaxReversalReconciliation(input) {
+      const { data, error } = await supabase.rpc("create_tax_reversal_reconciliation", {
+        p_target_entity_type: input.targetEntityType,
+        p_target_entity_id: input.targetEntityId,
+        p_original_transaction_id: input.originalTransactionId,
+        p_intended_amount: input.intendedAmount,
+        p_mode: input.mode,
+      });
+      if (error) throw new Error(`[scheduling] create_tax_reversal_reconciliation failed: ${error.message}`);
+      return toTaxReversalReconciliationRow(data);
+    },
+
+    async findTaxReversalReconciliationById(id) {
+      const { data, error } = await supabase.from("tax_reversal_reconciliations").select().eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] tax_reversal_reconciliations lookup by id failed: ${error.message}`);
+      return data ? toTaxReversalReconciliationRow(data) : null;
+    },
+
+    async listTaxReversalReconciliationsForTarget(targetEntityType, targetEntityId) {
+      const { data, error } = await supabase
+        .from("tax_reversal_reconciliations")
+        .select()
+        .eq("target_entity_type", targetEntityType)
+        .eq("target_entity_id", targetEntityId)
+        .order("created_at", { ascending: true });
+      if (error) throw new Error(`[scheduling] tax_reversal_reconciliations lookup by target failed: ${error.message}`);
+      return (data ?? []).map(toTaxReversalReconciliationRow);
+    },
+
+    async markTaxReversalReconciliationSucceeded(id, stripeReversalId, audit) {
+      const { data, error } = await supabase.rpc("mark_tax_reversal_reconciliation_succeeded", {
+        p_id: id,
+        p_stripe_reversal_id: stripeReversalId,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error) throw new Error(`[scheduling] mark_tax_reversal_reconciliation_succeeded failed: ${error.message}`);
+      return toTaxReversalReconciliationRow(data);
+    },
+
+    async markTaxReversalReconciliationFailed(id, failureMessage) {
+      const { data, error } = await supabase.rpc("mark_tax_reversal_reconciliation_failed", {
+        p_id: id,
+        p_failure_message: failureMessage,
+      });
+      if (error) throw new Error(`[scheduling] mark_tax_reversal_reconciliation_failed failed: ${error.message}`);
+      return toTaxReversalReconciliationRow(data);
     },
   };
 }

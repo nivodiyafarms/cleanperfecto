@@ -33,6 +33,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  TaxReversalReconciliationRow,
 } from "../domain-types";
 import { InvalidVisitStateError, SchedulingConflictError } from "../errors";
 import type { SchedulingRepository } from "../repository";
@@ -121,6 +122,7 @@ export function createFakeSchedulingRepository(
   const recurringScopeVersionsById = new Map<string, RecurringScopeVersionRow>();
   const servicePricingByVisitId = new Map<string, ServiceVisitPricingRow>();
   const paymentsByVisitId = new Map<string, ServiceVisitPaymentRow>();
+  const taxReversalReconciliationsById = new Map<string, TaxReversalReconciliationRow>();
   const financialAuditLog: FakeFinancialAuditLogRow[] = [];
   // A live-reference object (not a plain boolean) so a test can flip
   // `state.financialAuditControl.simulateFailure = true` AFTER this fake
@@ -1035,6 +1037,97 @@ export function createFakeSchedulingRepository(
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;
     },
+
+    async createTaxReversalReconciliation(input) {
+      if (input.intendedAmount <= 0) {
+        throw new Error(`[fake-scheduling] create_tax_reversal_reconciliation: p_intended_amount must be positive, got ${input.intendedAmount}`);
+      }
+      const row: TaxReversalReconciliationRow = {
+        id: randomUUID(),
+        targetEntityType: input.targetEntityType,
+        targetEntityId: input.targetEntityId,
+        originalTransactionId: input.originalTransactionId,
+        intendedAmount: input.intendedAmount,
+        mode: input.mode,
+        status: "pending",
+        stripeReversalId: null,
+        failureMessage: null,
+        retryCount: 0,
+        createdAt: new Date(),
+        lastAttemptedAt: null,
+        succeededAt: null,
+      };
+      taxReversalReconciliationsById.set(row.id, row);
+      return row;
+    },
+
+    async findTaxReversalReconciliationById(id) {
+      return taxReversalReconciliationsById.get(id) ?? null;
+    },
+
+    async listTaxReversalReconciliationsForTarget(targetEntityType, targetEntityId) {
+      return [...taxReversalReconciliationsById.values()]
+        .filter((r) => r.targetEntityType === targetEntityType && r.targetEntityId === targetEntityId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    },
+
+    async markTaxReversalReconciliationSucceeded(id, stripeReversalId, audit) {
+      const existing = taxReversalReconciliationsById.get(id);
+      if (!existing) throw new Error(`[fake-scheduling] tax_reversal_reconciliations ${id} not found`);
+      if (existing.status === "succeeded") return existing; // idempotent no-op — mirrors the real RPC, no second audit row.
+
+      const now = new Date();
+      const updated: TaxReversalReconciliationRow = {
+        ...existing,
+        status: "succeeded",
+        stripeReversalId,
+        succeededAt: now,
+        lastAttemptedAt: now,
+      };
+
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "tax_reversal_reconciled",
+        targetEntityType: "tax_reversal_reconciliation",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.targetEntityType === "service_visit_payment" ? ([...paymentsByVisitId.values()].find((p) => p.id === existing.targetEntityId)?.serviceVisitId ?? null) : null,
+        reason: null,
+        metadata: {
+          outcome: "succeeded",
+          targetEntityType: existing.targetEntityType,
+          targetEntityId: existing.targetEntityId,
+          originalTransactionId: existing.originalTransactionId,
+          intendedAmount: existing.intendedAmount,
+          mode: existing.mode,
+          stripeReversalId,
+          retryCount: existing.retryCount,
+        },
+        createdAt: now,
+      };
+
+      taxReversalReconciliationsById.set(id, updated);
+      financialAuditLog.push(auditRow);
+      return updated;
+    },
+
+    async markTaxReversalReconciliationFailed(id, failureMessage) {
+      const existing = taxReversalReconciliationsById.get(id);
+      if (!existing) throw new Error(`[fake-scheduling] tax_reversal_reconciliations ${id} not found`);
+      if (existing.status === "succeeded") {
+        throw new Error(`[fake-scheduling] tax_reversal_reconciliations ${id} has already succeeded — cannot mark a succeeded reversal as failed`);
+      }
+      const updated: TaxReversalReconciliationRow = {
+        ...existing,
+        status: "failed",
+        failureMessage,
+        retryCount: existing.retryCount + 1,
+        lastAttemptedAt: new Date(),
+      };
+      taxReversalReconciliationsById.set(id, updated);
+      return updated;
+    },
   };
 
   return {
@@ -1060,6 +1153,7 @@ export function createFakeSchedulingRepository(
       recurringVisitPlanHistory,
       recurringScopeVersionsById,
       servicePricingByVisitId,
+      taxReversalReconciliationsById,
       financialAuditLog,
       financialAuditControl,
     },
