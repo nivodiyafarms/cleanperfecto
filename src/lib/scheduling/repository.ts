@@ -15,6 +15,7 @@ import type {
   NewServiceVisitPaymentRow,
   NewServiceVisitPricingRow,
   NewServiceVisitRow,
+  NewStripeDisputeEventRow,
   NewTaxReversalReconciliationRow,
   PackageAmendmentRow,
   PackageVisitPlanRow,
@@ -33,6 +34,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  StripeDisputeRow,
   TaxReversalReconciliationRow,
 } from "./domain-types";
 import type { ServiceVisitPaymentStatus } from "./types";
@@ -123,6 +125,16 @@ export interface SchedulingRepository {
     patch: { collectionMethod: "zelle" | "cash" | "stripe_card"; externalPaymentReference: string | null; stripePaymentIntentId: string | null },
     audit: { actorAdminUserId: string; actorRole: string }
   ): Promise<ServiceFeeAssessmentRow>;
+
+  /**
+   * Phase C — the sole writer of stripe_disputes. Guarded so a stale,
+   * duplicate, or out-of-order charge.dispute.* webhook delivery (by the
+   * event's own created timestamp) can never regress an already-applied
+   * dispute state — see upsert_stripe_dispute_event. No financial_audit_log
+   * row (pure Stripe-webhook-driven fact recording, no admin actor — same
+   * class of mutation as reconcileVisitPayment).
+   */
+  upsertStripeDisputeEvent(input: NewStripeDisputeEventRow): Promise<StripeDisputeRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;

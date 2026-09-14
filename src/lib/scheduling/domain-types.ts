@@ -231,6 +231,41 @@ export interface ServiceFeeAssessmentRow {
   collectedAt?: Date | null;
 }
 
+/** Persisted charge.dispute.created/.updated/.closed fact — see 20260914090600_create_stripe_disputes.sql. Deliberately separate from ServiceVisitPaymentRow: a dispute must never make a paid visit look refunded/unpaid. */
+export interface StripeDisputeRow {
+  id: string;
+  stripeDisputeId: string;
+  stripeChargeId: string;
+  stripePaymentIntentId: string | null;
+  serviceVisitPaymentId: string | null;
+  serviceVisitId: string | null;
+  amount: number;
+  currency: string;
+  /** Free text, not a closed enum — Stripe's own SDK type has a forward-compatibility fallback for values it may add. Also represents the outcome (won/lost) — Stripe exposes no separate outcome field. */
+  disputeStatus: string;
+  reason: string | null;
+  stripeCreatedAt: Date;
+  lastStripeEventId: string;
+  lastStripeEventCreatedAt: Date;
+  closedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface NewStripeDisputeEventRow {
+  stripeDisputeId: string;
+  stripeChargeId: string;
+  stripePaymentIntentId: string | null;
+  amount: number;
+  currency: string;
+  disputeStatus: string;
+  reason: string | null;
+  stripeCreatedAt: Date;
+  stripeEventId: string;
+  stripeEventCreatedAt: Date;
+  isClosed: boolean;
+}
+
 export interface NewServiceFeeAssessmentRow {
   serviceVisitId: string;
   feeType: FeeType;

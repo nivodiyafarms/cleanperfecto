@@ -400,6 +400,34 @@ export async function processStripeWebhookEvent(
       return;
     }
 
+    case "charge.dispute.created":
+    case "charge.dispute.updated":
+    case "charge.dispute.closed": {
+      if (!schedulingRepo) return;
+      const dispute = event.data.object;
+      const chargeId = intentIdOf(dispute.charge as string | { id: string } | null);
+      if (!chargeId) return;
+      await schedulingRepo.upsertStripeDisputeEvent({
+        stripeDisputeId: dispute.id,
+        stripeChargeId: chargeId,
+        stripePaymentIntentId: intentIdOf(dispute.payment_intent as string | { id: string } | null),
+        amount: dispute.amount / 100,
+        currency: dispute.currency,
+        disputeStatus: dispute.status,
+        reason: dispute.reason ?? null,
+        stripeCreatedAt: new Date(dispute.created * 1000),
+        stripeEventId: event.id,
+        stripeEventCreatedAt: new Date(event.created * 1000),
+        // Authoritative per Stripe's own event semantics (see
+        // ChargeDisputeClosedEvent's doc comment: "Occurs when a dispute is
+        // closed and the dispute status changes to lost, warning_closed, or
+        // won") — the event TYPE determines closure, not a locally
+        // re-derived guess at which status strings mean "closed".
+        isClosed: event.type === "charge.dispute.closed",
+      });
+      return;
+    }
+
     default:
       // Explicit no-op — this event type carries no domain action for
       // this milestone. Still marked 'processed' by the caller so it

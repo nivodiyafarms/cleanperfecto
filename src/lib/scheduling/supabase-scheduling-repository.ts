@@ -34,6 +34,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  StripeDisputeRow,
   TaxReversalReconciliationRow,
 } from "./domain-types";
 import { InvalidVisitStateError, SchedulingConflictError } from "./errors";
@@ -245,6 +246,27 @@ function toTaxReversalReconciliationRow(row: Record<string, unknown>): TaxRevers
     createdAt: new Date(row.created_at as string),
     lastAttemptedAt: row.last_attempted_at ? new Date(row.last_attempted_at as string) : null,
     succeededAt: row.succeeded_at ? new Date(row.succeeded_at as string) : null,
+  };
+}
+
+function toStripeDisputeRow(row: Record<string, unknown>): StripeDisputeRow {
+  return {
+    id: row.id as string,
+    stripeDisputeId: row.stripe_dispute_id as string,
+    stripeChargeId: row.stripe_charge_id as string,
+    stripePaymentIntentId: (row.stripe_payment_intent_id as string | null) ?? null,
+    serviceVisitPaymentId: (row.service_visit_payment_id as string | null) ?? null,
+    serviceVisitId: (row.service_visit_id as string | null) ?? null,
+    amount: Number(row.amount),
+    currency: row.currency as string,
+    disputeStatus: row.dispute_status as string,
+    reason: (row.reason as string | null) ?? null,
+    stripeCreatedAt: new Date(row.stripe_created_at as string),
+    lastStripeEventId: row.last_stripe_event_id as string,
+    lastStripeEventCreatedAt: new Date(row.last_stripe_event_created_at as string),
+    closedAt: row.closed_at ? new Date(row.closed_at as string) : null,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
   };
 }
 
@@ -1393,6 +1415,24 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       });
       if (error) throw new Error(`[scheduling] mark_tax_reversal_reconciliation_failed failed: ${error.message}`);
       return toTaxReversalReconciliationRow(data);
+    },
+
+    async upsertStripeDisputeEvent(input) {
+      const { data, error } = await supabase.rpc("upsert_stripe_dispute_event", {
+        p_stripe_dispute_id: input.stripeDisputeId,
+        p_stripe_charge_id: input.stripeChargeId,
+        p_stripe_payment_intent_id: input.stripePaymentIntentId,
+        p_amount: input.amount,
+        p_currency: input.currency,
+        p_dispute_status: input.disputeStatus,
+        p_reason: input.reason,
+        p_stripe_created_at: input.stripeCreatedAt.toISOString(),
+        p_stripe_event_id: input.stripeEventId,
+        p_stripe_event_created_at: input.stripeEventCreatedAt.toISOString(),
+        p_is_closed: input.isClosed,
+      });
+      if (error) throw new Error(`[scheduling] upsert_stripe_dispute_event failed: ${error.message}`);
+      return toStripeDisputeRow(data);
     },
   };
 }

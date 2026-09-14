@@ -33,6 +33,7 @@ import type {
   ServiceVisitPaymentTipPatch,
   ServiceVisitPricingRow,
   ServiceVisitRow,
+  StripeDisputeRow,
   TaxReversalReconciliationRow,
 } from "../domain-types";
 import { InvalidVisitStateError, SchedulingConflictError } from "../errors";
@@ -123,6 +124,7 @@ export function createFakeSchedulingRepository(
   const servicePricingByVisitId = new Map<string, ServiceVisitPricingRow>();
   const paymentsByVisitId = new Map<string, ServiceVisitPaymentRow>();
   const taxReversalReconciliationsById = new Map<string, TaxReversalReconciliationRow>();
+  const stripeDisputesByStripeDisputeId = new Map<string, StripeDisputeRow>();
   const financialAuditLog: FakeFinancialAuditLogRow[] = [];
   // A live-reference object (not a plain boolean) so a test can flip
   // `state.financialAuditControl.simulateFailure = true` AFTER this fake
@@ -1167,6 +1169,60 @@ export function createFakeSchedulingRepository(
       taxReversalReconciliationsById.set(id, updated);
       return updated;
     },
+
+    async upsertStripeDisputeEvent(input) {
+      const existing = stripeDisputesByStripeDisputeId.get(input.stripeDisputeId);
+      const payment = input.stripePaymentIntentId ? [...paymentsByVisitId.values()].find((p) => p.stripePaymentIntentId === input.stripePaymentIntentId) : undefined;
+      const serviceVisitPaymentId = payment?.id ?? null;
+      const serviceVisitId = payment?.serviceVisitId ?? null;
+
+      if (existing) {
+        // Mirrors the real RPC's causal/monotonic guard exactly: a stale,
+        // duplicate, or out-of-order delivery (by the event's own created
+        // timestamp) is a safe no-op that returns the unchanged row.
+        if (existing.lastStripeEventCreatedAt.getTime() >= input.stripeEventCreatedAt.getTime()) {
+          return existing;
+        }
+        const updated: StripeDisputeRow = {
+          ...existing,
+          stripeChargeId: input.stripeChargeId,
+          stripePaymentIntentId: input.stripePaymentIntentId,
+          serviceVisitPaymentId,
+          serviceVisitId,
+          amount: input.amount,
+          currency: input.currency,
+          disputeStatus: input.disputeStatus,
+          reason: input.reason,
+          lastStripeEventId: input.stripeEventId,
+          lastStripeEventCreatedAt: input.stripeEventCreatedAt,
+          closedAt: input.isClosed ? (existing.closedAt ?? new Date()) : existing.closedAt,
+          updatedAt: new Date(),
+        };
+        stripeDisputesByStripeDisputeId.set(input.stripeDisputeId, updated);
+        return updated;
+      }
+
+      const created: StripeDisputeRow = {
+        id: randomUUID(),
+        stripeDisputeId: input.stripeDisputeId,
+        stripeChargeId: input.stripeChargeId,
+        stripePaymentIntentId: input.stripePaymentIntentId,
+        serviceVisitPaymentId,
+        serviceVisitId,
+        amount: input.amount,
+        currency: input.currency,
+        disputeStatus: input.disputeStatus,
+        reason: input.reason,
+        stripeCreatedAt: input.stripeCreatedAt,
+        lastStripeEventId: input.stripeEventId,
+        lastStripeEventCreatedAt: input.stripeEventCreatedAt,
+        closedAt: input.isClosed ? new Date() : null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      stripeDisputesByStripeDisputeId.set(input.stripeDisputeId, created);
+      return created;
+    },
   };
 
   return {
@@ -1193,6 +1249,7 @@ export function createFakeSchedulingRepository(
       recurringScopeVersionsById,
       servicePricingByVisitId,
       taxReversalReconciliationsById,
+      stripeDisputesByStripeDisputeId,
       financialAuditLog,
       financialAuditControl,
     },
