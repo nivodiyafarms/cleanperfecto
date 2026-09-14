@@ -31,7 +31,7 @@ vi.mock("@/lib/booking/supabase-booking-repository", () => ({
 }));
 
 const { requireAdmin } = await import("@/lib/admin/require-admin");
-const { recordExternalPaymentAction, retryTaxSyncAction, refundPaymentAction, refundPrepaidPackageAction, retryTaxReversalAction } = await import("./payment-actions");
+const { recordExternalPaymentAction, retryTaxSyncAction, refundPaymentAction, refundPrepaidPackageAction, retryTaxReversalAction, collectServiceFeeAction } = await import("./payment-actions");
 const { createVisitPaymentIntent } = await import("@/lib/payments/create-visit-payment-intent");
 const { reconcileVisitPayment } = await import("@/lib/payments/reconcile-visit-payment");
 const { createFakeBookingRepository } = await import("@/lib/booking/test-support/fake-booking-repository");
@@ -472,5 +472,50 @@ describe("retryTaxReversalAction", () => {
 
     const after = await fake.repo.findTaxReversalReconciliationById(reconciliation.id);
     expect(after!.status).toBe("failed");
+  });
+});
+
+describe("collectServiceFeeAction", () => {
+  it("rejects when the caller is not an authorized admin", async () => {
+    mockUnauthorized();
+    await expect(collectServiceFeeAction(null, formData({ feeAssessmentId: "fee-1", collectionMethod: "cash" }))).rejects.toThrow(AdminUnauthorizedError);
+  });
+
+  it("Phase H RBAC: operations CAN record a fee collection through the frozen amount flow — same class of action as recording an external visit payment", async () => {
+    const fee = await fake.repo.insertServiceFeeAssessment({ serviceVisitId: "visit-1", feeType: "cancellation", amount: 25, policyVersion: "v1", reason: null });
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+
+    const result = await collectServiceFeeAction(null, formData({ feeAssessmentId: fee.id, collectionMethod: "zelle", externalPaymentReference: "ZL-1" }));
+    expect(result.ok).toBe(true);
+
+    const after = fake.state.feeAssessments.find((f) => f.id === fee.id);
+    expect(after!.state).toBe("paid");
+  });
+
+  it("rejects an invalid rail — there is no free-form amount field, only zelle/cash", async () => {
+    mockAuthorized();
+    const fee = await fake.repo.insertServiceFeeAssessment({ serviceVisitId: "visit-1", feeType: "cancellation", amount: 25, policyVersion: "v1", reason: null });
+    const result = await collectServiceFeeAction(null, formData({ feeAssessmentId: fee.id, collectionMethod: "venmo" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("surfaces collecting an already-paid fee as a clean action error, not a thrown exception", async () => {
+    mockAuthorized();
+    const fee = await fake.repo.insertServiceFeeAssessment({ serviceVisitId: "visit-1", feeType: "cancellation", amount: 25, policyVersion: "v1", reason: null });
+    await collectServiceFeeAction(null, formData({ feeAssessmentId: fee.id, collectionMethod: "cash" }));
+
+    const result = await collectServiceFeeAction(null, formData({ feeAssessmentId: fee.id, collectionMethod: "cash" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("financial_audit_log records the fee collection with actor attribution", async () => {
+    mockAuthorized();
+    const fee = await fake.repo.insertServiceFeeAssessment({ serviceVisitId: "visit-1", feeType: "cancellation", amount: 25, policyVersion: "v1", reason: null });
+    await collectServiceFeeAction(null, formData({ feeAssessmentId: fee.id, collectionMethod: "cash" }));
+
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    const [entry] = fake.state.financialAuditLog;
+    expect(entry.actionType).toBe("fee_collected");
+    expect(entry.actorAdminUserId).toBe("admin-1");
   });
 });

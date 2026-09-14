@@ -108,6 +108,21 @@ export interface SchedulingRepository {
     reason: string,
     audit: { actorAdminUserId: string; actorRole: string }
   ): Promise<ServiceFeeAssessmentRow>;
+  /**
+   * Phase H — atomically records a fee COLLECTION (distinct from
+   * assessment and from waiver) AND writes the required
+   * financial_audit_log actor-attribution row, via a single Postgres RPC
+   * (collect_service_fee_assessment_with_audit). Refuses (throws) unless
+   * the row is currently state='assessed' — no duplicate/over-collection,
+   * and a failed collection attempt (application code deciding not to
+   * call this at all) never erases or alters the assessment. See
+   * src/lib/payments/collect-service-fee.ts, the sole caller.
+   */
+  collectServiceFeeAssessmentWithAudit(
+    id: string,
+    patch: { collectionMethod: "zelle" | "cash" | "stripe_card"; externalPaymentReference: string | null; stripePaymentIntentId: string | null },
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceFeeAssessmentRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;

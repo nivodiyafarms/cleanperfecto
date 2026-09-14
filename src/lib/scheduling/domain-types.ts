@@ -224,6 +224,11 @@ export interface ServiceFeeAssessmentRow {
   policyVersion: string;
   reason: string | null;
   state: FeeAssessmentState;
+  /** Set exactly once, only on a successful collection — see collect_service_fee_assessment_with_audit. 'stripe_card' is schema-ready but has no live caller yet (no off-session Stripe charge capability exists in this milestone). */
+  collectionMethod?: "zelle" | "cash" | "stripe_card" | null;
+  externalPaymentReference?: string | null;
+  stripePaymentIntentId?: string | null;
+  collectedAt?: Date | null;
 }
 
 export interface NewServiceFeeAssessmentRow {

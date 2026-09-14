@@ -7,6 +7,7 @@ import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-sc
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { recordExternalPayment } from "@/lib/payments/record-external-payment";
+import { collectServiceFeeExternally } from "@/lib/payments/collect-service-fee";
 import { refundPrepaidPackage } from "@/lib/payments/refund-prepaid-package";
 import { refundVisitPayment } from "@/lib/payments/refund-visit-payment";
 import { retryExternalTaxSync } from "@/lib/payments/retry-external-tax-sync";
@@ -195,4 +196,41 @@ export async function retryTaxReversalAction(_prevState: ActionResult | null, fo
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
     throw error;
   }
+}
+
+/**
+ * Admin "Record Fee Collection" — Phase H. Same capability as recording an
+ * external visit payment (record_external_payment, operations-permitted):
+ * this is a routine "confirm an already-happened external settlement"
+ * action, never a judgment call like waiving a fee, and never an
+ * admin-entered amount — the fee's own frozen amount is always what gets
+ * collected.
+ */
+export async function collectServiceFeeAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "record_external_payment");
+  const repo = createSupabaseSchedulingRepository();
+
+  const feeAssessmentId = String(formData.get("feeAssessmentId") ?? "");
+  const collectionMethod = String(formData.get("collectionMethod") ?? "");
+  const externalPaymentReference = String(formData.get("externalPaymentReference") ?? "").trim() || null;
+  if (!feeAssessmentId || (collectionMethod !== "zelle" && collectionMethod !== "cash")) {
+    return actionError("Choose Zelle or Cash.");
+  }
+
+  try {
+    await collectServiceFeeExternally(repo, {
+      feeAssessmentId,
+      collectionMethod,
+      externalPaymentReference,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
+
+  revalidatePath("/admin");
+  return actionOk("Fee collection recorded.");
 }

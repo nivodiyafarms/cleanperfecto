@@ -510,6 +510,36 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       };
     },
 
+    async collectServiceFeeAssessmentWithAudit(id, patch, audit) {
+      const { data, error } = await supabase.rpc("collect_service_fee_assessment_with_audit", {
+        p_fee_assessment_id: id,
+        p_collection_method: patch.collectionMethod,
+        p_external_payment_reference: patch.externalPaymentReference,
+        p_stripe_payment_intent_id: patch.stripePaymentIntentId,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error) {
+        if (/not found|not eligible for collection|invalid p_collection_method/i.test(error.message ?? "")) {
+          throw new InvalidVisitStateError(error.message);
+        }
+        throw new Error(`[scheduling] collect_service_fee_assessment_with_audit failed: ${error.message}`);
+      }
+      return {
+        id: data.id,
+        serviceVisitId: data.service_visit_id,
+        feeType: data.fee_type,
+        amount: Number(data.amount),
+        policyVersion: data.policy_version,
+        reason: data.reason,
+        state: data.state,
+        collectionMethod: data.collection_method,
+        externalPaymentReference: data.external_payment_reference,
+        stripePaymentIntentId: data.stripe_payment_intent_id,
+        collectedAt: data.collected_at ? new Date(data.collected_at) : null,
+      };
+    },
+
     async insertServiceVisitEvent(row) {
       const { error } = await supabase.from("service_visit_events").insert({
         service_visit_id: row.serviceVisitId,

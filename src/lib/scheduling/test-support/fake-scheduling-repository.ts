@@ -364,6 +364,45 @@ export function createFakeSchedulingRepository(
       financialAuditLog.push(auditRow);
       return updated;
     },
+    async collectServiceFeeAssessmentWithAudit(id, patch, audit) {
+      const index = feeAssessments.findIndex((f) => f.id === id);
+      if (index === -1) throw new InvalidVisitStateError(`service_fee_assessments ${id} not found`);
+      const existing = feeAssessments[index];
+      if (existing.state !== "assessed") {
+        throw new InvalidVisitStateError(
+          `service_fee_assessments ${id} is not eligible for collection (state=${existing.state})`
+        );
+      }
+
+      const updated: ServiceFeeAssessmentRow = {
+        ...existing,
+        state: "paid",
+        collectionMethod: patch.collectionMethod,
+        externalPaymentReference: patch.externalPaymentReference,
+        stripePaymentIntentId: patch.stripePaymentIntentId,
+        collectedAt: new Date(),
+      };
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "fee_collected",
+        targetEntityType: "service_fee_assessment",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.serviceVisitId,
+        reason: null,
+        metadata: { feeType: existing.feeType, amount: existing.amount, collectionMethod: patch.collectionMethod, externalPaymentReference: patch.externalPaymentReference },
+        createdAt: new Date(),
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      feeAssessments[index] = updated;
+      financialAuditLog.push(auditRow);
+      return updated;
+    },
     async insertServiceVisitNotification(row: NewServiceVisitNotificationRow) {
       if (notifications.has(row.idempotencyKey)) {
         return { inserted: false };
