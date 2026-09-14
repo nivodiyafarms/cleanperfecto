@@ -1202,12 +1202,18 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return toServiceVisitPaymentRow(data);
     },
 
-    async updateServiceVisitPaymentStatus(id: string, patch) {
+    async updateServiceVisitPaymentStatus(id: string, patch, allowedFromStatuses) {
       const update: Record<string, unknown> = { status: patch.status };
       if (patch.failureCode !== undefined) update.failure_code = patch.failureCode;
       if (patch.failureMessage !== undefined) update.failure_message = patch.failureMessage;
       if (patch.paidAt !== undefined) update.paid_at = patch.paidAt ? patch.paidAt.toISOString() : null;
-      const { data, error } = await supabase.from("service_visit_payments").update(update).eq("id", id).select().maybeSingle();
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update(update)
+        .eq("id", id)
+        .in("status", allowedFromStatuses as string[])
+        .select()
+        .maybeSingle();
       if (error) throw new Error(`[scheduling] service_visit_payments status update failed: ${error.message}`);
       return data ? toServiceVisitPaymentRow(data) : null;
     },
@@ -1248,11 +1254,12 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return data ? toServiceVisitPaymentRow(data) : null;
     },
 
-    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }) {
+    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }, allowedFromStatuses) {
       const { data, error } = await supabase
         .from("service_visit_payments")
         .update({ refunded_amount: patch.refundedAmount, refunded_at: patch.refundedAt.toISOString(), status: patch.status })
         .eq("id", id)
+        .in("status", allowedFromStatuses as string[])
         .select()
         .maybeSingle();
       if (error) throw new Error(`[scheduling] service_visit_payments refund update failed: ${error.message}`);

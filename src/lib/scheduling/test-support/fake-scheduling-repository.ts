@@ -833,9 +833,10 @@ export function createFakeSchedulingRepository(
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;
     },
-    async updateServiceVisitPaymentStatus(id: string, patch) {
+    async updateServiceVisitPaymentStatus(id: string, patch, allowedFromStatuses) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
       if (!existing) return null;
+      if (!(allowedFromStatuses as readonly string[]).includes(existing.status)) return null;
       const updated: ServiceVisitPaymentRow = {
         ...existing,
         status: patch.status,
@@ -917,9 +918,10 @@ export function createFakeSchedulingRepository(
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;
     },
-    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }) {
+    async updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }, allowedFromStatuses) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
       if (!existing) return null;
+      if (!(allowedFromStatuses as readonly string[]).includes(existing.status)) return null;
       const updated: ServiceVisitPaymentRow = { ...existing, refundedAmount: patch.refundedAmount, refundedAt: patch.refundedAt, status: patch.status };
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;

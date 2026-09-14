@@ -367,6 +367,26 @@ export async function processStripeWebhookEvent(
       return;
     }
 
+    case "payment_intent.canceled": {
+      // A canceled PaymentIntent is, from the collections/scheduling
+      // perspective, indistinguishable from any other "this attempt did
+      // not result in payment" outcome — reuses the existing
+      // payment_failed status (distinguished via failureCode/failureMessage)
+      // rather than inventing a new DB status. Reconciliation's own
+      // transition guard (payment-status-transitions.ts) still applies, so
+      // a cancellation event arriving after the intent already succeeded/
+      // refunded elsewhere is safely ignored, never a regression.
+      if (!schedulingRepo || !paymentGateway) return;
+      const intent = event.data.object;
+      await reconcileVisitPayment(schedulingRepo, paymentGateway, {
+        stripePaymentIntentId: intent.id,
+        status: "payment_failed",
+        failureCode: intent.cancellation_reason ?? "canceled",
+        failureMessage: "Payment was canceled.",
+      });
+      return;
+    }
+
     case "charge.refunded": {
       if (!schedulingRepo) return;
       const charge = event.data.object;

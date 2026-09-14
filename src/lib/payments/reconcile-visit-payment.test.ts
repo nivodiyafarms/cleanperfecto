@@ -139,4 +139,117 @@ describe("reconcileVisitPaymentRefund", () => {
     const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
     expect(payment!.status).toBe("partially_refunded");
   });
+
+  it("second partial refund progresses partially_refunded -> refunded once the remaining balance is refunded", async () => {
+    const { schedulingRepo, gateway, paymentIntentId, totalAmount, visitId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount / 2), chargeAmountCents: toStripeCents(totalAmount) });
+
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount), chargeAmountCents: toStripeCents(totalAmount) });
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("refunded");
+  });
+
+  it("refuses to refund a row that was never marked paid (e.g. refund event arrives before payment_intent.succeeded reconciled)", async () => {
+    const { schedulingRepo, paymentIntentId, totalAmount, visitId } = await seedChargedVisit();
+    const statusBefore = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status;
+    // No reconcileVisitPayment("paid") call yet — row is whatever createVisitPaymentIntent left it as (not "paid").
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount), chargeAmountCents: toStripeCents(totalAmount) });
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe(statusBefore);
+    expect(payment!.refundedAmount).toBeFalsy();
+  });
+});
+
+describe("payment status transition guard — stale/out-of-order/duplicate/terminal protection", () => {
+  it("duplicate event: redelivering the same payment_intent.succeeded twice is a safe idempotent no-op", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    const firstPaidAt = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.paidAt;
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("paid");
+    expect(payment!.paidAt).toEqual(firstPaidAt);
+  });
+
+  it("normal progression: created -> processing -> requires_action -> paid all succeed in sequence", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "processing" });
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("processing");
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "requires_action" });
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("requires_action");
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("paid");
+  });
+
+  it("out-of-order event: a stale payment_intent.processing arriving after payment_intent.succeeded must never regress paid -> processing", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "processing" });
+
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("paid");
+  });
+
+  it("must never happen: paid -> requires_action", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "requires_action" });
+
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("paid");
+  });
+
+  it("must never happen: refunded -> paid (a late payment_intent.succeeded arriving after the charge was already fully refunded)", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId, totalAmount } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount), chargeAmountCents: toStripeCents(totalAmount) });
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("refunded");
+  });
+
+  it("must never happen: partially_refunded -> processing", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId, totalAmount } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount / 2), chargeAmountCents: toStripeCents(totalAmount) });
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "processing" });
+
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("partially_refunded");
+  });
+
+  it("terminal state: refunded accepts no further status change at all except an idempotent refunded redelivery", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId, totalAmount } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount), chargeAmountCents: toStripeCents(totalAmount) });
+
+    for (const status of ["processing", "requires_action", "payment_failed", "paid"] as const) {
+      await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status });
+      expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("refunded");
+    }
+
+    // Idempotent redelivery of the same fully-refunded outcome is still allowed.
+    await reconcileVisitPaymentRefund(schedulingRepo, { stripePaymentIntentId: paymentIntentId, refundedAmountCents: toStripeCents(totalAmount), chargeAmountCents: toStripeCents(totalAmount) });
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("refunded");
+    expect(payment!.refundedAmount).toBeCloseTo(totalAmount, 2);
+  });
+
+  it("a retry can still succeed after an earlier failure on the same frozen PaymentIntent: payment_failed -> paid", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisit();
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "payment_failed", failureCode: "card_declined" });
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("payment_failed");
+
+    await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });
+
+    expect((await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.status).toBe("paid");
+  });
 });

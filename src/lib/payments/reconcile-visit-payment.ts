@@ -1,6 +1,7 @@
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceVisitPaymentStatus } from "@/lib/scheduling/types";
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import { allowedFromStatusesFor } from "./payment-status-transitions";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 const NOTIFICATION_TYPE_BY_STATUS: Partial<Record<ServiceVisitPaymentStatus, "payment_succeeded" | "payment_failed" | "payment_action_required">> = {
@@ -26,14 +27,26 @@ export async function reconcileVisitPayment(
   const payment = await findByPaymentIntentId(repo, params.stripePaymentIntentId);
   if (!payment) return; // Unknown/foreign PaymentIntent — nothing of ours to reconcile.
 
-  const paidAt = params.status === "paid" ? new Date() : undefined;
-  const updated = await repo.updateServiceVisitPaymentStatus(payment.id, {
-    status: params.status,
-    failureCode: params.failureCode ?? null,
-    failureMessage: params.failureMessage ?? null,
-    paidAt,
-  });
-  if (!updated) return;
+  // Only stamp paidAt on a genuine first transition into "paid" — a
+  // duplicate/redelivered payment_intent.succeeded for an already-paid row
+  // (allowed as an idempotent no-op by the transition guard below) must
+  // never shift the recorded completion time forward.
+  const paidAt = params.status === "paid" && payment.status !== "paid" ? new Date() : undefined;
+  const updated = await repo.updateServiceVisitPaymentStatus(
+    payment.id,
+    { status: params.status, failureCode: params.failureCode ?? null, failureMessage: params.failureMessage ?? null, paidAt },
+    allowedFromStatusesFor(params.status)
+  );
+  if (!updated) {
+    // Either nothing matched by id (shouldn't happen, we just looked it up
+    // by intent id above) or — the case this guard exists for — the row's
+    // CURRENT status isn't a valid source for this transition: a stale or
+    // out-of-order Stripe event. Safe no-op, not an error.
+    console.warn(
+      `[payments] blocked stale/out-of-order transition for service_visit_payments ${payment.id}: current=${payment.status} attempted=${params.status}`
+    );
+    return;
+  }
 
   await repo.updateServiceVisitPricingPaymentStatus(updated.serviceVisitId, params.status);
 
@@ -66,9 +79,22 @@ export async function reconcileVisitPaymentRefund(repo: SchedulingRepository, pa
 
   const refundedAmount = params.refundedAmountCents / 100;
   const status = params.refundedAmountCents >= params.chargeAmountCents ? "refunded" : "partially_refunded";
-  const updated = await repo.updateServiceVisitPaymentRefund(payment.id, { refundedAmount, refundedAt: new Date(), status });
+  const updated = await repo.updateServiceVisitPaymentRefund(
+    payment.id,
+    { refundedAmount, refundedAt: new Date(), status },
+    allowedFromStatusesFor(status)
+  );
   if (updated) {
     await repo.updateServiceVisitPricingPaymentStatus(updated.serviceVisitId, status);
+  } else {
+    // A refund event whose current status isn't paid/partially_refunded
+    // (e.g. arriving before payment_intent.succeeded reconciled, or after
+    // the row somehow regressed) is refused rather than silently applied —
+    // refunding money against a row that was never marked paid must never
+    // happen.
+    console.warn(
+      `[payments] blocked refund reconciliation for service_visit_payments ${payment.id}: current=${payment.status} attempted=${status}`
+    );
   }
 }
 

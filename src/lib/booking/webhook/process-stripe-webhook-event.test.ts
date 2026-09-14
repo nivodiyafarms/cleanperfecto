@@ -87,7 +87,7 @@ async function seedChargedVisitForWebhookTest() {
 }
 
 function paymentIntentEvent(
-  type: "payment_intent.processing" | "payment_intent.requires_action" | "payment_intent.payment_failed" | "payment_intent.succeeded",
+  type: "payment_intent.processing" | "payment_intent.requires_action" | "payment_intent.payment_failed" | "payment_intent.succeeded" | "payment_intent.canceled",
   intent: Partial<Stripe.PaymentIntent> & { id: string }
 ): Stripe.Event {
   return { id: `evt_${intent.id}_${type}`, type, data: { object: intent as Stripe.PaymentIntent } } as unknown as Stripe.Event;
@@ -359,6 +359,40 @@ describe("processStripeWebhookEvent — payment_intent.* (Pay Per Cleaning + Tip
     await expect(
       processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }))
     ).resolves.toBeUndefined();
+  });
+
+  it("payment_intent.canceled reconciles to payment_failed with a cancellation-specific failure code", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      createFakeBookingRepository().repo,
+      paymentIntentEvent("payment_intent.canceled", { id: paymentIntentId, cancellation_reason: "abandoned" }),
+      schedulingRepo,
+      undefined,
+      gateway
+    );
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("payment_failed");
+    expect(payment!.failureCode).toBe("abandoned");
+  });
+
+  it("payment_intent.canceled arriving AFTER the same PaymentIntent already succeeded must never regress paid -> payment_failed", async () => {
+    const { schedulingRepo, gateway, visitId, paymentIntentId } = await seedChargedVisitForWebhookTest();
+    await processStripeWebhookEvent(fakeStripe(), createFakeBookingRepository().repo, paymentIntentEvent("payment_intent.succeeded", { id: paymentIntentId }), schedulingRepo, undefined, gateway);
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      createFakeBookingRepository().repo,
+      paymentIntentEvent("payment_intent.canceled", { id: paymentIntentId, cancellation_reason: "abandoned" }),
+      schedulingRepo,
+      undefined,
+      gateway
+    );
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.status).toBe("paid");
   });
 
   it("PAYMENT_MODE=stripe_sandbox never fulfills a LIVE-mode event — explicit mode mismatch is a safe no-op", async () => {

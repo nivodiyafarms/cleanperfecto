@@ -33,6 +33,7 @@ import type {
   ServiceVisitPricingRow,
   ServiceVisitRow,
 } from "./domain-types";
+import type { ServiceVisitPaymentStatus } from "./types";
 import type {
   CalendarDate,
   PackageAmendmentApprovalState,
@@ -215,10 +216,17 @@ export interface SchedulingRepository {
   freezeServiceVisitPaymentAsNoPaymentDue(id: string): Promise<ServiceVisitPaymentRow>;
   /** Settable exactly once from null (enforced by the DB trigger) — the created PaymentIntent id, alongside the attempt-level status it produced. */
   setServiceVisitPaymentIntent(id: string, params: { stripePaymentIntentId: string; status: ServiceVisitPaymentRow["status"] }): Promise<ServiceVisitPaymentRow>;
-  /** General attempt-status transition (processing/requires_action/paid/payment_failed/no_payment_due) — never touches the frozen financial facts. */
+  /**
+   * General attempt-status transition (processing/requires_action/paid/payment_failed) — never touches the frozen financial facts.
+   * `allowedFromStatuses` is a compare-and-swap guard (same idiom as updateBookingOrderStatus's expectedStatus): the update only
+   * applies if the row's CURRENT status is one of these — see payment-status-transitions.ts for the authoritative table. Returns
+   * null both when the row doesn't exist AND when it exists but its current status isn't in `allowedFromStatuses` (a blocked
+   * stale/out-of-order transition) — callers already treat null as "nothing to reconcile," which is the correct behavior for both.
+   */
   updateServiceVisitPaymentStatus(
     id: string,
-    patch: { status: ServiceVisitPaymentRow["status"]; failureCode?: string | null; failureMessage?: string | null; paidAt?: Date | null }
+    patch: { status: ServiceVisitPaymentRow["status"]; failureCode?: string | null; failureMessage?: string | null; paidAt?: Date | null },
+    allowedFromStatuses: readonly ServiceVisitPaymentStatus[]
   ): Promise<ServiceVisitPaymentRow | null>;
   /**
    * Atomically settles an external (zelle/cash) payment AND writes the
@@ -239,6 +247,10 @@ export interface SchedulingRepository {
   ): Promise<ServiceVisitPaymentRow>;
   /** Tax-sync-only update — never touches status/paidAt/any frozen financial fact. Used by both the stripe_card reconciliation path and the external retry-tax-sync path. */
   updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch): Promise<ServiceVisitPaymentRow | null>;
-  /** Refund reconciliation from charge.refunded — never touches tip/tax/total, only refund + status fields. */
-  updateServiceVisitPaymentRefund(id: string, patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" }): Promise<ServiceVisitPaymentRow | null>;
+  /** Refund reconciliation from charge.refunded — never touches tip/tax/total, only refund + status fields. `allowedFromStatuses` is the same CAS guard as updateServiceVisitPaymentStatus, see payment-status-transitions.ts. */
+  updateServiceVisitPaymentRefund(
+    id: string,
+    patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" },
+    allowedFromStatuses: readonly ServiceVisitPaymentStatus[]
+  ): Promise<ServiceVisitPaymentRow | null>;
 }

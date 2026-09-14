@@ -6,6 +6,7 @@ import { prepareVisitPaymentReview } from "./prepare-visit-payment-review";
 import { selectVisitTip } from "./select-visit-tip";
 import { recordExternalPayment } from "./record-external-payment";
 import { retryExternalTaxSync } from "./retry-external-tax-sync";
+import { allowedFromStatusesFor } from "./payment-status-transitions";
 import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 
 const NEW_VISIT: NewServiceVisitRow = {
@@ -137,7 +138,7 @@ describe("retryExternalTaxSync", () => {
     });
     const frozen = await repo.freezeServiceVisitPaymentForStripeCard(record.id, { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1", cardBrand: "visa", cardLast4: "4242" });
     await repo.setServiceVisitPaymentIntent(frozen.id, { stripePaymentIntentId: "pi_1", status: "paid" });
-    await repo.updateServiceVisitPaymentStatus(frozen.id, { status: "paid", paidAt: new Date() });
+    await repo.updateServiceVisitPaymentStatus(frozen.id, { status: "paid", paidAt: new Date() }, allowedFromStatusesFor("paid"));
     await repo.updateServiceVisitPaymentTaxSync(frozen.id, { taxTransactionStatus: "pending" });
 
     const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
