@@ -3,9 +3,12 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  InvoiceRow,
+  NewInvoiceInput,
   NewPackageAmendmentRow,
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
+  NewReceiptInput,
   NewRecurringScheduleRow,
   NewRecurringScopeVersionRow,
   NewRecurringVisitPlanHistoryRow,
@@ -20,6 +23,7 @@ import type {
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
+  ReceiptRow,
   RecurringScheduleRow,
   RecurringScopeVersionRow,
   RecurringVisitPlanRow,
@@ -135,6 +139,26 @@ export interface SchedulingRepository {
    * class of mutation as reconcileVisitPayment).
    */
   upsertStripeDisputeEvent(input: NewStripeDisputeEventRow): Promise<StripeDisputeRow>;
+
+  // -- Phase I: invoices / receipts ----------------------------------------
+  /** Snapshotted onto an invoice/receipt at issuance — see InvoiceRow.customerDisplayName. Falls back to "Customer" if the row is somehow missing rather than throwing, since a documentation lookup must never block issuance of the underlying financial fact. */
+  findCustomerDisplayName(customerId: string): Promise<string>;
+  /** Allocates the next CP-INV-YYYY-###### number and inserts the row atomically via issue_invoice(). Sole caller: src/lib/invoicing/issue-invoice.ts. */
+  issueInvoice(input: NewInvoiceInput): Promise<InvoiceRow>;
+  /** Allocates the next CP-RCT-YYYY-###### number and inserts the row atomically via issue_receipt(). Sole caller: src/lib/invoicing/issue-receipt.ts. */
+  issueReceipt(input: NewReceiptInput): Promise<ReceiptRow>;
+  findInvoiceById(id: string): Promise<InvoiceRow | null>;
+  findReceiptById(id: string): Promise<ReceiptRow | null>;
+  /** Newest first (issueDate desc) — the customer's own billing history. */
+  listInvoicesForCustomer(customerId: string): Promise<InvoiceRow[]>;
+  listReceiptsForCustomer(customerId: string): Promise<ReceiptRow[]>;
+  /**
+   * Atomically voids an invoice AND writes the required financial_audit_log
+   * actor-attribution row, via void_invoice_with_audit(). Idempotent no-op
+   * if already void. Owner-only in application code — see
+   * assertCapability("financial_correction") in the calling admin action.
+   */
+  voidInvoiceWithAudit(id: string, reason: string, audit: { actorAdminUserId: string; actorRole: string }): Promise<InvoiceRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
@@ -167,6 +191,8 @@ export interface SchedulingRepository {
 
   // -- prepaid packages / plans -------------------------------------------
   findPrepaidPackageById(id: string): Promise<PrepaidPackageRow | null>;
+  /** booking_order_id is UNIQUE on prepaid_packages — used right after activatePrepaidPackage() (BookingRepository) to fetch the just-created row for invoice/receipt issuance, since that method returns only {inserted: boolean}. */
+  findPrepaidPackageByBookingOrderId(bookingOrderId: string): Promise<PrepaidPackageRow | null>;
   /** The oldest active prepaid package still carrying credit for this customer (remaining_visit_count > 0), or null if none — resolved fresh at the moment a recurring_visit_plans row is turned into a real visit, never decided upfront by the schedule itself. Once every package is exhausted, this returns null and later visits become Pay Per Cleaning. */
   findActivePrepaidPackageForCustomer(customerId: string): Promise<PrepaidPackageRow | null>;
   /**

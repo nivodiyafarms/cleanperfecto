@@ -8,6 +8,8 @@ const NAV_ITEMS = [
   { href: "/my/cleanings", label: "My Cleanings" },
   { href: "/my/package", label: "My Package" },
   { href: "/my/payments", label: "Payments" },
+  { href: "/my/invoices", label: "Invoices" },
+  { href: "/my/receipts", label: "Receipts" },
   { href: "/my/consent", label: "Consent" },
   { href: "/my/profile", label: "Profile" },
 ];

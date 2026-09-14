@@ -266,6 +266,105 @@ export interface NewStripeDisputeEventRow {
   isClosed: boolean;
 }
 
+// -- Phase I: invoices / receipts -------------------------------------------
+
+export type InvoiceSourceType = "service_visit" | "prepaid_package";
+export type InvoicePaymentStatus = "unpaid" | "paid" | "partially_paid" | "void";
+
+/** A single priced add-on line as it appears on an invoice — mirrors pricing/add-ons.ts's PricedAddOnResult shape exactly (id/label/amount/pricingKind), copied rather than imported to keep the scheduling domain free of a dependency on the (not-yet-wired-into-production) pricing engine module. */
+export interface InvoiceAddOnLine {
+  id: string;
+  label: string;
+  amount: number;
+  pricingKind: "fixed" | "starting_at";
+}
+
+/**
+ * The approved financial snapshot for a settled service visit or prepaid
+ * package purchase — every field below (all but paymentStatus/voidAt/
+ * voidReason/updatedAt) is frozen at issuance by the DB's protect_invoice_facts
+ * trigger. Deliberately excludes tip: an invoice documents what the SERVICE
+ * costs (subtotal + tax), never the voluntary gratuity, which appears only
+ * on the linked ReceiptRow (tipPaid) — see build-service-visit-invoice-input.ts.
+ * See 20260914090800_create_invoice_receipt_documents.sql.
+ */
+export interface InvoiceRow {
+  id: string;
+  invoiceNumber: string;
+  sourceType: InvoiceSourceType;
+  serviceVisitId: string | null;
+  prepaidPackageId: string | null;
+  serviceVisitPricingId: string | null;
+  serviceFeeAssessmentId: string | null;
+  customerId: string;
+  customerDisplayName: string;
+  description: string;
+  serviceAddressLine1: string | null;
+  serviceAddressLine2: string | null;
+  serviceCity: string | null;
+  serviceState: string | null;
+  serviceZip: string | null;
+  serviceDate: CalendarDate | null;
+  cleaningType: string | null;
+  issueDate: Date;
+  currency: string;
+  baseAmount: number;
+  roomAdjustmentsAmount: number;
+  addOnsAmount: number;
+  addOnsDetail: InvoiceAddOnLine[];
+  travelAmount: number;
+  suppliesAmount: number;
+  discountAmount: number;
+  discountDescription: string | null;
+  cancellationFeeAmount: number;
+  taxAmount: number;
+  subtotalAmount: number;
+  totalAmount: number;
+  pricingSnapshot: Record<string, unknown> | null;
+  paymentStatus: InvoicePaymentStatus;
+  voidAt: Date | null;
+  voidReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Input to issue_invoice() — see SchedulingRepository.issueInvoice. */
+export type NewInvoiceInput = Omit<InvoiceRow, "id" | "invoiceNumber" | "issueDate" | "paymentStatus" | "voidAt" | "voidReason" | "createdAt" | "updatedAt">;
+
+export type ReceiptSourceType = "visit_payment" | "cancellation_fee" | "prepaid_package";
+
+/**
+ * The actual settled money-movement fact for one payment event — fully
+ * immutable after creation (no update path exists at all, DB-enforced).
+ * Later refunds/disputes against this same money remain visible on their
+ * own existing source-of-truth rows (ServiceVisitPaymentRow.refundedAmount,
+ * PrepaidPackageRow.refundedAmount, StripeDisputeRow) — see
+ * get-receipt-detail.ts, which joins those live rather than duplicating
+ * their state here.
+ */
+export interface ReceiptRow {
+  id: string;
+  receiptNumber: string;
+  invoiceId: string;
+  customerId: string;
+  sourceType: ReceiptSourceType;
+  serviceVisitPaymentId: string | null;
+  serviceFeeAssessmentId: string | null;
+  prepaidPackageId: string | null;
+  paymentTimestamp: Date;
+  amountPaid: number;
+  taxPaid: number;
+  tipPaid: number;
+  paymentMethodDisplay: string;
+  stripePaymentIntentId: string | null;
+  stripeChargeId: string | null;
+  currency: string;
+  createdAt: Date;
+}
+
+/** Input to issue_receipt() — see SchedulingRepository.issueReceipt. */
+export type NewReceiptInput = Omit<ReceiptRow, "id" | "receiptNumber" | "createdAt">;
+
 export interface NewServiceFeeAssessmentRow {
   serviceVisitId: string;
   feeType: FeeType;

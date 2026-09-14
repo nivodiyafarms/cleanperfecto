@@ -4,9 +4,12 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  InvoiceRow,
+  NewInvoiceInput,
   NewPackageAmendmentRow,
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
+  NewReceiptInput,
   NewRecurringScheduleRow,
   NewRecurringScopeVersionRow,
   NewRecurringVisitPlanHistoryRow,
@@ -19,6 +22,7 @@ import type {
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
+  ReceiptRow,
   RecurringScheduleRow,
   RecurringScopeVersionRow,
   RecurringVisitPlanRow,
@@ -125,6 +129,18 @@ export function createFakeSchedulingRepository(
   const paymentsByVisitId = new Map<string, ServiceVisitPaymentRow>();
   const taxReversalReconciliationsById = new Map<string, TaxReversalReconciliationRow>();
   const stripeDisputesByStripeDisputeId = new Map<string, StripeDisputeRow>();
+  const invoicesById = new Map<string, InvoiceRow>();
+  const receiptsById = new Map<string, ReceiptRow>();
+  // Mirrors document_number_counters — keyed by "${documentType}-${year}",
+  // incremented the same atomic-per-call way allocate_document_number()
+  // guarantees in Postgres (this fake is single-threaded, so a plain
+  // read-then-write here has the same observable effect).
+  const documentNumberCounters = new Map<string, number>();
+  // No `customers` table concept exists elsewhere in this fake (customer
+  // identity lives in fake-booking-repository.ts's own store) — a test that
+  // cares about the exact display name seeds this directly via
+  // `state.customerNamesById.set(id, name)`.
+  const customerNamesById = new Map<string, string>();
   const financialAuditLog: FakeFinancialAuditLogRow[] = [];
   // A live-reference object (not a plain boolean) so a test can flip
   // `state.financialAuditControl.simulateFailure = true` AFTER this fake
@@ -551,6 +567,9 @@ export function createFakeSchedulingRepository(
 
     async findPrepaidPackageById(id) {
       return prepaidPackagesById.get(id) ?? null;
+    },
+    async findPrepaidPackageByBookingOrderId(bookingOrderId) {
+      return [...prepaidPackagesById.values()].find((p) => p.bookingOrderId === bookingOrderId) ?? null;
     },
     async findActivePrepaidPackageForCustomer(customerId) {
       const candidates = [...prepaidPackagesById.values()]
@@ -1223,6 +1242,96 @@ export function createFakeSchedulingRepository(
       stripeDisputesByStripeDisputeId.set(input.stripeDisputeId, created);
       return created;
     },
+
+    async findCustomerDisplayName(customerId) {
+      return customerNamesById.get(customerId) ?? "Customer";
+    },
+
+    async issueInvoice(input: NewInvoiceInput) {
+      const year = new Date().getUTCFullYear();
+      const counterKey = `invoice-${year}`;
+      const number = (documentNumberCounters.get(counterKey) ?? 0) + 1;
+      documentNumberCounters.set(counterKey, number);
+
+      const now = new Date();
+      const invoice: InvoiceRow = {
+        ...input,
+        id: randomUUID(),
+        invoiceNumber: `CP-INV-${year}-${String(number).padStart(6, "0")}`,
+        issueDate: now,
+        paymentStatus: "paid",
+        voidAt: null,
+        voidReason: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      invoicesById.set(invoice.id, invoice);
+      return invoice;
+    },
+
+    async issueReceipt(input: NewReceiptInput) {
+      const year = new Date().getUTCFullYear();
+      const counterKey = `receipt-${year}`;
+      const number = (documentNumberCounters.get(counterKey) ?? 0) + 1;
+      documentNumberCounters.set(counterKey, number);
+
+      const receipt: ReceiptRow = {
+        ...input,
+        id: randomUUID(),
+        receiptNumber: `CP-RCT-${year}-${String(number).padStart(6, "0")}`,
+        createdAt: new Date(),
+      };
+      receiptsById.set(receipt.id, receipt);
+      return receipt;
+    },
+
+    async findInvoiceById(id) {
+      return invoicesById.get(id) ?? null;
+    },
+
+    async findReceiptById(id) {
+      return receiptsById.get(id) ?? null;
+    },
+
+    async listInvoicesForCustomer(customerId) {
+      return [...invoicesById.values()]
+        .filter((invoice) => invoice.customerId === customerId)
+        .sort((a, b) => b.issueDate.getTime() - a.issueDate.getTime());
+    },
+
+    async listReceiptsForCustomer(customerId) {
+      return [...receiptsById.values()]
+        .filter((receipt) => receipt.customerId === customerId)
+        .sort((a, b) => b.paymentTimestamp.getTime() - a.paymentTimestamp.getTime());
+    },
+
+    async voidInvoiceWithAudit(id, reason, audit) {
+      const existing = invoicesById.get(id);
+      if (!existing) throw new Error(`[fake-scheduling] invoices ${id} not found`);
+      if (existing.paymentStatus === "void") {
+        return existing; // Idempotent no-op — mirrors void_invoice_with_audit.
+      }
+
+      const now = new Date();
+      const updated: InvoiceRow = { ...existing, paymentStatus: "void", voidAt: now, voidReason: reason, updatedAt: now };
+
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "invoice_voided",
+        targetEntityType: "invoice",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.serviceVisitId,
+        reason,
+        metadata: { invoiceNumber: existing.invoiceNumber, totalAmount: existing.totalAmount },
+        createdAt: now,
+      };
+
+      invoicesById.set(id, updated);
+      financialAuditLog.push(auditRow);
+      return updated;
+    },
   };
 
   return {
@@ -1250,6 +1359,9 @@ export function createFakeSchedulingRepository(
       servicePricingByVisitId,
       taxReversalReconciliationsById,
       stripeDisputesByStripeDisputeId,
+      invoicesById,
+      receiptsById,
+      customerNamesById,
       financialAuditLog,
       financialAuditControl,
     },

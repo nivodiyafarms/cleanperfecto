@@ -12,6 +12,8 @@ import type { BookingRepository } from "../repository";
 import type { PrepaidFrequency } from "../types";
 import { reconcileVisitPayment, reconcileVisitPaymentRefund } from "@/lib/payments/reconcile-visit-payment";
 import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
+import { issueDocumentsForPackagePurchase } from "@/lib/invoicing/issue-documents-for-package-purchase";
+import { formatPaymentMethodDisplayFromStripe } from "@/lib/invoicing/format-payment-method-display";
 import { resolveWebhookFulfillmentDecision } from "./webhook-fulfillment-guard";
 
 const PREPAID_FREQUENCIES = new Set<PrepaidFrequency>(["weekly", "biweekly", "every_4_weeks"]);
@@ -203,11 +205,13 @@ async function finalizeVerifiedPayment(
   consentRepo?: ConsentRepository
 ): Promise<void> {
   const paymentIntentId = intentIdOf(session.payment_intent);
+  let paymentMethod: Stripe.PaymentMethod | null = null;
   if (paymentIntentId) {
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["payment_method"] });
     if (paymentIntent.status !== "succeeded") {
       return;
     }
+    paymentMethod = (paymentIntent.payment_method as Stripe.PaymentMethod | null) ?? null;
   }
 
   await repo.updatePaymentAttemptBySessionId(session.id, {
@@ -238,6 +242,19 @@ async function finalizeVerifiedPayment(
 
   if (inserted && changed) {
     await sendPrepaidPackageSuccessEmails(repo, bookingOrderId).catch(() => {});
+
+    // Best-effort — issuing the invoice/receipt paperwork must never be
+    // mistaken for (or roll back) the package activation itself, which
+    // already committed above.
+    if (schedulingRepo) {
+      const purchasedPackage = await schedulingRepo.findPrepaidPackageByBookingOrderId(bookingOrderId);
+      if (purchasedPackage) {
+        const paymentMethodDisplay = formatPaymentMethodDisplayFromStripe(paymentMethod);
+        await issueDocumentsForPackagePurchase(schedulingRepo, purchasedPackage, paymentMethodDisplay, paymentIntentId).catch((error) => {
+          console.error(`[booking] failed to issue invoice/receipt for prepaid_packages ${purchasedPackage.id}:`, error);
+        });
+      }
+    }
 
     // Consent request — no real service_visit exists yet for a package at
     // this point (package visit slots start 'planned', not 'linked', until

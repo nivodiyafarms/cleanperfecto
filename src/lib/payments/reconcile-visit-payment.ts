@@ -1,6 +1,7 @@
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceVisitPaymentStatus } from "@/lib/scheduling/types";
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import { issueDocumentsForVisitPayment } from "@/lib/invoicing/issue-documents-for-visit-payment";
 import { allowedFromStatusesFor } from "./payment-status-transitions";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
@@ -31,7 +32,8 @@ export async function reconcileVisitPayment(
   // duplicate/redelivered payment_intent.succeeded for an already-paid row
   // (allowed as an idempotent no-op by the transition guard below) must
   // never shift the recorded completion time forward.
-  const paidAt = params.status === "paid" && payment.status !== "paid" ? new Date() : undefined;
+  const isFirstPaidTransition = params.status === "paid" && payment.status !== "paid";
+  const paidAt = isFirstPaidTransition ? new Date() : undefined;
   const updated = await repo.updateServiceVisitPaymentStatus(
     payment.id,
     { status: params.status, failureCode: params.failureCode ?? null, failureMessage: params.failureMessage ?? null, paidAt },
@@ -52,6 +54,15 @@ export async function reconcileVisitPayment(
 
   if (params.status === "paid" && updated.stripeTaxCalculationId) {
     await reconcileStripeCardTaxAssociation(repo, gateway, updated.id, params.stripePaymentIntentId);
+  }
+
+  if (isFirstPaidTransition) {
+    // Best-effort — issuing the invoice/receipt paperwork must never be
+    // mistaken for (or roll back) the payment itself, which already
+    // committed above. Same convention as the notification enqueue below.
+    await issueDocumentsForVisitPayment(repo, updated).catch((error) => {
+      console.error(`[payments] failed to issue invoice/receipt for service_visit_payments ${updated.id}:`, error);
+    });
   }
 
   const notificationType = NOTIFICATION_TYPE_BY_STATUS[params.status];

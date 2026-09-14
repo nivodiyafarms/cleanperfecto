@@ -6,6 +6,8 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  InvoiceAddOnLine,
+  InvoiceRow,
   NewPackageAmendmentRow,
   NewPackageVisitPlanHistoryRow,
   NewPackageVisitPlanRow,
@@ -21,6 +23,7 @@ import type {
   PackageAmendmentRow,
   PackageVisitPlanRow,
   PrepaidPackageRow,
+  ReceiptRow,
   RecurringScheduleRow,
   RecurringScopeVersionRow,
   RecurringVisitPlanRow,
@@ -267,6 +270,70 @@ function toStripeDisputeRow(row: Record<string, unknown>): StripeDisputeRow {
     closedAt: row.closed_at ? new Date(row.closed_at as string) : null,
     createdAt: new Date(row.created_at as string),
     updatedAt: new Date(row.updated_at as string),
+  };
+}
+
+function toInvoiceRow(row: Record<string, unknown>): InvoiceRow {
+  return {
+    id: row.id as string,
+    invoiceNumber: row.invoice_number as string,
+    sourceType: row.source_type as InvoiceRow["sourceType"],
+    serviceVisitId: (row.service_visit_id as string | null) ?? null,
+    prepaidPackageId: (row.prepaid_package_id as string | null) ?? null,
+    serviceVisitPricingId: (row.service_visit_pricing_id as string | null) ?? null,
+    serviceFeeAssessmentId: (row.service_fee_assessment_id as string | null) ?? null,
+    customerId: row.customer_id as string,
+    customerDisplayName: row.customer_display_name as string,
+    description: row.description as string,
+    serviceAddressLine1: (row.service_address_line1 as string | null) ?? null,
+    serviceAddressLine2: (row.service_address_line2 as string | null) ?? null,
+    serviceCity: (row.service_city as string | null) ?? null,
+    serviceState: (row.service_state as string | null) ?? null,
+    serviceZip: (row.service_zip as string | null) ?? null,
+    serviceDate: (row.service_date as string | null) ?? null,
+    cleaningType: (row.cleaning_type as string | null) ?? null,
+    issueDate: new Date(row.issue_date as string),
+    currency: row.currency as string,
+    baseAmount: Number(row.base_amount),
+    roomAdjustmentsAmount: Number(row.room_adjustments_amount),
+    addOnsAmount: Number(row.add_ons_amount),
+    addOnsDetail: (row.add_ons_detail as InvoiceAddOnLine[] | null) ?? [],
+    travelAmount: Number(row.travel_amount),
+    suppliesAmount: Number(row.supplies_amount),
+    discountAmount: Number(row.discount_amount),
+    discountDescription: (row.discount_description as string | null) ?? null,
+    cancellationFeeAmount: Number(row.cancellation_fee_amount),
+    taxAmount: Number(row.tax_amount),
+    subtotalAmount: Number(row.subtotal_amount),
+    totalAmount: Number(row.total_amount),
+    pricingSnapshot: (row.pricing_snapshot as Record<string, unknown> | null) ?? null,
+    paymentStatus: row.payment_status as InvoiceRow["paymentStatus"],
+    voidAt: row.void_at ? new Date(row.void_at as string) : null,
+    voidReason: (row.void_reason as string | null) ?? null,
+    createdAt: new Date(row.created_at as string),
+    updatedAt: new Date(row.updated_at as string),
+  };
+}
+
+function toReceiptRow(row: Record<string, unknown>): ReceiptRow {
+  return {
+    id: row.id as string,
+    receiptNumber: row.receipt_number as string,
+    invoiceId: row.invoice_id as string,
+    customerId: row.customer_id as string,
+    sourceType: row.source_type as ReceiptRow["sourceType"],
+    serviceVisitPaymentId: (row.service_visit_payment_id as string | null) ?? null,
+    serviceFeeAssessmentId: (row.service_fee_assessment_id as string | null) ?? null,
+    prepaidPackageId: (row.prepaid_package_id as string | null) ?? null,
+    paymentTimestamp: new Date(row.payment_timestamp as string),
+    amountPaid: Number(row.amount_paid),
+    taxPaid: Number(row.tax_paid),
+    tipPaid: Number(row.tip_paid),
+    paymentMethodDisplay: row.payment_method_display as string,
+    stripePaymentIntentId: (row.stripe_payment_intent_id as string | null) ?? null,
+    stripeChargeId: (row.stripe_charge_id as string | null) ?? null,
+    currency: row.currency as string,
+    createdAt: new Date(row.created_at as string),
   };
 }
 
@@ -811,6 +878,18 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .eq("id", id)
         .maybeSingle();
       if (error) throw new Error(`[scheduling] prepaid_packages lookup failed: ${error.message}`);
+      return data ? toPrepaidPackageRow(data) : null;
+    },
+
+    async findPrepaidPackageByBookingOrderId(bookingOrderId) {
+      const { data, error } = await supabase
+        .from("prepaid_packages")
+        .select(
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
+        )
+        .eq("booking_order_id", bookingOrderId)
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] prepaid_packages lookup by booking_order_id failed: ${error.message}`);
       return data ? toPrepaidPackageRow(data) : null;
     },
 
@@ -1433,6 +1512,104 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       });
       if (error) throw new Error(`[scheduling] upsert_stripe_dispute_event failed: ${error.message}`);
       return toStripeDisputeRow(data);
+    },
+
+    async findCustomerDisplayName(customerId) {
+      const { data, error } = await supabase.from("customers").select("name").eq("id", customerId).maybeSingle();
+      if (error) throw new Error(`[scheduling] customers lookup failed: ${error.message}`);
+      return data?.name ?? "Customer";
+    },
+
+    async issueInvoice(input) {
+      const { data, error } = await supabase.rpc("issue_invoice", {
+        p_source_type: input.sourceType,
+        p_service_visit_id: input.serviceVisitId,
+        p_prepaid_package_id: input.prepaidPackageId,
+        p_service_visit_pricing_id: input.serviceVisitPricingId,
+        p_service_fee_assessment_id: input.serviceFeeAssessmentId,
+        p_customer_id: input.customerId,
+        p_customer_display_name: input.customerDisplayName,
+        p_description: input.description,
+        p_service_address_line1: input.serviceAddressLine1,
+        p_service_address_line2: input.serviceAddressLine2,
+        p_service_city: input.serviceCity,
+        p_service_state: input.serviceState,
+        p_service_zip: input.serviceZip,
+        p_service_date: input.serviceDate,
+        p_cleaning_type: input.cleaningType,
+        p_currency: input.currency,
+        p_base_amount: input.baseAmount,
+        p_room_adjustments_amount: input.roomAdjustmentsAmount,
+        p_add_ons_amount: input.addOnsAmount,
+        p_add_ons_detail: input.addOnsDetail,
+        p_travel_amount: input.travelAmount,
+        p_supplies_amount: input.suppliesAmount,
+        p_discount_amount: input.discountAmount,
+        p_discount_description: input.discountDescription,
+        p_cancellation_fee_amount: input.cancellationFeeAmount,
+        p_tax_amount: input.taxAmount,
+        p_subtotal_amount: input.subtotalAmount,
+        p_total_amount: input.totalAmount,
+        p_pricing_snapshot: input.pricingSnapshot,
+      });
+      if (error) throw new Error(`[scheduling] issue_invoice failed: ${error.message}`);
+      return toInvoiceRow(data);
+    },
+
+    async issueReceipt(input) {
+      const { data, error } = await supabase.rpc("issue_receipt", {
+        p_invoice_id: input.invoiceId,
+        p_customer_id: input.customerId,
+        p_source_type: input.sourceType,
+        p_service_visit_payment_id: input.serviceVisitPaymentId,
+        p_service_fee_assessment_id: input.serviceFeeAssessmentId,
+        p_prepaid_package_id: input.prepaidPackageId,
+        p_payment_timestamp: input.paymentTimestamp.toISOString(),
+        p_amount_paid: input.amountPaid,
+        p_tax_paid: input.taxPaid,
+        p_tip_paid: input.tipPaid,
+        p_payment_method_display: input.paymentMethodDisplay,
+        p_stripe_payment_intent_id: input.stripePaymentIntentId,
+        p_stripe_charge_id: input.stripeChargeId,
+        p_currency: input.currency,
+      });
+      if (error) throw new Error(`[scheduling] issue_receipt failed: ${error.message}`);
+      return toReceiptRow(data);
+    },
+
+    async findInvoiceById(id) {
+      const { data, error } = await supabase.from("invoices").select("*").eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] findInvoiceById failed: ${error.message}`);
+      return data ? toInvoiceRow(data) : null;
+    },
+
+    async findReceiptById(id) {
+      const { data, error } = await supabase.from("receipts").select("*").eq("id", id).maybeSingle();
+      if (error) throw new Error(`[scheduling] findReceiptById failed: ${error.message}`);
+      return data ? toReceiptRow(data) : null;
+    },
+
+    async listInvoicesForCustomer(customerId) {
+      const { data, error } = await supabase.from("invoices").select("*").eq("customer_id", customerId).order("issue_date", { ascending: false });
+      if (error) throw new Error(`[scheduling] listInvoicesForCustomer failed: ${error.message}`);
+      return (data ?? []).map(toInvoiceRow);
+    },
+
+    async listReceiptsForCustomer(customerId) {
+      const { data, error } = await supabase.from("receipts").select("*").eq("customer_id", customerId).order("payment_timestamp", { ascending: false });
+      if (error) throw new Error(`[scheduling] listReceiptsForCustomer failed: ${error.message}`);
+      return (data ?? []).map(toReceiptRow);
+    },
+
+    async voidInvoiceWithAudit(id, reason, audit) {
+      const { data, error } = await supabase.rpc("void_invoice_with_audit", {
+        p_invoice_id: id,
+        p_reason: reason,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error) throw new Error(`[scheduling] void_invoice_with_audit failed: ${error.message}`);
+      return toInvoiceRow(data);
     },
   };
 }

@@ -1,6 +1,7 @@
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { assertCanRecordExternalPayment } from "@/lib/config/payment-capabilities";
+import { issueDocumentsForVisitPayment } from "@/lib/invoicing/issue-documents-for-visit-payment";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RecordExternalPaymentInput {
@@ -47,6 +48,13 @@ export async function recordExternalPayment(repo: SchedulingRepository, gateway:
     { paymentMethodType: input.paymentMethodType, externalPaymentReference: input.externalPaymentReference },
     { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole }
   );
+
+  // Best-effort — issuing the invoice/receipt paperwork must never be
+  // mistaken for (or roll back) the payment itself, which already
+  // committed above (phase 1).
+  await issueDocumentsForVisitPayment(repo, settled).catch((error) => {
+    console.error(`[payments] failed to issue invoice/receipt for service_visit_payments ${settled.id}:`, error);
+  });
 
   // Phase 2 — best-effort tax-transaction commit. A failure here leaves the
   // payment PAID and only marks tax_transaction_status='failed' for later

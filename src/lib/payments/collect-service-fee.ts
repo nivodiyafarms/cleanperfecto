@@ -1,6 +1,7 @@
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceFeeAssessmentRow } from "@/lib/scheduling/domain-types";
 import { assertCanRecordExternalPayment } from "@/lib/config/payment-capabilities";
+import { issueDocumentsForFeeCollection } from "@/lib/invoicing/issue-documents-for-fee-collection";
 
 export interface CollectServiceFeeExternallyInput {
   feeAssessmentId: string;
@@ -41,9 +42,18 @@ export interface CollectServiceFeeExternallyInput {
 export async function collectServiceFeeExternally(repo: SchedulingRepository, input: CollectServiceFeeExternallyInput): Promise<ServiceFeeAssessmentRow> {
   assertCanRecordExternalPayment();
 
-  return repo.collectServiceFeeAssessmentWithAudit(
+  const collected = await repo.collectServiceFeeAssessmentWithAudit(
     input.feeAssessmentId,
     { collectionMethod: input.collectionMethod, externalPaymentReference: input.externalPaymentReference, stripePaymentIntentId: null },
     { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole }
   );
+
+  // Best-effort — issuing the invoice/receipt paperwork must never be
+  // mistaken for (or roll back) the fee collection itself, which already
+  // committed above.
+  await issueDocumentsForFeeCollection(repo, collected).catch((error) => {
+    console.error(`[payments] failed to issue invoice/receipt for service_fee_assessments ${collected.id}:`, error);
+  });
+
+  return collected;
 }

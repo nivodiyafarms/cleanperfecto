@@ -56,3 +56,19 @@ export async function assertPackageAmendmentBelongsToCustomer(repo: SchedulingRe
   await assertPrepaidPackageBelongsToCustomer(repo, amendment.prepaidPackageId, customerId);
   return amendment;
 }
+
+export async function assertInvoiceBelongsToCustomer(repo: SchedulingRepository, invoiceId: string, customerId: string) {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice || invoice.customerId !== customerId) {
+    throw new CustomerOwnershipError();
+  }
+  return invoice;
+}
+
+export async function assertReceiptBelongsToCustomer(repo: SchedulingRepository, receiptId: string, customerId: string) {
+  const receipt = await repo.findReceiptById(receiptId);
+  if (!receipt || receipt.customerId !== customerId) {
+    throw new CustomerOwnershipError();
+  }
+  return receipt;
+}
