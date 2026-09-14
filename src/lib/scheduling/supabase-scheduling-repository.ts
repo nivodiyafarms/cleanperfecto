@@ -127,9 +127,14 @@ function toPrepaidPackageRow(row: Record<string, unknown>): PrepaidPackageRow {
     frequency: row.frequency as PrepaidPackageRow["frequency"],
     purchasedVisitCount: row.purchased_visit_count as number,
     remainingVisitCount: row.remaining_visit_count as number,
+    packageTotalPaid: Number(row.package_total_paid),
     effectivePricePerVisit: Number(row.effective_price_per_visit),
     status: row.status as PrepaidPackageRow["status"],
     purchasedAt: new Date(row.purchased_at as string),
+    refundedAmount: Number(row.refunded_amount ?? 0),
+    refundedAt: row.refunded_at ? new Date(row.refunded_at as string) : null,
+    cancelledAt: row.cancelled_at ? new Date(row.cancelled_at as string) : null,
+    cancellationReason: (row.cancellation_reason as string | null) ?? null,
   };
 }
 
@@ -730,7 +735,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase
         .from("prepaid_packages")
         .select(
-          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,effective_price_per_visit,status,purchased_at"
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
         )
         .eq("id", id)
         .maybeSingle();
@@ -742,7 +747,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase
         .from("prepaid_packages")
         .select(
-          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,effective_price_per_visit,status,purchased_at"
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
         )
         .eq("customer_id", customerId)
         .eq("status", "active")
@@ -752,6 +757,19 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .maybeSingle();
       if (error) throw new Error(`[scheduling] active prepaid_packages lookup for customer failed: ${error.message}`);
       return data ? toPrepaidPackageRow(data) : null;
+    },
+
+    async cancelPrepaidPackageWithRefundAudit(id, patch, audit) {
+      const { data, error } = await supabase.rpc("cancel_prepaid_package_with_refund_audit", {
+        p_prepaid_package_id: id,
+        p_refund_amount: patch.refundAmount,
+        p_stripe_refund_id: patch.stripeRefundId,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+        p_reason: patch.reason,
+      });
+      if (error) throw new Error(`[scheduling] cancel_prepaid_package_with_refund_audit failed: ${error.message}`);
+      return toPrepaidPackageRow(data);
     },
 
     async listActiveRecurringSchedulesForCustomer(customerId) {
@@ -1264,6 +1282,19 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .maybeSingle();
       if (error) throw new Error(`[scheduling] service_visit_payments refund update failed: ${error.message}`);
       return data ? toServiceVisitPaymentRow(data) : null;
+    },
+
+    async refundServiceVisitPaymentWithAudit(id, patch, audit) {
+      const { data, error } = await supabase.rpc("refund_visit_payment_with_audit", {
+        p_service_visit_payment_id: id,
+        p_refund_amount: patch.refundAmount,
+        p_stripe_refund_id: patch.stripeRefundId,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+        p_reason: patch.reason,
+      });
+      if (error) throw new Error(`[scheduling] refund_visit_payment_with_audit failed: ${error.message}`);
+      return toServiceVisitPaymentRow(data);
     },
   };
 }

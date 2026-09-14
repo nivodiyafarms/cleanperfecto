@@ -276,6 +276,21 @@ export function createSupabaseBookingRepository(): BookingRepository {
       return data ? toPaymentAttemptRow(data) : null;
     },
 
+    async findCompletedPaymentAttemptForBookingOrder(bookingOrderId: string) {
+      const { data, error } = await supabase
+        .from("payment_attempts")
+        .select()
+        .eq("booking_order_id", bookingOrderId)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        throw new Error(`[booking] payment_attempts completed lookup failed: ${error.message}`);
+      }
+      return data ? toPaymentAttemptRow(data) : null;
+    },
+
     async insertPaymentAttempt(row: NewPaymentAttemptRow): Promise<PaymentAttemptRow> {
       const { data, error } = await supabase
         .from("payment_attempts")

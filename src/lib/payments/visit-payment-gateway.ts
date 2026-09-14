@@ -2,7 +2,7 @@ import "server-only";
 
 import { getStripeClient } from "@/lib/booking/stripe/client";
 import { RESIDENTIAL_CLEANING_TAX_CODE } from "@/lib/booking/stripe/checkout-sessions";
-import { assertCanCalculateStripeTax, assertCanCreateStripeCharge } from "@/lib/config/payment-capabilities";
+import { assertCanCalculateStripeTax, assertCanCreateStripeCharge, assertCanCreateStripeRefund } from "@/lib/config/payment-capabilities";
 import { OPTIONAL_GRATUITY_TAX_CODE } from "./tax-codes";
 
 export interface TaxLocationAddress {
@@ -48,6 +48,38 @@ export interface TaxTransactionAttemptResult {
   erroredReason: string | null;
 }
 
+export interface CreateRefundInput {
+  stripePaymentIntentId: string;
+  /** Positive, in cents. Never the full charge amount by default — the caller always computes the exact amount (full or partial) before calling this. */
+  amountCents: number;
+  /** Fresh per attempt — protects only this one create-call from a network-level double-fire, same convention as every other idempotencyKey in this codebase (see checkout-sessions.ts). */
+  idempotencyKey: string;
+}
+
+export interface RefundResult {
+  id: string;
+  /** Stripe's own refund status: 'pending' | 'requires_action' | 'succeeded' | 'failed' | 'canceled'. */
+  status: string;
+}
+
+export interface ReverseTaxTransactionInput {
+  /** The original, already-committed Stripe Tax transaction id being reversed (in full or in part). */
+  originalTransactionId: string;
+  mode: "full" | "partial";
+  /**
+   * Required for mode: "partial" only — the tax-inclusive dollar amount
+   * being refunded, in cents (positive here; the gateway negates it to
+   * match Stripe's own `flat_amount` convention). Stripe computes the
+   * tax-vs-subtotal split of this amount itself — this codebase never
+   * hardcodes or re-derives a tax rate to do that math locally. Ignored
+   * for mode: "full", which reverses every line item Stripe already
+   * recorded on the original transaction.
+   */
+  refundAmountCents?: number;
+  reference: string;
+  idempotencyKey: string;
+}
+
 /**
  * Everything this milestone needs from Stripe (Tax Calculations, PaymentIntents,
  * Tax Association reconciliation, and the one legitimate manual Tax
@@ -64,6 +96,10 @@ export interface VisitPaymentGateway {
   findTaxAssociation(paymentIntentId: string): Promise<TaxTransactionAttemptResult | null>;
   /** The one legitimate manual Tax Transaction path — for an external (zelle/cash) settlement ONLY, never for stripe_card. Idempotent via the caller-supplied idempotencyKey. */
   createTaxTransactionFromCalculation(params: { calculationId: string; reference: string; idempotencyKey: string }): Promise<{ id: string }>;
+  /** Admin-issued refund (owner-only — see refund-visit-payment.ts). Idempotent via the caller-supplied idempotencyKey. */
+  createRefund(input: CreateRefundInput): Promise<RefundResult>;
+  /** Reverses a committed Stripe Tax transaction (full or partial) when a refund occurs — see reverse-visit-payment-tax.ts. Idempotent via the caller-supplied idempotencyKey. */
+  reverseTaxTransaction(input: ReverseTaxTransactionInput): Promise<{ id: string }>;
 }
 
 function buildLineItems(input: CreateTaxCalculationInput) {
@@ -162,6 +198,29 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
       const transaction = await stripe.tax.transactions.createFromCalculation(
         { calculation: params.calculationId, reference: params.reference },
         { idempotencyKey: params.idempotencyKey }
+      );
+      return { id: transaction.id };
+    },
+
+    async createRefund(input) {
+      assertCanCreateStripeRefund();
+      const refund = await stripe.refunds.create(
+        { payment_intent: input.stripePaymentIntentId, amount: input.amountCents },
+        { idempotencyKey: input.idempotencyKey }
+      );
+      return { id: refund.id, status: refund.status ?? "unknown" };
+    },
+
+    async reverseTaxTransaction(input) {
+      assertCanCalculateStripeTax();
+      const transaction = await stripe.tax.transactions.createReversal(
+        {
+          original_transaction: input.originalTransactionId,
+          mode: input.mode,
+          reference: input.reference,
+          ...(input.mode === "partial" && input.refundAmountCents !== undefined ? { flat_amount: -input.refundAmountCents } : {}),
+        },
+        { idempotencyKey: input.idempotencyKey }
       );
       return { id: transaction.id };
     },

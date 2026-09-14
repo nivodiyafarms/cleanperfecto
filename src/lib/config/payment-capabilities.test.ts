@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   assertCanCalculateStripeTax,
   assertCanCreateStripeCharge,
+  assertCanCreateStripeRefund,
   assertCanCreateStripeSetup,
   assertCanRecordExternalPayment,
   canCalculateStripeTax,
   canCreateStripeCharge,
+  canCreateStripeRefund,
   canCreateStripeSetup,
   canRecordExternalPayment,
   resolvePaymentCapabilities,
@@ -21,22 +23,24 @@ describe("resolvePaymentCapabilities", () => {
     expect(capabilities).toEqual({
       canCreateStripeSetup: false,
       canCreateStripeCharge: false,
+      canCreateStripeRefund: false,
       canRecordExternalPayment: false,
       canCalculateStripeTax: true,
     });
   });
 
-  it("external_only blocks Stripe setup/charge but permits external recording and tax calculation", () => {
+  it("external_only blocks Stripe setup/charge/refund but permits external recording and tax calculation", () => {
     const capabilities = resolvePaymentCapabilities({ appEnv: "production", paymentMode: "external_only", taxMode: "stripe_tax" });
     expect(capabilities).toEqual({
       canCreateStripeSetup: false,
       canCreateStripeCharge: false,
+      canCreateStripeRefund: false,
       canRecordExternalPayment: true,
       canCalculateStripeTax: true,
     });
   });
 
-  it("stripe_sandbox (with matching test keys) enables Stripe setup/charge and external recording", () => {
+  it("stripe_sandbox (with matching test keys) enables Stripe setup/charge/refund and external recording", () => {
     const capabilities = resolvePaymentCapabilities({
       appEnv: "development",
       paymentMode: "stripe_sandbox",
@@ -46,6 +50,7 @@ describe("resolvePaymentCapabilities", () => {
     expect(capabilities).toEqual({
       canCreateStripeSetup: true,
       canCreateStripeCharge: true,
+      canCreateStripeRefund: true,
       canRecordExternalPayment: true,
       canCalculateStripeTax: false,
     });
@@ -112,6 +117,12 @@ describe("canX() UI predicates never throw — a broken config resolves to false
     ).toBe(true);
     expect(canRecordExternalPayment({ appEnv: "production", paymentMode: "external_only" })).toBe(true);
   });
+
+  it("canCreateStripeRefund is gated identically to canCreateStripeCharge — false under disabled/external_only, true under a correctly-configured Stripe mode", () => {
+    expect(canCreateStripeRefund({ appEnv: "production", paymentMode: "disabled" })).toBe(false);
+    expect(canCreateStripeRefund({ appEnv: "production", paymentMode: "external_only" })).toBe(false);
+    expect(canCreateStripeRefund({ appEnv: "production", paymentMode: "stripe_enabled", stripeKeys: LIVE_KEYS })).toBe(true);
+  });
 });
 
 describe("assertX() guards — the authoritative enforcement point", () => {
@@ -152,6 +163,13 @@ describe("assertX() guards — the authoritative enforcement point", () => {
   it("assertCanCalculateStripeTax succeeds under TAX_MODE=stripe_tax even when PAYMENT_MODE=external_only", () => {
     expect(() =>
       assertCanCalculateStripeTax({ appEnv: "production", paymentMode: "external_only", taxMode: "stripe_tax" })
+    ).not.toThrow();
+  });
+
+  it("assertCanCreateStripeRefund throws under disabled, succeeds under a correctly-configured Stripe mode", () => {
+    expect(() => assertCanCreateStripeRefund({ appEnv: "production", paymentMode: "disabled" })).toThrow(RuntimeConfigurationError);
+    expect(() =>
+      assertCanCreateStripeRefund({ appEnv: "production", paymentMode: "stripe_enabled", stripeKeys: LIVE_KEYS })
     ).not.toThrow();
   });
 });

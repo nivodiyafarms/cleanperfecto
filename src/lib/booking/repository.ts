@@ -70,6 +70,8 @@ export interface BookingRepository extends CompletedServiceHistoryRepository {
 
   /** A still-open (created/processing) attempt for this booking order, if any — see the two-layer Checkout idempotency design. */
   findActivePaymentAttempt(bookingOrderId: string): Promise<PaymentAttemptRow | null>;
+  /** The (status='completed') attempt that actually settled this booking order, if any — the original PaymentIntent a prepaid-package cancellation refund is issued against. See refund-prepaid-package.ts. Distinct from findActivePaymentAttempt, which only ever finds a still-open one. */
+  findCompletedPaymentAttemptForBookingOrder(bookingOrderId: string): Promise<PaymentAttemptRow | null>;
   insertPaymentAttempt(row: NewPaymentAttemptRow): Promise<PaymentAttemptRow>;
   updatePaymentAttemptBySessionId(sessionId: string, patch: PaymentAttemptStatusPatch): Promise<void>;
   findPaymentAttemptBySessionId(sessionId: string): Promise<PaymentAttemptRow | null>;

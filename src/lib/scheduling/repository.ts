@@ -140,6 +140,20 @@ export interface SchedulingRepository {
   findPrepaidPackageById(id: string): Promise<PrepaidPackageRow | null>;
   /** The oldest active prepaid package still carrying credit for this customer (remaining_visit_count > 0), or null if none — resolved fresh at the moment a recurring_visit_plans row is turned into a real visit, never decided upfront by the schedule itself. Once every package is exhausted, this returns null and later visits become Pay Per Cleaning. */
   findActivePrepaidPackageForCustomer(customerId: string): Promise<PrepaidPackageRow | null>;
+  /**
+   * Atomically cancels a prepaid_packages row (status -> cancelled) AND
+   * records the required financial_audit_log actor-attribution row, via a
+   * single Postgres RPC (cancel_prepaid_package_with_refund_audit) — either
+   * both commit or neither does. Eligible only from status='active' (no
+   * double-cancel); rejects a refund amount exceeding the original
+   * package_total_paid. See src/lib/payments/refund-prepaid-package.ts,
+   * the sole caller.
+   */
+  cancelPrepaidPackageWithRefundAudit(
+    id: string,
+    patch: { refundAmount: number; stripeRefundId: string | null; reason: string },
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<PrepaidPackageRow>;
   listPackageVisitPlans(prepaidPackageId: string): Promise<PackageVisitPlanRow[]>;
   findPackageVisitPlanById(id: string): Promise<PackageVisitPlanRow | null>;
   /** The package_visit_plans row linked to a given universal recurring_visit_plans row, if any — the other half of the sync invariant (see sync-linked-recurring-package-plan.ts). */
@@ -253,4 +267,18 @@ export interface SchedulingRepository {
     patch: { refundedAmount: number; refundedAt: Date; status: "partially_refunded" | "refunded" },
     allowedFromStatuses: readonly ServiceVisitPaymentStatus[]
   ): Promise<ServiceVisitPaymentRow | null>;
+  /**
+   * Atomically applies an admin-issued refund AND writes the required
+   * financial_audit_log actor-attribution row, via a single Postgres RPC
+   * (refund_visit_payment_with_audit) — either both commit or neither does.
+   * Refundable only from status paid/partially_refunded (Phase A's
+   * terminal-state rules, enforced at the DB layer); rejects an amount
+   * that would exceed the remaining refundable balance (no over-refund).
+   * See src/lib/payments/refund-visit-payment.ts, the sole caller.
+   */
+  refundServiceVisitPaymentWithAudit(
+    id: string,
+    patch: { refundAmount: number; stripeRefundId: string; reason: string },
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceVisitPaymentRow>;
 }

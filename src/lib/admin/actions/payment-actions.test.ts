@@ -8,6 +8,7 @@ import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 
 let fake: ReturnType<typeof createFakeSchedulingRepository>;
 let gatewayBundle: ReturnType<typeof createFakeVisitPaymentGateway>;
+let bookingFake: ReturnType<typeof createFakeBookingRepository>;
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -25,8 +26,16 @@ vi.mock("@/lib/payments/visit-payment-gateway", async (importOriginal) => {
   return { ...actual, createStripeVisitPaymentGateway: () => gatewayBundle.gateway };
 });
 
+vi.mock("@/lib/booking/supabase-booking-repository", () => ({
+  createSupabaseBookingRepository: () => bookingFake.repo,
+}));
+
 const { requireAdmin } = await import("@/lib/admin/require-admin");
-const { recordExternalPaymentAction, retryTaxSyncAction } = await import("./payment-actions");
+const { recordExternalPaymentAction, retryTaxSyncAction, refundPaymentAction, refundPrepaidPackageAction } = await import("./payment-actions");
+const { createVisitPaymentIntent } = await import("@/lib/payments/create-visit-payment-intent");
+const { reconcileVisitPayment } = await import("@/lib/payments/reconcile-visit-payment");
+const { createFakeBookingRepository } = await import("@/lib/booking/test-support/fake-booking-repository");
+const { AdminForbiddenError } = await import("@/lib/admin/rbac/capabilities");
 
 const NEW_VISIT: NewServiceVisitRow = {
   customerId: "customer-1",
@@ -86,6 +95,7 @@ async function seedVisitWithTipSelected() {
 beforeEach(() => {
   fake = createFakeSchedulingRepository();
   gatewayBundle = createFakeVisitPaymentGateway();
+  bookingFake = createFakeBookingRepository();
   vi.mocked(requireAdmin).mockReset();
 });
 
@@ -216,5 +226,178 @@ describe("retryTaxSyncAction", () => {
 
     const after = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
     expect(after!.taxTransactionStatus).toBe("committed");
+  });
+});
+
+async function seedPaidVisitViaStripeCard() {
+  const visitId = await seedVisitWithTipSelected();
+  const { repo: bookingRepo } = createFakeBookingRepository({
+    customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+  });
+  const outcome = await createVisitPaymentIntent(fake.repo, bookingRepo, gatewayBundle.gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+  if (outcome.outcome !== "ready") throw new Error("expected ready");
+  const payment = (await fake.repo.findServiceVisitPaymentByVisitId(visitId))!;
+  await reconcileVisitPayment(fake.repo, gatewayBundle.gateway, { stripePaymentIntentId: payment.stripePaymentIntentId!, status: "paid" });
+  const paid = (await fake.repo.findServiceVisitPaymentByVisitId(visitId))!;
+  return { visitId, payment: paid };
+}
+
+describe("refundPaymentAction", () => {
+  it("rejects when the caller is not an authorized admin", async () => {
+    mockUnauthorized();
+    await expect(refundPaymentAction(null, formData({ serviceVisitId: "v-1", refundAmount: "50", reason: "x" }))).rejects.toThrow(AdminUnauthorizedError);
+  });
+
+  it("Phase E RBAC: owner-only — an operations-role admin is denied", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+    const { visitId, payment } = await seedPaidVisitViaStripeCard();
+
+    await expect(refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: String(payment.totalAmount), reason: "attempted by operations" }))).rejects.toThrow(
+      AdminForbiddenError
+    );
+
+    const after = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(after!.status).toBe("paid"); // untouched
+  });
+
+  it("an owner_admin CAN issue a full refund", async () => {
+    mockAuthorized();
+    const { visitId, payment } = await seedPaidVisitViaStripeCard();
+
+    const result = await refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: String(payment.totalAmount), reason: "customer requested" }));
+    expect(result.ok).toBe(true);
+
+    const after = await fake.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(after!.status).toBe("refunded");
+  });
+
+  it("requires a positive refund amount", async () => {
+    mockAuthorized();
+    const { visitId } = await seedPaidVisitViaStripeCard();
+    const result = await refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: "0", reason: "x" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("requires a reason", async () => {
+    mockAuthorized();
+    const { visitId, payment } = await seedPaidVisitViaStripeCard();
+    const result = await refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: String(payment.totalAmount), reason: "" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("surfaces an over-refund attempt as a clean action error, not a thrown exception", async () => {
+    mockAuthorized();
+    const { visitId, payment } = await seedPaidVisitViaStripeCard();
+    const result = await refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: String(payment.totalAmount! + 100), reason: "too much" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("financial_audit_log records the refund with owner attribution", async () => {
+    mockAuthorized();
+    const { visitId, payment } = await seedPaidVisitViaStripeCard();
+    await refundPaymentAction(null, formData({ serviceVisitId: visitId, refundAmount: String(payment.totalAmount), reason: "audited refund" }));
+
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    const [entry] = fake.state.financialAuditLog;
+    expect(entry.actionType).toBe("refund_issued");
+    expect(entry.actorAdminUserId).toBe("admin-1");
+    expect(entry.reason).toBe("audited refund");
+  });
+});
+
+async function seedActivePrepaidPackage(remainingVisitCount = 4) {
+  const bookingOrderId = "booking-pkg-1";
+  fake = createFakeSchedulingRepository({
+    prepaidPackages: [
+      {
+        id: "pkg-1",
+        customerId: "customer-1",
+        bookingOrderId,
+        frequency: "weekly",
+        purchasedVisitCount: 6,
+        remainingVisitCount,
+        packageTotalPaid: 900,
+        effectivePricePerVisit: 150,
+        status: "active",
+        purchasedAt: new Date("2026-08-01T00:00:00Z"),
+      },
+    ],
+  });
+  const attempt = await bookingFake.repo.insertPaymentAttempt({
+    bookingOrderId,
+    mode: "payment",
+    stripeCheckoutSessionId: "cs_pkg_1",
+    stripeCustomerId: "cus_1",
+    amount: 900,
+    paymentMethodType: null,
+    packageSubtotalBeforeAchIncentive: null,
+    achSavingsAmount: null,
+  });
+  await bookingFake.repo.updatePaymentAttemptBySessionId(attempt.stripeCheckoutSessionId, { status: "completed", stripePaymentIntentId: "pi_pkg_1" });
+}
+
+describe("refundPrepaidPackageAction", () => {
+  it("rejects when the caller is not an authorized admin", async () => {
+    mockUnauthorized();
+    await expect(refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "x" }))).rejects.toThrow(AdminUnauthorizedError);
+  });
+
+  it("Phase G RBAC: owner-only — an operations-role admin is denied and the package is left untouched", async () => {
+    vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "ops-1", supabaseUserId: "user-ops", role: "operations" });
+    await seedActivePrepaidPackage();
+
+    await expect(refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "attempted by operations" }))).rejects.toThrow(AdminForbiddenError);
+
+    const after = await fake.repo.findPrepaidPackageById("pkg-1");
+    expect(after!.status).toBe("active");
+  });
+
+  it("an owner_admin CAN cancel a package and receive the computed refund amount, never an admin-entered one", async () => {
+    mockAuthorized();
+    await seedActivePrepaidPackage(4);
+
+    const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "customer requested", refundAmount: "999999" }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.message).toContain("$600.00");
+
+    const after = await fake.repo.findPrepaidPackageById("pkg-1");
+    expect(after!.status).toBe("cancelled");
+    expect(after!.refundedAmount).toBe(600);
+  });
+
+  it("requires a package id", async () => {
+    mockAuthorized();
+    const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "", reason: "x" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("requires a reason", async () => {
+    mockAuthorized();
+    await seedActivePrepaidPackage();
+    const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("surfaces cancelling an already-cancelled package as a clean action error, not a thrown exception", async () => {
+    mockAuthorized();
+    await seedActivePrepaidPackage();
+    await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "first cancel" }));
+
+    const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "second cancel" }));
+    expect(result.ok).toBe(false);
+  });
+
+  it("financial_audit_log records the package cancellation with owner attribution", async () => {
+    mockAuthorized();
+    await seedActivePrepaidPackage(4);
+    await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "audited package cancel" }));
+
+    expect(fake.state.financialAuditLog).toHaveLength(1);
+    const [entry] = fake.state.financialAuditLog;
+    expect(entry.actionType).toBe("refund_issued");
+    expect(entry.targetEntityType).toBe("prepaid_package");
+    expect(entry.actorAdminUserId).toBe("admin-1");
+    expect(entry.reason).toBe("audited package cancel");
   });
 });

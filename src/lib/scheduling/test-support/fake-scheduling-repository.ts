@@ -515,6 +515,58 @@ export function createFakeSchedulingRepository(
         .sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
       return candidates[0] ?? null;
     },
+    async cancelPrepaidPackageWithRefundAudit(id, patch, audit) {
+      const existing = prepaidPackagesById.get(id);
+      if (!existing) throw new Error(`[fake-scheduling] prepaid_packages ${id} not found`);
+      if (existing.status !== "active") {
+        throw new Error(`[fake-scheduling] prepaid_packages ${id} is not eligible for cancellation (status=${existing.status}, must be active)`);
+      }
+      if (patch.refundAmount < 0) {
+        throw new Error(`[fake-scheduling] refund amount must be >= 0, got ${patch.refundAmount}`);
+      }
+      const packageTotalPaid = existing.packageTotalPaid ?? 0;
+      if (patch.refundAmount > packageTotalPaid) {
+        throw new Error(`[fake-scheduling] refund of ${patch.refundAmount} would exceed the original package principal ${packageTotalPaid} (id=${id})`);
+      }
+
+      const now = new Date();
+      const updated: PrepaidPackageRow = {
+        ...existing,
+        status: "cancelled",
+        refundedAmount: patch.refundAmount,
+        refundedAt: patch.refundAmount > 0 ? now : (existing.refundedAt ?? null),
+        cancelledAt: now,
+        cancellationReason: patch.reason,
+      };
+
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "refund_issued",
+        targetEntityType: "prepaid_package",
+        targetEntityId: existing.id,
+        serviceVisitId: null,
+        reason: patch.reason,
+        metadata: {
+          refundAmount: patch.refundAmount,
+          stripeRefundId: patch.stripeRefundId,
+          packageTotalPaid,
+          purchasedVisitCount: existing.purchasedVisitCount,
+          remainingVisitCountAtCancellation: existing.remainingVisitCount,
+        },
+        createdAt: now,
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      prepaidPackagesById.set(id, updated);
+      financialAuditLog.push(auditRow);
+
+      return updated;
+    },
     async listActiveRecurringSchedulesForCustomer(customerId) {
       return [...recurringSchedulesById.values()].filter((r) => r.customerId === customerId && r.status === "active");
     },
@@ -889,6 +941,63 @@ export function createFakeSchedulingRepository(
         serviceVisitId: existing.serviceVisitId,
         reason: patch.externalPaymentReference,
         metadata: { paymentMethodType: patch.paymentMethodType, totalAmount: existing.totalAmount },
+        createdAt: now,
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      paymentsByVisitId.set(existing.serviceVisitId, updatedPayment);
+      if (updatedPricing) servicePricingByVisitId.set(existing.serviceVisitId, updatedPricing);
+      financialAuditLog.push(auditRow);
+
+      return updatedPayment;
+    },
+    async refundServiceVisitPaymentWithAudit(id, patch, audit) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.status !== "paid" && existing.status !== "partially_refunded") {
+        throw new Error(`[fake-scheduling] service_visit_payments ${id} is not eligible for refund (status=${existing.status}, must be paid or partially_refunded)`);
+      }
+      if (patch.refundAmount <= 0) {
+        throw new Error(`[fake-scheduling] refund amount must be positive, got ${patch.refundAmount}`);
+      }
+
+      const existingRefundedAmount = existing.refundedAmount ?? 0;
+      const newRefundedAmount = existingRefundedAmount + patch.refundAmount;
+      const totalAmount = existing.totalAmount ?? 0;
+      if (newRefundedAmount > totalAmount) {
+        throw new Error(
+          `[fake-scheduling] refund of ${patch.refundAmount} would exceed the remaining refundable balance (already refunded ${existingRefundedAmount}, total ${totalAmount})`
+        );
+      }
+
+      // Mirrors the real RPC: compute every effect first; nothing is
+      // written until every step has succeeded (same all-or-nothing
+      // guarantee as recordExternalServiceVisitPaymentWithAudit above).
+      const now = new Date();
+      const newStatus: ServiceVisitPaymentRow["status"] = newRefundedAmount >= totalAmount ? "refunded" : "partially_refunded";
+      const updatedPayment: ServiceVisitPaymentRow = {
+        ...existing,
+        refundedAmount: newRefundedAmount,
+        refundedAt: now,
+        status: newStatus,
+      };
+
+      const existingPricing = servicePricingByVisitId.get(existing.serviceVisitId);
+      const updatedPricing: ServiceVisitPricingRow | null = existingPricing ? { ...existingPricing, paymentStatus: newStatus } : null;
+
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: "refund_issued",
+        targetEntityType: "service_visit_payment",
+        targetEntityId: existing.id,
+        serviceVisitId: existing.serviceVisitId,
+        reason: patch.reason,
+        metadata: { refundAmount: patch.refundAmount, stripeRefundId: patch.stripeRefundId, newStatus, totalRefundedAmount: newRefundedAmount },
         createdAt: now,
       };
 

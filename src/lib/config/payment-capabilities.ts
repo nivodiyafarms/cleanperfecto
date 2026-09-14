@@ -20,6 +20,8 @@ export interface PaymentCapabilities {
   canCreateStripeSetup: boolean;
   /** Stripe PaymentIntent creation or a `mode: "payment"` Checkout Session (post-cleaning charge, prepaid package purchase). */
   canCreateStripeCharge: boolean;
+  /** Stripe refund creation (admin-issued, owner-only — see src/lib/admin/rbac/capabilities.ts's "issue_refund"). Gated identically to canCreateStripeCharge: a refund is still Stripe money movement, so PAYMENT_MODE=disabled must block it exactly like a new charge. */
+  canCreateStripeRefund: boolean;
   /** Recording a genuine Zelle/Cash external receipt through the existing frozen/system-derived amount flow. */
   canRecordExternalPayment: boolean;
   /** Stripe Tax calculation/transaction creation — independent of PAYMENT_MODE, since external settlements can still require authoritative tax. */
@@ -58,6 +60,7 @@ export function resolvePaymentCapabilities(overrides?: PaymentCapabilityOverride
   return {
     canCreateStripeSetup: stripeCardEnabled,
     canCreateStripeCharge: stripeCardEnabled,
+    canCreateStripeRefund: stripeCardEnabled,
     canRecordExternalPayment: config.paymentMode !== "disabled",
     canCalculateStripeTax: config.taxMode === "stripe_tax",
   };
@@ -83,6 +86,9 @@ export function canCreateStripeSetup(overrides?: PaymentCapabilityOverrides): bo
 }
 export function canCreateStripeCharge(overrides?: PaymentCapabilityOverrides): boolean {
   return safeCapability((c) => c.canCreateStripeCharge, overrides);
+}
+export function canCreateStripeRefund(overrides?: PaymentCapabilityOverrides): boolean {
+  return safeCapability((c) => c.canCreateStripeRefund, overrides);
 }
 export function canRecordExternalPayment(overrides?: PaymentCapabilityOverrides): boolean {
   return safeCapability((c) => c.canRecordExternalPayment, overrides);
@@ -113,6 +119,15 @@ export function assertCanCreateStripeCharge(overrides?: PaymentCapabilityOverrid
   if (!capabilities.canCreateStripeCharge) {
     throw new RuntimeConfigurationError(
       "Stripe charge creation is not available — PAYMENT_MODE does not currently permit Stripe card flows."
+    );
+  }
+}
+
+export function assertCanCreateStripeRefund(overrides?: PaymentCapabilityOverrides): void {
+  const capabilities = resolvePaymentCapabilities(overrides);
+  if (!capabilities.canCreateStripeRefund) {
+    throw new RuntimeConfigurationError(
+      "Stripe refund creation is not available — PAYMENT_MODE does not currently permit Stripe card flows."
     );
   }
 }

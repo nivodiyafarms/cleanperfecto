@@ -7,7 +7,10 @@ import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-sc
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { recordExternalPayment } from "@/lib/payments/record-external-payment";
+import { refundPrepaidPackage } from "@/lib/payments/refund-prepaid-package";
+import { refundVisitPayment } from "@/lib/payments/refund-visit-payment";
 import { retryExternalTaxSync } from "@/lib/payments/retry-external-tax-sync";
+import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { actionError, actionOk, type ActionResult } from "./types";
 
 /**
@@ -85,4 +88,79 @@ export async function retryTaxSyncAction(_prevState: ActionResult | null, formDa
 
   revalidatePath("/admin");
   return actionOk("Tax sync retried.");
+}
+
+/**
+ * Admin "Issue Refund" — owner-only (a refund is a financial waiver/
+ * correction in the same category as fee waivers, never operations —
+ * see AdminCapability's "issue_refund"). The Stripe refund call and the
+ * local financial-audit-attributed state transition both happen inside
+ * refundVisitPayment; the admin only supplies the amount (full or
+ * partial, admin-entered here since — unlike recordExternalPayment's
+ * frozen/system-derived amount — a refund amount is inherently a
+ * judgment call the admin makes) and a reason.
+ */
+export async function refundPaymentAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "issue_refund");
+  const repo = createSupabaseSchedulingRepository();
+  const gateway = createStripeVisitPaymentGateway();
+
+  const serviceVisitId = String(formData.get("serviceVisitId") ?? "");
+  const refundAmount = Number(formData.get("refundAmount") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!serviceVisitId) return actionError("Missing visit id.");
+  if (!Number.isFinite(refundAmount) || refundAmount <= 0) return actionError("Enter a valid refund amount greater than $0.");
+  if (!reason) return actionError("A reason is required for a refund.");
+
+  try {
+    await refundVisitPayment(repo, gateway, {
+      serviceVisitId,
+      refundAmount,
+      reason,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
+
+  revalidatePath("/admin");
+  return actionOk("Refund issued.");
+}
+
+/**
+ * Admin "Cancel Prepaid Package (Refund Unused Credits)" — owner-only,
+ * same capability as the per-visit refund above. The refund amount is
+ * never admin-entered: it is entirely computed by refundPrepaidPackage
+ * from the immutable original package_total_paid snapshot per the
+ * finalized cancellation policy, so there is no amount field to trust or
+ * validate here — only the target package id and a reason.
+ */
+export async function refundPrepaidPackageAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "issue_refund");
+  const schedulingRepo = createSupabaseSchedulingRepository();
+  const bookingRepo = createSupabaseBookingRepository();
+  const gateway = createStripeVisitPaymentGateway();
+
+  const prepaidPackageId = String(formData.get("prepaidPackageId") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!prepaidPackageId) return actionError("Missing package id.");
+  if (!reason) return actionError("A reason is required for a package cancellation.");
+
+  try {
+    const { refundAmount } = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+      prepaidPackageId,
+      reason,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+    revalidatePath("/admin");
+    return actionOk(refundAmount > 0 ? `Package cancelled. $${refundAmount.toFixed(2)} refunded.` : "Package cancelled. No unused credits remained to refund.");
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
 }

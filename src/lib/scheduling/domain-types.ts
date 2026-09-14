@@ -168,11 +168,28 @@ export interface PrepaidPackageRow {
   frequency: RecurringCadence;
   purchasedVisitCount: number;
   remainingVisitCount: number;
+  /**
+   * The exact original amount actually charged (subtotal, inclusive of
+   * whatever Stripe Tax collected at checkout) — the immutable snapshot
+   * cancellation refunds must be computed from (packageTotalPaid ×
+   * remainingVisitCount / purchasedVisitCount), never re-derived from
+   * current pricing. See refund-prepaid-package.ts. Optional here (rather
+   * than on every existing PrepaidPackageRow fixture across this
+   * codebase's many pre-existing scheduling tests, which have nothing to
+   * do with refunds) — refund-prepaid-package.ts treats a missing value
+   * as a data-integrity error, never silently defaults it.
+   */
+  packageTotalPaid?: number;
   /** The actual per-visit price charged at purchase (prepaid_packages.effective_price_per_visit) — a historical fact, used as the basis for a package amendment's "old value," never re-derived from the pricing engine (which could drift from what was actually paid if config changed since purchase). */
   effectivePricePerVisit: number;
   status: "active" | "completed" | "cancelled";
   /** Used to pick the oldest active package first when resolving which package a newly-scheduled recurring visit should draw a credit from (see findActivePrepaidPackageForCustomer / schedule-recurring-visit-plan.ts). */
   purchasedAt: Date;
+  /** Set only on cancellation — the exact dollar amount refunded to the original payment method for unused visit credits (0 when all purchased visits had already been completed). Optional for the same pre-existing-fixture reason as packageTotalPaid; refund-prepaid-package.ts treats a missing value as 0 (not yet refunded), same as the DB column's own default. */
+  refundedAmount?: number;
+  refundedAt?: Date | null;
+  cancelledAt?: Date | null;
+  cancellationReason?: string | null;
 }
 
 export interface ServiceFeeAssessmentRow {

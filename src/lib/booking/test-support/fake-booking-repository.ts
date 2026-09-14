@@ -124,6 +124,15 @@ export function createFakeBookingRepository(
       return null;
     },
 
+    async findCompletedPaymentAttemptForBookingOrder(bookingOrderId: string) {
+      for (const attempt of paymentAttemptsById.values()) {
+        if (attempt.bookingOrderId === bookingOrderId && attempt.status === "completed") {
+          return attempt;
+        }
+      }
+      return null;
+    },
+
     async insertPaymentAttempt(row: NewPaymentAttemptRow): Promise<PaymentAttemptRow> {
       const id = randomUUID();
       const created: PaymentAttemptRow = {

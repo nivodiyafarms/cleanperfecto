@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type {
   CreatePaymentIntentInput,
+  CreateRefundInput,
   CreateTaxCalculationInput,
   PaymentIntentResult,
+  RefundResult,
+  ReverseTaxTransactionInput,
   TaxCalculationResult,
   TaxTransactionAttemptResult,
   VisitPaymentGateway,
@@ -17,6 +20,8 @@ export interface FakeVisitPaymentGatewayOptions {
   nextPaymentIntentStatus?: string;
   failNextPaymentIntentCreate?: boolean;
   failNextTaxTransactionCreate?: boolean;
+  failNextRefundCreate?: boolean;
+  failNextTaxReversalCreate?: boolean;
 }
 
 interface FakeCalculation {
@@ -34,9 +39,13 @@ export interface FakeVisitPaymentGatewayState {
   /** Test-settable: what findTaxAssociation should report for a given PaymentIntent id. Absent = "not yet found" (null). */
   taxAssociationByPaymentIntentId: Map<string, TaxTransactionAttemptResult>;
   taxTransactionsByReference: Map<string, { calculationId: string }>;
+  refunds: Map<string, { stripePaymentIntentId: string; amountCents: number }>;
+  taxReversals: Map<string, { originalTransactionId: string; mode: "full" | "partial"; refundAmountCents?: number }>;
   createTaxCalculationCallCount: number;
   createPaymentIntentCallCount: number;
   createTaxTransactionCallCount: number;
+  createRefundCallCount: number;
+  createTaxReversalCallCount: number;
 }
 
 /**
@@ -50,15 +59,21 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
   const calculationValiditySeconds = options.calculationValiditySeconds ?? 5400;
   let failNextPaymentIntentCreate = options.failNextPaymentIntentCreate ?? false;
   let failNextTaxTransactionCreate = options.failNextTaxTransactionCreate ?? false;
+  let failNextRefundCreate = options.failNextRefundCreate ?? false;
+  let failNextTaxReversalCreate = options.failNextTaxReversalCreate ?? false;
 
   const state: FakeVisitPaymentGatewayState = {
     calculations: new Map(),
     paymentIntents: new Map(),
     taxAssociationByPaymentIntentId: new Map(),
     taxTransactionsByReference: new Map(),
+    refunds: new Map(),
+    taxReversals: new Map(),
     createTaxCalculationCallCount: 0,
     createPaymentIntentCallCount: 0,
     createTaxTransactionCallCount: 0,
+    createRefundCallCount: 0,
+    createTaxReversalCallCount: 0,
   };
 
   const gateway: VisitPaymentGateway = {
@@ -106,6 +121,28 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
       if (existing) return { id: `txn_${params.reference}` };
       state.taxTransactionsByReference.set(params.reference, { calculationId: params.calculationId });
       return { id: `txn_${params.reference}` };
+    },
+
+    async createRefund(input: CreateRefundInput): Promise<RefundResult> {
+      state.createRefundCallCount += 1;
+      if (failNextRefundCreate) {
+        failNextRefundCreate = false;
+        throw new Error("[fake-visit-payment-gateway] simulated Stripe refund creation failure");
+      }
+      const id = `re_${randomUUID()}`;
+      state.refunds.set(id, { stripePaymentIntentId: input.stripePaymentIntentId, amountCents: input.amountCents });
+      return { id, status: "succeeded" };
+    },
+
+    async reverseTaxTransaction(input: ReverseTaxTransactionInput): Promise<{ id: string }> {
+      state.createTaxReversalCallCount += 1;
+      if (failNextTaxReversalCreate) {
+        failNextTaxReversalCreate = false;
+        throw new Error("[fake-visit-payment-gateway] simulated Stripe Tax reversal creation failure");
+      }
+      const id = `txn_reversal_${randomUUID()}`;
+      state.taxReversals.set(id, { originalTransactionId: input.originalTransactionId, mode: input.mode, refundAmountCents: input.refundAmountCents });
+      return { id };
     },
   };
 
