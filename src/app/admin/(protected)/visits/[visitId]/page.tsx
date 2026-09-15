@@ -10,7 +10,7 @@ import { cancelVisitAction, completeVisitAction, reassignCleanersAction, resched
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
-import { recordExternalPaymentAction, refundPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
+import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
@@ -237,16 +237,31 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
                 </p>
                 {fee.reason && <p className="text-muted">{fee.reason}</p>}
                 {fee.state === "assessed" && (
-                  <ActionForm action={waiveFeeAction} className="mt-1">
-                    <input type="hidden" name="feeAssessmentId" value={fee.id} />
-                    <input type="hidden" name="visitId" value={visitId} />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input name="reason" type="text" placeholder="Reason for waiving" className="rounded-lg border border-border px-2 py-1 text-xs" required />
-                      <button type="submit" className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
-                        Waive
-                      </button>
-                    </div>
-                  </ActionForm>
+                  <>
+                    <ActionForm action={waiveFeeAction} className="mt-1">
+                      <input type="hidden" name="feeAssessmentId" value={fee.id} />
+                      <input type="hidden" name="visitId" value={visitId} />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input name="reason" type="text" placeholder="Reason for waiving" className="rounded-lg border border-border px-2 py-1 text-xs" required />
+                        <button type="submit" className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                          Waive
+                        </button>
+                      </div>
+                    </ActionForm>
+                    <ActionForm action={collectServiceFeeAction} className="mt-1">
+                      <input type="hidden" name="feeAssessmentId" value={fee.id} />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select name="collectionMethod" className="rounded-lg border border-border px-2 py-1 text-xs">
+                          <option value="zelle">Zelle</option>
+                          <option value="cash">Cash</option>
+                        </select>
+                        <input name="externalPaymentReference" type="text" placeholder="Reference (optional)" className="rounded-lg border border-border px-2 py-1 text-xs" />
+                        <button type="submit" className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
+                          Record Fee Collection
+                        </button>
+                      </div>
+                    </ActionForm>
+                  </>
                 )}
               </li>
             ))}
