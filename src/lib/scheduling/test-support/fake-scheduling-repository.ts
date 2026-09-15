@@ -164,13 +164,14 @@ export function createFakeSchedulingRepository(
     async listDayOverridesForDate(date) {
       return dayOverrides.filter((o) => o.overrideDate === date);
     },
-    async listActiveAssignmentsInRange(rangeStartUtc: Date, rangeEndUtc: Date): Promise<ActiveAssignmentIntervalRow[]> {
+    async listActiveAssignmentsInRange(rangeStartUtc: Date, rangeEndUtc: Date, excludeServiceVisitId?: string): Promise<ActiveAssignmentIntervalRow[]> {
       return assignments
         .filter(
           (a) =>
             a.unassignedAt === null &&
             a.confirmedStartAt.getTime() >= rangeStartUtc.getTime() &&
-            a.confirmedStartAt.getTime() < rangeEndUtc.getTime()
+            a.confirmedStartAt.getTime() < rangeEndUtc.getTime() &&
+            a.serviceVisitId !== excludeServiceVisitId
         )
         .map((a) => ({
           cleanerId: a.cleanerId,

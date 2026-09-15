@@ -60,6 +60,7 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
           startTime: rescheduleStartTime,
           serviceMinutes: duration.estimatedServiceMinutes,
           timezone: visit.timezone,
+          excludeServiceVisitId: visitId,
         })
       : null;
 

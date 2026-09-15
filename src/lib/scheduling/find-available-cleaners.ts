@@ -10,6 +10,8 @@ export interface FindAvailableCleanersInput {
   serviceMinutes: number;
   timezone: string;
   bufferMinutes?: number;
+  /** Pass the visit's own id when checking availability for a NEW candidate time on a visit that is ALREADY scheduled (reschedule) — otherwise that visit's own current booking is counted as a conflict against itself, making its assigned cleaner appear unavailable for every candidate time. Omit for a visit that isn't scheduled yet. */
+  excludeServiceVisitId?: string;
 }
 
 /**
@@ -37,7 +39,7 @@ export async function findAvailableCleaners(
   const nextLocalDate = utcToZonedDateTime(oneDayLaterUtc, input.timezone).date;
   const rangeEndUtc = zonedDateTimeToUtc(nextLocalDate, "00:00", input.timezone);
 
-  const activeAssignments = await repo.listActiveAssignmentsInRange(rangeStartUtc, rangeEndUtc);
+  const activeAssignments = await repo.listActiveAssignmentsInRange(rangeStartUtc, rangeEndUtc, input.excludeServiceVisitId);
 
   const existingAssignments = activeAssignments.map((a) => ({
     cleanerId: a.cleanerId,

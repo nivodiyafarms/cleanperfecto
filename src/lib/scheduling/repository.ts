@@ -66,7 +66,8 @@ export interface SchedulingRepository {
   listAvailabilityExceptionsForDate(date: CalendarDate): Promise<CleanerAvailabilityExceptionRow[]>;
   listDayOverridesForDate(date: CalendarDate): Promise<SchedulingDayOverrideRow[]>;
   /** Active (unassigned_at IS NULL) assignments whose confirmed_start_at falls within [rangeStartUtc, rangeEndUtc). */
-  listActiveAssignmentsInRange(rangeStartUtc: Date, rangeEndUtc: Date): Promise<ActiveAssignmentIntervalRow[]>;
+  /** excludeServiceVisitId omits one visit's own assignment(s) from the result — needed when checking cleaner availability for a NEW candidate time on a visit that is ALREADY scheduled (reschedule), so the visit's own current booking is never mistaken for a third-party conflict against itself. Omit when checking availability for a visit that isn't scheduled yet (nothing of its own to exclude). */
+  listActiveAssignmentsInRange(rangeStartUtc: Date, rangeEndUtc: Date, excludeServiceVisitId?: string): Promise<ActiveAssignmentIntervalRow[]>;
 
   // -- service_visits -------------------------------------------------------
   findServiceVisitById(id: string): Promise<ServiceVisitRow | null>;

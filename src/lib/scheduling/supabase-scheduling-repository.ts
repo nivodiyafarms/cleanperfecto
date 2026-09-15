@@ -427,18 +427,22 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       }));
     },
 
-    async listActiveAssignmentsInRange(rangeStartUtc, rangeEndUtc): Promise<ActiveAssignmentIntervalRow[]> {
+    async listActiveAssignmentsInRange(rangeStartUtc, rangeEndUtc, excludeServiceVisitId): Promise<ActiveAssignmentIntervalRow[]> {
       // Queried from service_visits (not service_visit_assignments) so the
       // confirmed_start_at range filter applies to a plain base-table
       // column rather than an embedded/joined one; unassigned_at IS NULL is
       // then applied client-side over the nested assignment rows, avoiding
       // any ambiguity in filtering an embedded resource's own columns.
-      const { data, error } = await supabase
+      let query = supabase
         .from("service_visits")
         .select("confirmed_start_at,confirmed_end_at,turnaround_buffer_minutes,service_visit_assignments(cleaner_id,unassigned_at)")
         .eq("status", "scheduled")
         .gte("confirmed_start_at", rangeStartUtc.toISOString())
         .lt("confirmed_start_at", rangeEndUtc.toISOString());
+      if (excludeServiceVisitId) {
+        query = query.neq("id", excludeServiceVisitId);
+      }
+      const { data, error } = await query;
       if (error) throw new Error(`[scheduling] active assignments lookup failed: ${error.message}`);
 
       const results: ActiveAssignmentIntervalRow[] = [];
