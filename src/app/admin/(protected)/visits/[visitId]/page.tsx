@@ -10,7 +10,7 @@ import { cancelVisitAction, completeVisitAction, reassignCleanersAction, resched
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
-import { recordExternalPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
+import { recordExternalPaymentAction, refundPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
@@ -323,6 +323,17 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               <input type="hidden" name="serviceVisitPaymentId" value={visitPayment.id} />
               <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
                 Retry Tax Sync
+              </button>
+            </ActionForm>
+          )}
+
+          {(visitPayment.status === "paid" || visitPayment.status === "partially_refunded") && (
+            <ActionForm action={refundPaymentAction} className="mt-3 flex flex-wrap items-end gap-2">
+              <input type="hidden" name="serviceVisitId" value={visitId} />
+              <input name="refundAmount" type="number" step="0.01" min="0.01" placeholder="Refund amount" required className="w-32 rounded-lg border border-border px-3 py-1.5 text-sm" />
+              <input name="reason" type="text" placeholder="Reason for refund" required className="rounded-lg border border-border px-3 py-1.5 text-sm" />
+              <button type="submit" className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                Issue Refund
               </button>
             </ActionForm>
           )}

@@ -162,6 +162,23 @@ describe("refundVisitPayment", () => {
     expect(gatewayState.createRefundCallCount).toBe(0); // rejected before ever calling Stripe
   });
 
+  it("BUG regression: refunding exactly the remaining balance never fails from floating-point drift (e.g. 183.64 - 80 !== 103.64 in raw JS arithmetic)", async () => {
+    const { schedulingRepo, schedulingState, gateway, visitId, payment } = await seedPaidVisit();
+    // Force the exact dollar amounts that reproduce the float-precision bug found during E2E — a prior $80 partial refund against a $183.64 total leaves a raw-JS remaining balance of 103.63999999999999, which must not reject a $103.64 refund request.
+    schedulingState.paymentsByVisitId.set(visitId, { ...payment, totalAmount: 183.64, refundedAmount: 80, status: "partially_refunded" });
+
+    const updated = await refundVisitPayment(schedulingRepo, gateway, {
+      serviceVisitId: visitId,
+      refundAmount: 103.64,
+      reason: "full refund of remaining balance",
+      actorAdminUserId: "owner-1",
+      actorRole: "owner_admin",
+    });
+
+    expect(updated.status).toBe("refunded");
+    expect(updated.refundedAmount).toBe(183.64);
+  });
+
   it("rejects refunding a row that is not paid/partially_refunded (terminal-state protection preserved from Phase A)", async () => {
     const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
     const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);

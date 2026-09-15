@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { roundToCents } from "@/lib/pricing/money";
 import type {
   ActiveAssignmentIntervalRow,
   CleanerAvailabilityExceptionRow,
@@ -1027,8 +1028,11 @@ export function createFakeSchedulingRepository(
         throw new Error(`[fake-scheduling] refund amount must be positive, got ${patch.refundAmount}`);
       }
 
+      // Rounded to the cent to mirror Postgres numeric(10,2) exact
+      // arithmetic — the real RPC this fake stands in for never suffers
+      // raw-JS floating-point drift (e.g. 80 + 103.64 or 183.64 - 80).
       const existingRefundedAmount = existing.refundedAmount ?? 0;
-      const newRefundedAmount = existingRefundedAmount + patch.refundAmount;
+      const newRefundedAmount = roundToCents(existingRefundedAmount + patch.refundAmount);
       const totalAmount = existing.totalAmount ?? 0;
       if (newRefundedAmount > totalAmount) {
         throw new Error(

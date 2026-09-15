@@ -3,6 +3,7 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { ServiceVisitPaymentRow } from "@/lib/scheduling/domain-types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { roundToCents } from "@/lib/pricing/money";
 import { attemptTaxReversal } from "./attempt-tax-reversal";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
@@ -70,10 +71,14 @@ export async function refundVisitPayment(
     throw new InvalidVisitStateError(`service_visit_payments ${payment.id} has no Stripe PaymentIntent — external (zelle/cash) settlements require a separate correction flow, not this refund path.`);
   }
 
-  const remaining = (payment.totalAmount ?? 0) - (payment.refundedAmount ?? 0);
-  if (input.refundAmount > remaining) {
+  // Rounded to the cent before comparing — plain floating-point
+  // subtraction/addition (e.g. 183.64 - 80 -> 103.63999999999999) can make
+  // a refund of the exact remaining balance spuriously fail this check.
+  const remaining = roundToCents((payment.totalAmount ?? 0) - (payment.refundedAmount ?? 0));
+  const requestedAmount = roundToCents(input.refundAmount);
+  if (requestedAmount > remaining) {
     throw new InvalidVisitStateError(
-      `Refund amount ${input.refundAmount} exceeds the remaining refundable balance of ${remaining} for service_visit_payments ${payment.id}.`
+      `Refund amount ${requestedAmount} exceeds the remaining refundable balance of ${remaining} for service_visit_payments ${payment.id}.`
     );
   }
 
