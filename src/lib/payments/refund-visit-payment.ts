@@ -95,7 +95,17 @@ export async function refundVisitPayment(
   );
 
   if (updated.stripeTaxTransactionId && updated.taxTransactionStatus === "committed") {
-    const isFullRefund = updated.status === "refunded";
+    // Stripe Tax rejects a "full" reversal of a sale transaction that
+    // already has a prior successful reversal against it ("Sale
+    // transactions cannot be fully reversed unless all associated partial
+    // reversals are fully reversed") — so "full" mode is only correct for
+    // the FIRST reversal ever issued against this original transaction.
+    // Any later reversal (even one that happens to bring the payment to
+    // fully-refunded) must be issued as an additional "partial" for
+    // exactly the amount refunded this time, never "full".
+    const priorReversals = await repo.listTaxReversalReconciliationsForTarget("service_visit_payment", updated.id);
+    const hasPriorSucceededReversal = priorReversals.some((r) => r.status === "succeeded");
+    const isFullRefund = updated.status === "refunded" && !hasPriorSucceededReversal;
     const reconciliation = await repo.createTaxReversalReconciliation({
       targetEntityType: "service_visit_payment",
       targetEntityId: updated.id,

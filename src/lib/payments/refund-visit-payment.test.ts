@@ -327,4 +327,36 @@ describe("refundVisitPayment — Phase F: Stripe Tax reversal", () => {
     expect(reconciliations[0].failureMessage).toContain("simulated Stripe Tax outage");
     expect(reconciliations[0].retryCount).toBe(1);
   });
+
+  it("BUG regression: a partial refund followed by a refund of the remaining balance issues a SECOND partial-mode reversal, never 'full' — Stripe Tax rejects a full reversal once a partial reversal already exists against the same sale transaction", async () => {
+    const { schedulingRepo, gateway, gatewayState, visitId, payment } = await seedPaidVisit({ withCommittedTax: true });
+    const total = payment.totalAmount!;
+    const firstChunk = Math.round((total / 3) * 100) / 100;
+    const remaining = Math.round((total - firstChunk) * 100) / 100;
+
+    await refundVisitPayment(schedulingRepo, gateway, {
+      serviceVisitId: visitId,
+      refundAmount: firstChunk,
+      reason: "first partial refund",
+      actorAdminUserId: "owner-1",
+      actorRole: "owner_admin",
+    });
+
+    const updated = await refundVisitPayment(schedulingRepo, gateway, {
+      serviceVisitId: visitId,
+      refundAmount: remaining,
+      reason: "refund of the remaining balance",
+      actorAdminUserId: "owner-1",
+      actorRole: "owner_admin",
+    });
+
+    expect(updated.status).toBe("refunded"); // the payment itself IS now fully refunded
+    expect(gatewayState.createTaxReversalCallCount).toBe(2);
+
+    const reconciliations = await schedulingRepo.listTaxReversalReconciliationsForTarget("service_visit_payment", updated.id);
+    expect(reconciliations).toHaveLength(2);
+    expect(reconciliations[0].mode).toBe("partial"); // first-ever reversal against this transaction
+    expect(reconciliations[1].mode).toBe("partial"); // NOT "full" — a prior succeeded reversal already exists
+    expect(reconciliations[1].status).toBe("succeeded");
+  });
 });
