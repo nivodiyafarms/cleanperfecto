@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AdminUnauthorizedError } from "@/lib/admin/require-admin";
+import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-booking-repository";
 import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
 
 let fake: ReturnType<typeof createFakeSchedulingRepository>;
+const fakeBooking = createFakeBookingRepository();
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -13,6 +15,10 @@ vi.mock("@/lib/admin/require-admin", async (importOriginal) => {
 
 vi.mock("@/lib/scheduling/supabase-scheduling-repository", () => ({
   createSupabaseSchedulingRepository: () => fake.repo,
+}));
+
+vi.mock("@/lib/booking/supabase-booking-repository", () => ({
+  createSupabaseBookingRepository: () => fakeBooking.repo,
 }));
 
 const { requireAdmin } = await import("@/lib/admin/require-admin");
@@ -208,6 +214,64 @@ describe("confirmVisitPricingAction", () => {
     expect(pricing?.priceStatus).toBe("confirmed");
     expect(pricing?.confirmedBy).toBe("admin:admin-1");
     expect(pricing?.totalAmount).toBe(180); // 150 base + 30 inside_oven
+  });
+
+  it("confirms the final price for a directly-booked one-time visit, sourced from its booking_order", async () => {
+    mockAuthorized();
+    const bookingOrder = await fakeBooking.repo.insertBookingOrder({
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      clientRequestId: "client-req-one-time-1",
+      bookingType: "normal",
+      cleaningType: "standard",
+      frequency: "one_time",
+      visitCount: 1,
+      paymentAuthorizationAcceptedAt: new Date().toISOString(),
+      pricingVersion: "test-version",
+      pricingSnapshot: { input: {} as never, result: {} as never },
+      calculatedTotal: 165,
+      displayRangeLower: null,
+      displayRangeUpper: null,
+      prepaidPackageTotal: null,
+      effectivePricePerVisit: null,
+      hasStartingAtPricing: false,
+      manualReviewReasons: [],
+      selectedAddOnIds: [],
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+      requestedDate: null,
+      requestedTimeWindow: null,
+      requestedStartTime: null,
+      cancellationPolicyVersion: null,
+    });
+    const visit = await fake.repo.insertServiceVisit({
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      bookingOrderId: bookingOrder.id,
+      prepaidPackageId: null,
+      recurringScheduleId: null,
+      visitNumber: null,
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedStartAt: null,
+      timezone: "America/Chicago",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+
+    const result = await confirmVisitPricingAction(null, formData({ serviceVisitId: visit.id, addOnIds: ["inside_oven"] }));
+    expect(result.ok).toBe(true);
+
+    const pricing = fake.state.servicePricingByVisitId.get(visit.id);
+    expect(pricing?.priceStatus).toBe("confirmed");
+    expect(pricing?.confirmedBy).toBe("admin:admin-1");
+    expect(pricing?.totalAmount).toBe(195); // 165 booking_order.calculatedTotal + 30 inside_oven
   });
 
   it("requires a visit id", async () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
 import type { CalculationInput } from "@/lib/pricing/types";
+import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-booking-repository";
 import { InvalidVisitStateError } from "./errors";
 import { estimateVisitPricing } from "./estimate-visit-pricing";
 import { proposeRecurringScopeChange } from "./propose-recurring-scope-change";
@@ -252,5 +254,140 @@ describe("estimateVisitPricing", () => {
       (n) => n.serviceVisitId === visit.id && n.notificationType === "pricing_approval_required"
     );
     expect(notices.length).toBe(0);
+  });
+});
+
+describe("estimateVisitPricing — directly-booked one-time visit", () => {
+  async function seedDirectVisit(bookingRepo: ReturnType<typeof createFakeBookingRepository>["repo"], overrides: Partial<CalculationInput> = {}) {
+    const calculationInput: CalculationInput = { ...BASE_INPUT, frequency: "one_time", ...overrides };
+    const result = calculateEstimate(calculationInput);
+    const bookingOrder = await bookingRepo.insertBookingOrder({
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      clientRequestId: "client-req-1",
+      bookingType: "normal",
+      cleaningType: "standard",
+      frequency: "one_time",
+      visitCount: 1,
+      paymentAuthorizationAcceptedAt: new Date("2026-08-24T00:00:00Z").toISOString(),
+      pricingVersion: result.pricingVersion,
+      pricingSnapshot: { input: calculationInput, result },
+      calculatedTotal: result.calculatedTotal,
+      displayRangeLower: result.range?.lower ?? null,
+      displayRangeUpper: result.range?.upper ?? null,
+      prepaidPackageTotal: null,
+      effectivePricePerVisit: null,
+      hasStartingAtPricing: result.hasStartingAtPricing,
+      manualReviewReasons: result.manualReviewReasons,
+      selectedAddOnIds: [],
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+      requestedDate: null,
+      requestedTimeWindow: null,
+      requestedStartTime: null,
+      cancellationPolicyVersion: null,
+    });
+
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await repo.insertServiceVisit({
+      customerId: "customer-1",
+      quoteRequestId: "quote-1",
+      bookingOrderId: bookingOrder.id,
+      prepaidPackageId: null,
+      recurringScheduleId: null,
+      visitNumber: null,
+      cleaningType: "standard",
+      frequency: "one_time",
+      requestedStartAt: null,
+      timezone: "America/Chicago",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+
+    return { repo, bookingOrder, visit, calculatedTotal: result.calculatedTotal };
+  }
+
+  it("derives baseAmount from the booking order's own calculatedTotal — never recomputed", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit, calculatedTotal } = await seedDirectVisit(bookingRepo);
+
+    const pricing = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] }, bookingRepo);
+
+    expect(pricing.baseAmount).toBe(calculatedTotal);
+    expect(pricing.totalAmount).toBe(calculatedTotal);
+    expect(pricing.amountDueFromCustomer).toBe(calculatedTotal);
+  });
+
+  it("adds per-visit priced add-ons on top of the booking order's base amount", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit, calculatedTotal } = await seedDirectVisit(bookingRepo);
+
+    const pricing = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] }, bookingRepo);
+
+    expect(pricing.addOnAmount).toBe(30);
+    expect(pricing.totalAmount).toBe(calculatedTotal + 30);
+  });
+
+  it("refuses to estimate a directly-booked visit without a BookingRepository", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit } = await seedDirectVisit(bookingRepo);
+
+    await expect(estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] })).rejects.toThrow(InvalidVisitStateError);
+  });
+
+  it("refuses to estimate a visit with neither a recurring_schedule_id nor a booking_order_id", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await repo.insertServiceVisit({
+      customerId: "customer-1",
+      quoteRequestId: null,
+      bookingOrderId: null,
+      prepaidPackageId: null,
+      recurringScheduleId: null,
+      visitNumber: null,
+      cleaningType: "standard",
+      frequency: null,
+      requestedStartAt: null,
+      timezone: "America/Chicago",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    });
+
+    await expect(estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] }, createFakeBookingRepository().repo)).rejects.toThrow(
+      InvalidVisitStateError
+    );
+  });
+
+  it("requires customer approval only once a later re-estimate exceeds the confirmed amount, exactly like the recurring path", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit } = await seedDirectVisit(bookingRepo);
+
+    const first = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] }, bookingRepo);
+    expect(first.requiresCustomerApproval).toBe(false);
+
+    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
+
+    const second = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] }, bookingRepo);
+    expect(second.requiresCustomerApproval).toBe(true);
+    expect(second.priceStatus).toBe("pending_customer_approval");
+  });
+
+  it("preserves the booking order's pricing snapshot and id in the visit pricing snapshot for traceability", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit, bookingOrder } = await seedDirectVisit(bookingRepo);
+
+    const pricing = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] }, bookingRepo);
+
+    const snapshot = pricing.pricingSnapshot as Record<string, unknown>;
+    expect(snapshot.baseSource).toBe("booking_order");
+    expect(snapshot.bookingOrderId).toBe(bookingOrder.id);
   });
 });

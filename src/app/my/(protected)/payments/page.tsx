@@ -18,7 +18,12 @@ export default async function MyPaymentsPage() {
   for (const visit of visits) {
     if (visit.status !== "completed") continue;
     const pricing = await repo.findServiceVisitPricingByVisitId(visit.id);
-    if (pricing && pricing.priceStatus === "confirmed") {
+    // "confirmed" -> the normal final-total/tip/pay screen. A completed
+    // visit whose pricing needs re-approval is ALSO routed through the same
+    // VisitPaymentFlow card (not the generic list below) so the increase
+    // approval and the eventual payment live on one screen for the
+    // customer, per the approved single-screen payment UX.
+    if (pricing && (pricing.priceStatus === "confirmed" || pricing.requiresCustomerApproval)) {
       visitsNeedingPayment.push(visit.id);
     }
   }
@@ -47,7 +52,7 @@ export default async function MyPaymentsPage() {
                 <div>
                   {formatMoney(p.amountDueFromCustomer)} — {p.priceStatus} / {p.paymentStatus}
                 </div>
-                {p.priceStatus === "pending_customer_approval" && (
+                {p.priceStatus === "pending_customer_approval" && !visitsNeedingPayment.includes(p.serviceVisitId) && (
                   <ActionForm action={approveVisitPricingIncreaseAction} className="mt-1">
                     <input type="hidden" name="serviceVisitId" value={p.serviceVisitId} />
                     <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">

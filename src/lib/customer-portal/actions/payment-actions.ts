@@ -125,6 +125,41 @@ export async function getVisitPaymentStatusAction(serviceVisitId: string): Promi
   };
 }
 
+export interface VisitPricingApprovalState {
+  /** null means no service_visit_pricing row exists yet for this visit — nothing to review or approve. */
+  priceStatus: "estimated" | "pending_customer_approval" | "confirmed" | null;
+  requiresCustomerApproval: boolean;
+  previouslyApprovedAmount: number | null;
+  totalAmount: number | null;
+}
+
+/**
+ * Read-only pre-check the customer-facing payment screen calls BEFORE
+ * attempting a full payment review, so a pending price-increase approval
+ * renders as its own clear card (with an inline Approve action) on the SAME
+ * screen instead of surfacing prepareVisitPaymentReview's generic
+ * InvalidVisitStateError ("pricing is not confirmed").
+ */
+export async function getVisitPricingStateAction(serviceVisitId: string): Promise<PaymentActionResult<VisitPricingApprovalState>> {
+  const session = await requireCustomer();
+  const repo = createSupabaseSchedulingRepository();
+  await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
+
+  const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  if (!pricing) {
+    return { ok: true, data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null } };
+  }
+  return {
+    ok: true,
+    data: {
+      priceStatus: pricing.priceStatus,
+      requiresCustomerApproval: pricing.requiresCustomerApproval,
+      previouslyApprovedAmount: pricing.previouslyApprovedAmount,
+      totalAmount: pricing.totalAmount,
+    },
+  };
+}
+
 function extractZip(serviceAddressIdentity: string | null): string {
   const zip = serviceAddressIdentity?.split("|")[0];
   return zip && /^\d{5}$/.test(zip) ? zip : "";

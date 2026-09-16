@@ -177,7 +177,7 @@ export async function getPaymentsSummary(customerId: string): Promise<PaymentsSu
 
   const visitPricing: PaymentsSummary["visitPricing"] = [];
   for (const visit of visits) {
-    if (!visit.recurringScheduleId) continue;
+    if (!visit.recurringScheduleId && !visit.bookingOrderId) continue;
     const pricing = await repo.findServiceVisitPricingByVisitId(visit.id);
     if (pricing) {
       visitPricing.push({

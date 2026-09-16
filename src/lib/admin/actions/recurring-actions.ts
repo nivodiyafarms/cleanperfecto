@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import type { AddOnId } from "@/lib/pricing/types";
+import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { confirmVisitPricing } from "@/lib/scheduling/confirm-visit-pricing";
 import { InvalidVisitStateError, SchedulingConflictError } from "@/lib/scheduling/errors";
 import { estimateVisitPricing } from "@/lib/scheduling/estimate-visit-pricing";
@@ -104,7 +105,7 @@ export async function confirmVisitPricingAction(_prevState: ActionResult | null,
   }
 
   try {
-    await estimateVisitPricing(repo, { serviceVisitId, addOnIds });
+    await estimateVisitPricing(repo, { serviceVisitId, addOnIds }, createSupabaseBookingRepository());
     const confirmed = await confirmVisitPricing(repo, { serviceVisitId, confirmedBy: `admin:${admin.adminUserId}` });
     revalidatePath("/admin");
     return actionOk(`Confirmed at $${confirmed.totalAmount.toFixed(2)}.`);

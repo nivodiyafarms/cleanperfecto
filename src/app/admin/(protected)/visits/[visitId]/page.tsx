@@ -74,9 +74,13 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const recurringPlans = visit.recurringScheduleId ? await schedulingRepo.listRecurringVisitPlans(visit.recurringScheduleId) : [];
   const plannedRecurringPlans = recurringPlans.filter((p) => p.status === "planned");
 
-  const isPayPerCleaningRecurringVisit =
-    !visit.prepaidPackageId && Boolean(visit.recurringScheduleId) && (visit.status === "requested" || visit.status === "scheduled");
-  const visitPricing = isPayPerCleaningRecurringVisit ? await schedulingRepo.findServiceVisitPricingByVisitId(visitId) : null;
+  // Covers BOTH the recurring case (second-and-later visits under a
+  // recurring_schedule) and the directly-booked one-time visit — both are
+  // "Pay Per Cleaning" (as opposed to prepaid-package) and both are priced
+  // via service_visit_pricing/estimateVisitPricing (see that file's own
+  // doc comment for how the base amount differs by source).
+  const isPayPerCleaningVisit = !visit.prepaidPackageId && (visit.status === "requested" || visit.status === "scheduled");
+  const visitPricing = isPayPerCleaningVisit ? await schedulingRepo.findServiceVisitPricingByVisitId(visitId) : null;
 
   const consentRepo = createSupabaseConsentRepository();
   const activeConsentVersion = await consentRepo.findActiveVersion();
@@ -269,7 +273,7 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
         </div>
       )}
 
-      {isPayPerCleaningRecurringVisit && (
+      {isPayPerCleaningVisit && (
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
           <h2 className="text-sm font-semibold text-foreground">Confirm final price (Pay Per Cleaning)</h2>
           {visitPricing && (
