@@ -54,6 +54,17 @@ export async function estimateVisitPricing(
   if (!visit) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
+  if (visit.status === "completed") {
+    // service_visit_pricing's pricing/status columns are frozen by a BEFORE
+    // UPDATE trigger once the visit is completed (historical pricing must
+    // never be rewritten — see 20260824100400's migration comment). Refusing
+    // here, at the point a NEW pending-approval state would otherwise be
+    // created, is what actually prevents that trigger from ever being hit —
+    // it also gives a clear, actionable message instead of a raw DB error.
+    throw new InvalidVisitStateError(
+      `service_visit ${input.serviceVisitId} has already completed — its pricing is frozen and can no longer be re-estimated`
+    );
+  }
 
   const isPackageVisit = visit.prepaidPackageId !== null;
 

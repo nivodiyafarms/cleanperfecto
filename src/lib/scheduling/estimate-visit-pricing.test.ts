@@ -291,7 +291,7 @@ describe("estimateVisitPricing — directly-booked one-time visit", () => {
       cancellationPolicyVersion: null,
     });
 
-    const { repo } = createFakeSchedulingRepository();
+    const { repo, state } = createFakeSchedulingRepository();
     const visit = await repo.insertServiceVisit({
       customerId: "customer-1",
       quoteRequestId: "quote-1",
@@ -310,7 +310,7 @@ describe("estimateVisitPricing — directly-booked one-time visit", () => {
       serviceAddressIdentity: null,
     });
 
-    return { repo, bookingOrder, visit, calculatedTotal: result.calculatedTotal };
+    return { repo, state, bookingOrder, visit, calculatedTotal: result.calculatedTotal };
   }
 
   it("derives baseAmount from the booking order's own calculatedTotal — never recomputed", async () => {
@@ -378,6 +378,19 @@ describe("estimateVisitPricing — directly-booked one-time visit", () => {
     const second = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] }, bookingRepo);
     expect(second.requiresCustomerApproval).toBe(true);
     expect(second.priceStatus).toBe("pending_customer_approval");
+  });
+
+  it("refuses to re-estimate a visit that has already completed — pricing is frozen after completion", async () => {
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { repo, visit, state } = await seedDirectVisit(bookingRepo);
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] }, bookingRepo);
+
+    const current = state.serviceVisitsById.get(visit.id);
+    state.serviceVisitsById.set(visit.id, { ...current!, status: "completed" });
+
+    await expect(estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] }, bookingRepo)).rejects.toThrow(
+      InvalidVisitStateError
+    );
   });
 
   it("preserves the booking order's pricing snapshot and id in the visit pricing snapshot for traceability", async () => {

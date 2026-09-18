@@ -16,14 +16,17 @@ export default async function MyPaymentsPage() {
   const visits = await repo.listServiceVisitsForCustomer(session.customerId);
   const visitsNeedingPayment: string[] = [];
   for (const visit of visits) {
-    if (visit.status !== "completed") continue;
     const pricing = await repo.findServiceVisitPricingByVisitId(visit.id);
-    // "confirmed" -> the normal final-total/tip/pay screen. A completed
-    // visit whose pricing needs re-approval is ALSO routed through the same
-    // VisitPaymentFlow card (not the generic list below) so the increase
-    // approval and the eventual payment live on one screen for the
-    // customer, per the approved single-screen payment UX.
-    if (pricing && (pricing.priceStatus === "confirmed" || pricing.requiresCustomerApproval)) {
+    if (!pricing) continue;
+    // "confirmed" on a completed visit -> the normal final-total/tip/pay
+    // screen. A pending price-increase approval is ALSO routed through the
+    // same VisitPaymentFlow card (not the generic list below) — whether or
+    // not the visit has completed yet — so approving it is always the
+    // customer's own one-click action, never a wait for a separate
+    // admin-mediated round trip. Payment itself still only becomes
+    // available once the visit is actually completed (see
+    // confirm-final-total-and-pay.ts).
+    if ((pricing.priceStatus === "confirmed" && visit.status === "completed") || pricing.requiresCustomerApproval) {
       visitsNeedingPayment.push(visit.id);
     }
   }

@@ -8,6 +8,7 @@ import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-ga
 import { prepareVisitPaymentReview, type VisitPaymentReview } from "@/lib/payments/prepare-visit-payment-review";
 import { selectVisitTip, type SelectVisitTipResult } from "@/lib/payments/select-visit-tip";
 import { createVisitPaymentIntent, type CreateVisitPaymentIntentOutcome } from "@/lib/payments/create-visit-payment-intent";
+import { confirmFinalTotalAndPay, type ConfirmFinalTotalAndPayOutcome } from "@/lib/payments/confirm-final-total-and-pay";
 import { createPaymentMethodSetupCheckoutSession } from "@/lib/payments/create-payment-method-setup";
 import { getStripeClient } from "@/lib/booking/stripe/client";
 import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
@@ -131,23 +132,26 @@ export interface VisitPricingApprovalState {
   requiresCustomerApproval: boolean;
   previouslyApprovedAmount: number | null;
   totalAmount: number | null;
+  /** Whether the visit itself has completed — a pending increase can only be resolved into a charge once true; before that, approving it has nothing to pay yet. */
+  visitCompleted: boolean;
 }
 
 /**
  * Read-only pre-check the customer-facing payment screen calls BEFORE
  * attempting a full payment review, so a pending price-increase approval
- * renders as its own clear card (with an inline Approve action) on the SAME
- * screen instead of surfacing prepareVisitPaymentReview's generic
+ * renders as its own clear card (old vs. new amount) on the SAME screen
+ * instead of surfacing prepareVisitPaymentReview's generic
  * InvalidVisitStateError ("pricing is not confirmed").
  */
 export async function getVisitPricingStateAction(serviceVisitId: string): Promise<PaymentActionResult<VisitPricingApprovalState>> {
   const session = await requireCustomer();
   const repo = createSupabaseSchedulingRepository();
-  await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
+  const visit = await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
 
   const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  const visitCompleted = visit.status === "completed";
   if (!pricing) {
-    return { ok: true, data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null } };
+    return { ok: true, data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null, visitCompleted } };
   }
   return {
     ok: true,
@@ -156,8 +160,39 @@ export async function getVisitPricingStateAction(serviceVisitId: string): Promis
       requiresCustomerApproval: pricing.requiresCustomerApproval,
       previouslyApprovedAmount: pricing.previouslyApprovedAmount,
       totalAmount: pricing.totalAmount,
+      visitCompleted,
     },
   };
+}
+
+/**
+ * The customer's ONE "Confirm Final Total & Pay" click — see
+ * confirm-final-total-and-pay.ts for the full behavior. Handles both a
+ * normal/lower confirmed total and a pending price increase (capturing
+ * approval evidence itself, no separate admin-mediated round trip) in the
+ * same call.
+ */
+export async function confirmFinalTotalAndPayAction(
+  serviceVisitId: string,
+  tipSelectionType?: TipSelectionType,
+  customAmount?: number
+): Promise<PaymentActionResult<ConfirmFinalTotalAndPayOutcome>> {
+  const session = await requireCustomer();
+  const repo = createSupabaseSchedulingRepository();
+  await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
+
+  try {
+    const outcome = await confirmFinalTotalAndPay(repo, createSupabaseBookingRepository(), createStripeVisitPaymentGateway(), {
+      serviceVisitId,
+      customerId: session.customerId,
+      tipSelectionType,
+      customAmount,
+    });
+    revalidatePath("/my/payments");
+    return { ok: true, data: outcome };
+  } catch (error) {
+    return toErrorResult(error);
+  }
 }
 
 function extractZip(serviceAddressIdentity: string | null): string {

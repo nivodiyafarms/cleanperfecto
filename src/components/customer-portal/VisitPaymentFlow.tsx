@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import {
+  confirmFinalTotalAndPayAction,
   confirmVisitPaymentAction,
   createPaymentMethodSetupUrlAction,
   getVisitPaymentReviewAction,
@@ -12,7 +13,7 @@ import {
   type CustomerVisitPaymentStatus,
   type VisitPricingApprovalState,
 } from "@/lib/customer-portal/actions/payment-actions";
-import { approveVisitPricingIncreaseAction } from "@/lib/customer-portal/actions/scope-actions";
+import type { CreateVisitPaymentIntentOutcome } from "@/lib/payments/create-visit-payment-intent";
 import type { TipSelectionType } from "@/lib/scheduling/types";
 
 function formatMoney(amount: number): string {
@@ -28,13 +29,9 @@ function getStripe(): Promise<Stripe | null> {
   return stripePromise;
 }
 
-type Step = "loading" | "increase_needed" | "increase_submitted" | "final_total" | "confirm" | "result" | "error";
+type Step = "loading" | "increase_pending" | "increase_awaiting_completion" | "increase_blocked" | "final_total" | "confirm" | "result" | "error";
 
-/** "no_tip" is a client-only convenience — it's submitted as a custom $0 tip (an explicit, equally-valid choice), not a new server concept. */
-type TipChoice = TipSelectionType | "no_tip";
-
-const TIP_OPTIONS: { type: TipChoice; label: string }[] = [
-  { type: "no_tip", label: "No tip" },
+const TIP_OPTIONS: { type: TipSelectionType; label: string }[] = [
   { type: "percentage_15", label: "15%" },
   { type: "percentage_20", label: "20%" },
   { type: "percentage_25", label: "25%" },
@@ -50,78 +47,93 @@ interface VisitPaymentFlowProps {
 /**
  * The customer's entire "review your final total, pick a tip, and pay"
  * interaction lives on this ONE screen with ONE confirmation click
- * ("Confirm Final Total & Pay") — no separate Review/Tip/Confirm pages.
- * Picking a tip amount is an input, not a confirmation, so it updates the
- * total in place without leaving this screen. A pending price-increase
- * approval (a genuinely separate, admin-mediated event — see
- * estimate-visit-pricing.ts) is also surfaced on this same screen/card
- * rather than a separate approval page, even though — by design — the
- * customer must come back after admin re-confirms before paying.
+ * ("Confirm Final Total & Pay") — no separate Review/Tip/Confirm pages, and
+ * no separate "approve this price increase" page either. Picking a tip
+ * amount is an input, not a confirmation, so it updates the total in place
+ * without leaving this screen.
+ *
+ * A pending price increase is resolved by the customer's OWN click — see
+ * confirmFinalTotalAndPay — with no separate admin-mediated round trip. It
+ * can only be resolved (and paid) once the visit has completed; before
+ * that there is nothing chargeable yet, so this screen shows only the
+ * old/new amounts and a single "Approve" action (no tip/tax section, since
+ * there's no total to compute).
  */
 export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailable }: VisitPaymentFlowProps) {
   const [step, setStep] = useState<Step>("loading");
   const [error, setError] = useState<string | null>(null);
   const [pricingState, setPricingState] = useState<VisitPricingApprovalState | null>(null);
   const [review, setReview] = useState<{ approvedAmount: number; tipBasisAmount: number; previewTaxAmount: number; previewAmountDueBeforeTip: number } | null>(null);
-  const [selectedTip, setSelectedTip] = useState<TipChoice | null>(null);
+  const [selectedTip, setSelectedTip] = useState<TipSelectionType | null>(null);
   const [customAmount, setCustomAmount] = useState("");
   const [totals, setTotals] = useState<{ tipAmount: number; taxAmount: number; totalAmount: number } | null>(null);
   const [result, setResult] = useState<CustomerVisitPaymentStatus | null>(null);
   const [processing, setProcessing] = useState(false);
   const [needsPaymentMethod, setNeedsPaymentMethod] = useState(false);
 
+  async function load() {
+    const statusResult = await getVisitPaymentStatusAction(serviceVisitId);
+    if (!statusResult.ok) {
+      setError(statusResult.error);
+      setStep("error");
+      return;
+    }
+    const status = statusResult.data;
+    if (status && status.status !== "created") {
+      setResult(status);
+      setStep(status.needsClientConfirmation ? "confirm" : "result");
+      return;
+    }
+
+    const pricingResult = await getVisitPricingStateAction(serviceVisitId);
+    if (!pricingResult.ok) {
+      setError(pricingResult.error);
+      setStep("error");
+      return;
+    }
+    setPricingState(pricingResult.data);
+    if (pricingResult.data.requiresCustomerApproval) {
+      // A pending increase can only be resolved into a payable total once
+      // the visit has completed — see confirm-final-total-and-pay.ts for
+      // why (the pricing/status columns freeze at that point).
+      setStep(pricingResult.data.visitCompleted ? "increase_blocked" : "increase_pending");
+      return;
+    }
+
+    const reviewResult = await getVisitPaymentReviewAction(serviceVisitId);
+    if (!reviewResult.ok) {
+      setError(reviewResult.error);
+      setStep("error");
+      return;
+    }
+    setReview(reviewResult.data);
+    setStep("final_total");
+  }
+
   useEffect(() => {
     void (async () => {
-      const statusResult = await getVisitPaymentStatusAction(serviceVisitId);
-      if (!statusResult.ok) {
-        setError(statusResult.error);
-        setStep("error");
-        return;
-      }
-      const status = statusResult.data;
-      if (status && status.status !== "created") {
-        setResult(status);
-        setStep(status.needsClientConfirmation ? "confirm" : "result");
-        return;
-      }
-
-      const pricingResult = await getVisitPricingStateAction(serviceVisitId);
-      if (!pricingResult.ok) {
-        setError(pricingResult.error);
-        setStep("error");
-        return;
-      }
-      if (pricingResult.data.requiresCustomerApproval) {
-        setPricingState(pricingResult.data);
-        setStep("increase_needed");
-        return;
-      }
-
-      const reviewResult = await getVisitPaymentReviewAction(serviceVisitId);
-      if (!reviewResult.ok) {
-        setError(reviewResult.error);
-        setStep("error");
-        return;
-      }
-      setReview(reviewResult.data);
-      setStep("final_total");
+      await load();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceVisitId]);
 
   async function handleApproveIncrease() {
     setProcessing(true);
     setError(null);
-    const outcome = await approveVisitPricingIncreaseAction(null, (() => {
-      const fd = new FormData();
-      fd.set("serviceVisitId", serviceVisitId);
-      return fd;
-    })());
+    const outcome = await confirmFinalTotalAndPayAction(serviceVisitId);
     setProcessing(false);
     if (!outcome.ok) {
       setError(outcome.error);
       return;
     }
-    setStep("increase_submitted");
+    if (outcome.data.outcome === "approved_awaiting_completion") {
+      setStep("increase_awaiting_completion");
+      return;
+    }
+    // The visit was already completed by the time this resolved (e.g. a
+    // concurrent admin update) — re-load to pick up the now-payable screen.
+    setStep("loading");
+    void load();
   }
 
   async function applyTip(type: TipSelectionType, amount?: number) {
@@ -137,12 +149,12 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     return true;
   }
 
-  async function handleSelectTip(type: TipChoice) {
+  async function handleSelectTip(type: TipSelectionType) {
     if (type === "custom") {
       setSelectedTip(type);
       return;
     }
-    const ok = type === "no_tip" ? await applyTip("custom", 0) : await applyTip(type);
+    const ok = await applyTip(type);
     if (ok) setSelectedTip(type);
   }
 
@@ -178,27 +190,30 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
       setError(outcome.error);
       return;
     }
+    await processPaymentOutcome(outcome.data);
+  }
 
-    if (outcome.data.outcome === "no_payment_due") {
+  async function processPaymentOutcome(data: CreateVisitPaymentIntentOutcome) {
+    if (data.outcome === "no_payment_due") {
       setProcessing(false);
       setResult({ status: "no_payment_due", approvedAmount: review?.approvedAmount ?? 0, tipAmount: totals?.tipAmount ?? 0, taxAmount: totals?.taxAmount ?? 0, totalAmount: 0, paidAt: null, refundedAmount: 0, needsClientConfirmation: false });
       setStep("result");
       return;
     }
-    if (outcome.data.outcome === "needs_payment_method") {
+    if (data.outcome === "needs_payment_method") {
       setProcessing(false);
       setNeedsPaymentMethod(true);
       return;
     }
-    if (outcome.data.outcome === "refreshed") {
+    if (data.outcome === "refreshed") {
       setProcessing(false);
-      setTotals({ tipAmount: outcome.data.tipAmount, taxAmount: outcome.data.taxAmount, totalAmount: outcome.data.totalAmount });
+      setTotals({ tipAmount: data.tipAmount, taxAmount: data.taxAmount, totalAmount: data.totalAmount });
       setError("Your total was refreshed — please review the updated amount and confirm again.");
       return;
     }
 
     // outcome === "ready"
-    if (!outcome.data.clientSecret) {
+    if (!data.clientSecret) {
       setProcessing(false);
       setError("Payment could not be started. Please try again.");
       return;
@@ -209,7 +224,7 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
       setError("Payment is not configured. Please try again later.");
       return;
     }
-    const confirmResult = await stripe.confirmCardPayment(outcome.data.clientSecret);
+    const confirmResult = await stripe.confirmCardPayment(data.clientSecret);
     setProcessing(false);
     if (confirmResult.error) {
       setError(confirmResult.error.message ?? "Payment could not be completed.");
@@ -266,28 +281,39 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     );
   }
 
-  if (step === "increase_needed" && pricingState) {
+  if (step === "increase_pending" && pricingState) {
     return (
       <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 space-y-3">
         <h3 className="text-sm font-semibold text-amber-900">Your price changed and needs your approval</h3>
         <dl className="space-y-1 text-sm text-amber-900">
           {pricingState.previouslyApprovedAmount !== null && <div>Previously approved: {formatMoney(pricingState.previouslyApprovedAmount)}</div>}
-          <div className="font-semibold">New total: {formatMoney(pricingState.totalAmount ?? 0)}</div>
+          <div className="font-semibold">Updated finalized amount: {formatMoney(pricingState.totalAmount ?? 0)}</div>
         </dl>
-        <p className="text-xs text-amber-800">This usually reflects an added service or extra. Approving lets CleanPerfecto finalize this visit&apos;s price so it can be paid.</p>
+        <p className="text-xs text-amber-800">This usually reflects an added service or extra. Payment (tax and tip) will be available once your cleaning is complete.</p>
         <button onClick={handleApproveIncrease} disabled={processing} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
-          {processing ? "Working…" : `Approve updated total of ${formatMoney(pricingState.totalAmount ?? 0)}`}
+          {processing ? "Working…" : `Approve final price of ${formatMoney(pricingState.totalAmount ?? 0)}`}
         </button>
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     );
   }
 
-  if (step === "increase_submitted") {
+  if (step === "increase_awaiting_completion") {
     return (
       <div className="rounded-2xl border border-border bg-surface p-5">
         <p className="text-sm font-medium text-foreground">Thanks — approved</p>
-        <p className="mt-1 text-sm text-muted">CleanPerfecto will finalize this visit&apos;s price shortly. Check back here to complete payment.</p>
+        <p className="mt-1 text-sm text-muted">Once your cleaning is marked complete, you can review your final total (including tax and tip) and pay right here.</p>
+      </div>
+    );
+  }
+
+  if (step === "increase_blocked" && pricingState) {
+    return (
+      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 space-y-2">
+        <h3 className="text-sm font-semibold text-amber-900">This visit&apos;s price needs to be finalized</h3>
+        <p className="text-sm text-amber-800">
+          Updated amount: {formatMoney(pricingState.totalAmount ?? 0)}. Please contact CleanPerfecto so we can finalize this before you pay.
+        </p>
       </div>
     );
   }
