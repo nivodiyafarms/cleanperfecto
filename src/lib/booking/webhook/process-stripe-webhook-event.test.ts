@@ -8,6 +8,7 @@ import { prepareVisitPaymentReview } from "@/lib/payments/prepare-visit-payment-
 import { selectVisitTip } from "@/lib/payments/select-visit-tip";
 import { createVisitPaymentIntent } from "@/lib/payments/create-visit-payment-intent";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { roundToCents } from "@/lib/pricing/money";
 import type { NewBookingOrderRow } from "../types";
 import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 import { processStripeWebhookEvent } from "./process-stripe-webhook-event";
@@ -219,6 +220,122 @@ describe("processStripeWebhookEvent — prepaid package (payment mode)", () => {
     );
 
     expect(state.prepaidPackagesByBookingOrderId.size).toBe(0);
+  });
+});
+
+describe("processStripeWebhookEvent — prepaid package tax accounting", () => {
+  it("persists the real Stripe-charged principal, tax, and total from the settled Checkout Session — never the pre-tax total alone", async () => {
+    const { repo, state } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(minimalBookingOrderInput("prepaid_package")); // prepaidPackageTotal: 600
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment");
+    await repo.insertPaymentAttempt({ bookingOrderId: bookingOrder.id, mode: "payment", stripeCheckoutSessionId: "cs_tax_1", stripeCustomerId: "cus_1", amount: 600, paymentMethodType: null, packageSubtotalBeforeAchIncentive: null, achSavingsAmount: null });
+
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
+    gatewayState.taxAssociationByPaymentIntentId.set("pi_tax_1", { committedTransactionId: "txn_package_purchase_1", erroredReason: null });
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      repo,
+      checkoutSessionEvent("checkout.session.completed", {
+        id: "cs_tax_1",
+        mode: "payment",
+        payment_status: "paid",
+        payment_intent: "pi_tax_1",
+        amount_subtotal: 60000,
+        amount_total: 64950,
+        total_details: { amount_tax: 4950 } as Stripe.Checkout.Session.TotalDetails,
+        metadata: { booking_order_id: bookingOrder.id },
+      }),
+      undefined,
+      undefined,
+      gateway
+    );
+
+    const pkg = state.prepaidPackagesByBookingOrderId.get(bookingOrder.id)!;
+    expect(pkg.packageTotalPaid).toBe(600);
+    expect(pkg.taxAmount).toBe(49.5);
+    expect(pkg.totalAmountPaid).toBe(649.5);
+    expect(pkg.stripeTaxTransactionId).toBe("txn_package_purchase_1");
+    // The immutable fact every downstream refund/tax-reversal calculation depends on.
+    expect(roundToCents(pkg.packageTotalPaid + pkg.taxAmount!)).toBe(pkg.totalAmountPaid);
+  });
+
+  it("records tax_amount as 0 (not null, not skipped) when Stripe reports no tax on the session", async () => {
+    const { repo, state } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(minimalBookingOrderInput("prepaid_package"));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment");
+    await repo.insertPaymentAttempt({ bookingOrderId: bookingOrder.id, mode: "payment", stripeCheckoutSessionId: "cs_tax_2", stripeCustomerId: "cus_1", amount: 600, paymentMethodType: null, packageSubtotalBeforeAchIncentive: null, achSavingsAmount: null });
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      repo,
+      checkoutSessionEvent("checkout.session.completed", {
+        id: "cs_tax_2",
+        mode: "payment",
+        payment_status: "paid",
+        payment_intent: "pi_tax_2",
+        amount_subtotal: 60000,
+        amount_total: 60000,
+        total_details: { amount_tax: 0 } as Stripe.Checkout.Session.TotalDetails,
+        metadata: { booking_order_id: bookingOrder.id },
+      })
+    );
+
+    const pkg = state.prepaidPackagesByBookingOrderId.get(bookingOrder.id)!;
+    expect(pkg.taxAmount).toBe(0);
+    expect(pkg.totalAmountPaid).toBe(600);
+  });
+
+  it("still activates with tax fields left null when the session carries no total_details/amount_total at all (legacy-shaped event)", async () => {
+    const { repo, state } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(minimalBookingOrderInput("prepaid_package"));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment");
+    await repo.insertPaymentAttempt({ bookingOrderId: bookingOrder.id, mode: "payment", stripeCheckoutSessionId: "cs_tax_3", stripeCustomerId: "cus_1", amount: 600, paymentMethodType: null, packageSubtotalBeforeAchIncentive: null, achSavingsAmount: null });
+
+    await processStripeWebhookEvent(
+      fakeStripe(),
+      repo,
+      checkoutSessionEvent("checkout.session.completed", {
+        id: "cs_tax_3",
+        mode: "payment",
+        payment_status: "paid",
+        payment_intent: "pi_tax_3",
+        metadata: { booking_order_id: bookingOrder.id },
+      })
+    );
+
+    const pkg = state.prepaidPackagesByBookingOrderId.get(bookingOrder.id)!;
+    expect(pkg.packageTotalPaid).toBe(600); // the one value never allowed to go missing
+    expect(pkg.taxAmount).toBeNull();
+    expect(pkg.totalAmountPaid).toBeNull();
+    expect(pkg.stripeTaxTransactionId).toBeNull();
+  });
+
+  it("a redelivered/duplicate webhook never double-activates or double-records tax — exactly one package, first delivery's values win", async () => {
+    const { repo, state } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(minimalBookingOrderInput("prepaid_package"));
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment");
+    await repo.insertPaymentAttempt({ bookingOrderId: bookingOrder.id, mode: "payment", stripeCheckoutSessionId: "cs_tax_4", stripeCustomerId: "cus_1", amount: 600, paymentMethodType: null, packageSubtotalBeforeAchIncentive: null, achSavingsAmount: null });
+
+    const event = checkoutSessionEvent("checkout.session.completed", {
+      id: "cs_tax_4",
+      mode: "payment",
+      payment_status: "paid",
+      payment_intent: "pi_tax_4",
+      amount_subtotal: 60000,
+      amount_total: 64950,
+      total_details: { amount_tax: 4950 } as Stripe.Checkout.Session.TotalDetails,
+      metadata: { booking_order_id: bookingOrder.id },
+    });
+
+    await processStripeWebhookEvent(fakeStripe(), repo, event);
+    await processStripeWebhookEvent(fakeStripe(), repo, event); // simulated redelivery
+    await processStripeWebhookEvent(fakeStripe(), repo, event); // and again
+
+    expect(state.prepaidPackagesByBookingOrderId.size).toBe(1);
+    const pkg = state.prepaidPackagesByBookingOrderId.get(bookingOrder.id)!;
+    expect(pkg.taxAmount).toBe(49.5);
+    expect(pkg.totalAmountPaid).toBe(649.5);
   });
 });
 

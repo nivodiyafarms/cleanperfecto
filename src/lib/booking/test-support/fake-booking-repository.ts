@@ -46,7 +46,7 @@ export function createFakeBookingRepository(
   const paymentAttemptsById = new Map<string, PaymentAttemptRow>();
   const paymentAttemptsBySessionId = new Map<string, string>();
 
-  const prepaidPackagesByBookingOrderId = new Map<string, { id: string }>();
+  const prepaidPackagesByBookingOrderId = new Map<string, NewPrepaidPackageRow & { id: string }>();
 
   const webhookEventsByStripeId = new Map<string, FakeWebhookEventRow>();
 
@@ -177,7 +177,7 @@ export function createFakeBookingRepository(
       if (prepaidPackagesByBookingOrderId.has(row.bookingOrderId)) {
         return { inserted: false };
       }
-      prepaidPackagesByBookingOrderId.set(row.bookingOrderId, { id: randomUUID() });
+      prepaidPackagesByBookingOrderId.set(row.bookingOrderId, { ...row, id: randomUUID() });
       return { inserted: true };
     },
 

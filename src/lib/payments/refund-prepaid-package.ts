@@ -97,17 +97,34 @@ export async function refundPrepaidPackage(
   // (not an error) when there is nothing to reverse. When a reversal IS
   // owed, intent to reverse is durably persisted BEFORE the Stripe call
   // is attempted — see attempt-tax-reversal.ts.
+  //
+  // findTaxAssociation itself can throw — confirmed against real Stripe
+  // TEST mode: a prepaid package's PaymentIntent is created by a Checkout
+  // Session with automatic_tax (create-prepaid-package-checkout.ts), which
+  // never wires the PaymentIntent to a standalone Tax Calculation via
+  // hooks.inputs.tax.calculation (that path is only used by the per-visit
+  // flow, createPaymentIntent). Stripe's Tax Association API only serves
+  // that latter integration, so it reports "no associated tax calculation"
+  // for every Checkout-originated PaymentIntent, even one that genuinely
+  // collected Stripe Tax. This must never crash an already-committed
+  // refund/cancellation — mirrors the same try/catch already used for this
+  // exact lookup in process-stripe-webhook-event.ts's finalizeVerifiedPayment.
   if (refundAmount > 0 && stripePaymentIntentId) {
-    const taxAssociation = await gateway.findTaxAssociation(stripePaymentIntentId);
-    if (taxAssociation?.committedTransactionId) {
-      const reconciliation = await schedulingRepo.createTaxReversalReconciliation({
-        targetEntityType: "prepaid_package",
-        targetEntityId: updated.id,
-        originalTransactionId: taxAssociation.committedTransactionId,
-        intendedAmount: refundAmount,
-        mode: isFullPackageRefund ? "full" : "partial",
-      });
-      await attemptTaxReversal(schedulingRepo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
+    try {
+      const taxAssociation = await gateway.findTaxAssociation(stripePaymentIntentId);
+      if (taxAssociation?.committedTransactionId) {
+        const reconciliation = await schedulingRepo.createTaxReversalReconciliation({
+          targetEntityType: "prepaid_package",
+          targetEntityId: updated.id,
+          originalTransactionId: taxAssociation.committedTransactionId,
+          intendedAmount: refundAmount,
+          mode: isFullPackageRefund ? "full" : "partial",
+        });
+        await attemptTaxReversal(schedulingRepo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown Stripe Tax association lookup error";
+      console.error(`[payments] failed to look up Stripe Tax association for prepaid_packages ${pkg.id} refund (paymentIntent=${stripePaymentIntentId}): ${message}`);
     }
   }
 

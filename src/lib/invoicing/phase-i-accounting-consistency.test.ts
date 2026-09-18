@@ -227,6 +227,67 @@ describe("Phase I — end-to-end accounting consistency", () => {
     expect((await schedulingRepo.findInvoiceById(invoice.id))!.totalAmount).toBe(900); // untouched
   });
 
+  it("prepaid package WITH Stripe Tax: invoice and receipt show principal, tax, and total separately — total exactly matches what Stripe charged", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+    const pkg: PrepaidPackageRow = {
+      id: "pkg-tax-1",
+      customerId: "customer-1",
+      bookingOrderId: "booking-tax-1",
+      frequency: "weekly",
+      purchasedVisitCount: 6,
+      remainingVisitCount: 6,
+      packageTotalPaid: 900,
+      taxAmount: 74.25,
+      totalAmountPaid: 974.25,
+      stripeTaxTransactionId: "txn_pkg_tax_1",
+      effectivePricePerVisit: 150,
+      status: "active",
+      purchasedAt: new Date(),
+    };
+    state.prepaidPackagesById.set(pkg.id, pkg);
+
+    const { invoice, receipt } = await issueDocumentsForPackagePurchase(schedulingRepo, pkg, "Visa •••• 4242", "pi_pkg_tax_1");
+
+    // Invoice: subtotal (principal) + tax shown separately, total = principal + tax.
+    expect(invoice.baseAmount).toBe(900);
+    expect(invoice.subtotalAmount).toBe(900);
+    expect(invoice.taxAmount).toBe(74.25);
+    expect(invoice.totalAmount).toBe(974.25);
+
+    // Receipt: amountPaid is the actual gross settled amount (matches Stripe's amount_total exactly), tax broken out as included.
+    expect(receipt.amountPaid).toBe(974.25);
+    expect(receipt.taxPaid).toBe(74.25);
+    expect(receipt.tipPaid).toBe(0);
+
+    // Package principal (used for refund math) is never contaminated by tax.
+    expect(pkg.packageTotalPaid).toBe(900);
+  });
+
+  it("prepaid package with tax_amount/total_amount_paid never recorded (legacy row): falls back to principal-only, never invents a tax figure", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+    const pkg: PrepaidPackageRow = {
+      id: "pkg-legacy-1",
+      customerId: "customer-1",
+      bookingOrderId: "booking-legacy-1",
+      frequency: "weekly",
+      purchasedVisitCount: 6,
+      remainingVisitCount: 6,
+      packageTotalPaid: 900,
+      // taxAmount / totalAmountPaid intentionally omitted — legacy row shape.
+      effectivePricePerVisit: 150,
+      status: "active",
+      purchasedAt: new Date(),
+    };
+    state.prepaidPackagesById.set(pkg.id, pkg);
+
+    const { invoice, receipt } = await issueDocumentsForPackagePurchase(schedulingRepo, pkg, "Visa •••• 4242", "pi_pkg_legacy_1");
+
+    expect(invoice.taxAmount).toBe(0);
+    expect(invoice.totalAmount).toBe(900);
+    expect(receipt.amountPaid).toBe(900);
+    expect(receipt.taxPaid).toBe(0);
+  });
+
   it("dispute: does not rewrite the invoice as unpaid/refunded", async () => {
     const { schedulingRepo, state, gateway, visitId, paymentIntentId } = await seedChargedVisit();
     await reconcileVisitPayment(schedulingRepo, gateway, { stripePaymentIntentId: paymentIntentId, status: "paid" });

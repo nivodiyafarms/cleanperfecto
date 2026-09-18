@@ -133,6 +133,9 @@ function toPrepaidPackageRow(row: Record<string, unknown>): PrepaidPackageRow {
     purchasedVisitCount: row.purchased_visit_count as number,
     remainingVisitCount: row.remaining_visit_count as number,
     packageTotalPaid: Number(row.package_total_paid),
+    taxAmount: row.tax_amount === null || row.tax_amount === undefined ? null : Number(row.tax_amount),
+    totalAmountPaid: row.total_amount_paid === null || row.total_amount_paid === undefined ? null : Number(row.total_amount_paid),
+    stripeTaxTransactionId: (row.stripe_tax_transaction_id as string | null) ?? null,
     effectivePricePerVisit: Number(row.effective_price_per_visit),
     status: row.status as PrepaidPackageRow["status"],
     purchasedAt: new Date(row.purchased_at as string),
@@ -877,7 +880,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase
         .from("prepaid_packages")
         .select(
-          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,tax_amount,total_amount_paid,stripe_tax_transaction_id,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
         )
         .eq("id", id)
         .maybeSingle();
@@ -889,7 +892,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase
         .from("prepaid_packages")
         .select(
-          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,tax_amount,total_amount_paid,stripe_tax_transaction_id,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
         )
         .eq("booking_order_id", bookingOrderId)
         .maybeSingle();
@@ -901,7 +904,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       const { data, error } = await supabase
         .from("prepaid_packages")
         .select(
-          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
+          "id,customer_id,booking_order_id,frequency,purchased_visit_count,remaining_visit_count,package_total_paid,tax_amount,total_amount_paid,stripe_tax_transaction_id,effective_price_per_visit,status,purchased_at,refunded_amount,refunded_at,cancelled_at,cancellation_reason"
         )
         .eq("customer_id", customerId)
         .eq("status", "active")

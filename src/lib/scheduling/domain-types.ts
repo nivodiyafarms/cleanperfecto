@@ -169,17 +169,24 @@ export interface PrepaidPackageRow {
   purchasedVisitCount: number;
   remainingVisitCount: number;
   /**
-   * The exact original amount actually charged (subtotal, inclusive of
-   * whatever Stripe Tax collected at checkout) — the immutable snapshot
-   * cancellation refunds must be computed from (packageTotalPaid ×
-   * remainingVisitCount / purchasedVisitCount), never re-derived from
-   * current pricing. See refund-prepaid-package.ts. Optional here (rather
-   * than on every existing PrepaidPackageRow fixture across this
+   * The pre-tax package principal actually charged (the discounted
+   * Checkout line-item subtotal) — Stripe Tax is NOT included here, see
+   * taxAmount below. This is the immutable snapshot cancellation refunds
+   * must be computed from (packageTotalPaid × remainingVisitCount /
+   * purchasedVisitCount), never re-derived from current pricing and never
+   * combined with tax. See refund-prepaid-package.ts. Optional here
+   * (rather than on every existing PrepaidPackageRow fixture across this
    * codebase's many pre-existing scheduling tests, which have nothing to
    * do with refunds) — refund-prepaid-package.ts treats a missing value
    * as a data-integrity error, never silently defaults it.
    */
   packageTotalPaid?: number;
+  /** The real Stripe Tax collected on this purchase, an immutable historical fact — null means "never recorded" (purchased before this field existed, or TAX_MODE was disabled), distinct from a genuine 0. Never part of packageTotalPaid; refund-prepaid-package.ts's principal-refund math must never include it. */
+  taxAmount?: number | null;
+  /** The exact Stripe-settled total (packageTotalPaid + taxAmount) for this purchase, persisted directly from Stripe's own amount_total — the authoritative cross-check, not a value computed by addition at read time. Null for the same legacy reasons as taxAmount. */
+  totalAmountPaid?: number | null;
+  /** The committed Stripe Tax transaction id for this purchase, if any was recorded at activation. */
+  stripeTaxTransactionId?: string | null;
   /** The actual per-visit price charged at purchase (prepaid_packages.effective_price_per_visit) — a historical fact, used as the basis for a package amendment's "old value," never re-derived from the pricing engine (which could drift from what was actually paid if config changed since purchase). */
   effectivePricePerVisit: number;
   status: "active" | "completed" | "cancelled";

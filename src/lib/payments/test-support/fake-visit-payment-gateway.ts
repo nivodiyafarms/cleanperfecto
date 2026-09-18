@@ -22,6 +22,8 @@ export interface FakeVisitPaymentGatewayOptions {
   failNextTaxTransactionCreate?: boolean;
   failNextRefundCreate?: boolean;
   failNextTaxReversalCreate?: boolean;
+  /** Simulates Stripe's real "no associated tax calculation" error for a Checkout-Session-originated PaymentIntent (see refund-prepaid-package.ts's try/catch around this call). */
+  failNextFindTaxAssociation?: boolean;
 }
 
 interface FakeCalculation {
@@ -61,6 +63,7 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
   let failNextTaxTransactionCreate = options.failNextTaxTransactionCreate ?? false;
   let failNextRefundCreate = options.failNextRefundCreate ?? false;
   let failNextTaxReversalCreate = options.failNextTaxReversalCreate ?? false;
+  let failNextFindTaxAssociation = options.failNextFindTaxAssociation ?? false;
 
   const state: FakeVisitPaymentGatewayState = {
     calculations: new Map(),
@@ -108,6 +111,12 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
     },
 
     async findTaxAssociation(paymentIntentId: string): Promise<TaxTransactionAttemptResult | null> {
+      if (failNextFindTaxAssociation) {
+        failNextFindTaxAssociation = false;
+        throw new Error(
+          "The provided PaymentIntent has no associated tax calculation. To automatically commit tax transactions in the PaymentIntent lifecycle, integrate the Payment Intents API with the Tax API: https://docs.stripe.com/tax/payment_intent"
+        );
+      }
       return state.taxAssociationByPaymentIntentId.get(paymentIntentId) ?? null;
     },
 

@@ -238,4 +238,27 @@ describe("refundPrepaidPackage — Phase F: Stripe Tax reversal", () => {
     expect(result.package.status).toBe("cancelled"); // the cancellation/refund itself still succeeds
     expect(gatewayState.createTaxReversalCallCount).toBe(0);
   });
+
+  it("a Checkout-Session-originated PaymentIntent's findTaxAssociation failure never crashes an already-committed refund/cancellation (confirmed against real Stripe TEST mode)", async () => {
+    const { repo: schedulingRepo } = createFakeSchedulingRepository({ prepaidPackages: [makePackage({ remainingVisitCount: 6 })] });
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    await seedCompletedPaymentAttempt(bookingRepo, "booking-1", "pi_checkout_originated");
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway({ failNextFindTaxAssociation: true });
+
+    const result = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+      prepaidPackageId: "pkg-1",
+      reason: "checkout-originated payment intent has no tax association",
+      actorAdminUserId: "owner-1",
+      actorRole: "owner_admin",
+    });
+
+    // The refund and cancellation already committed before the tax lookup ran — a lookup failure must not undo or fail them.
+    expect(result.refundAmount).toBe(900);
+    expect(result.package.status).toBe("cancelled");
+    expect(gatewayState.createRefundCallCount).toBe(1);
+    // No reconciliation row is created when the lookup itself fails — nothing to retry from, since no transaction id was ever obtained.
+    expect(gatewayState.createTaxReversalCallCount).toBe(0);
+    const reconciliations = await schedulingRepo.listTaxReversalReconciliationsForTarget("prepaid_package", result.package.id);
+    expect(reconciliations).toHaveLength(0);
+  });
 });

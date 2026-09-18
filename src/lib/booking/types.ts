@@ -249,6 +249,12 @@ export interface NewPrepaidPackageRow {
   frequency: PrepaidFrequency;
   packageTotalPaid: number;
   effectivePricePerVisit: number;
+  /** The real Stripe Tax collected on this purchase (Checkout Session total_details.amount_tax), or null when never recorded (TAX_MODE disabled, or unavailable). Never included in packageTotalPaid. */
+  taxAmount: number | null;
+  /** The exact Stripe-settled Checkout Session amount_total (packageTotalPaid + taxAmount) — persisted directly from Stripe, not computed by addition here. */
+  totalAmountPaid: number | null;
+  /** The committed Stripe Tax transaction id for this purchase, if any. */
+  stripeTaxTransactionId: string | null;
 }
 
 export interface WebhookClaim {

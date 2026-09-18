@@ -348,6 +348,9 @@ export function createSupabaseBookingRepository(): BookingRepository {
             frequency: row.frequency,
             package_total_paid: row.packageTotalPaid,
             effective_price_per_visit: row.effectivePricePerVisit,
+            tax_amount: row.taxAmount,
+            total_amount_paid: row.totalAmountPaid,
+            stripe_tax_transaction_id: row.stripeTaxTransactionId,
           },
           { onConflict: "booking_order_id", ignoreDuplicates: true }
         )

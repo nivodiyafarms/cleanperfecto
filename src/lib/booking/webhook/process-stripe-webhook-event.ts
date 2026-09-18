@@ -3,6 +3,7 @@ import { bootstrapRecurringVisitPlansFromDirectVisit } from "@/lib/scheduling/bo
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { RecurringCadence } from "@/lib/scheduling/types";
+import { roundToCents } from "@/lib/pricing/money";
 import { enqueueConsentRequest } from "@/lib/consent/enqueue-consent-request";
 import type { ConsentRepository } from "@/lib/consent/consent-repository";
 import { type PaymentMode, resolvePaymentMode } from "@/lib/config/runtime-env";
@@ -202,7 +203,8 @@ async function finalizeVerifiedPayment(
   session: Stripe.Checkout.Session,
   bookingOrderId: string,
   schedulingRepo?: SchedulingRepository,
-  consentRepo?: ConsentRepository
+  consentRepo?: ConsentRepository,
+  paymentGateway?: VisitPaymentGateway
 ): Promise<void> {
   const paymentIntentId = intentIdOf(session.payment_intent);
   let paymentMethod: Stripe.PaymentMethod | null = null;
@@ -230,12 +232,50 @@ async function finalizeVerifiedPayment(
     return;
   }
 
+  // Authoritative Stripe-reported amounts — never trusted from our own
+  // pricing-engine snapshot, never recomputed from current tax rates.
+  // amount_total/amount_subtotal/total_details are populated by Stripe on
+  // every Checkout Session by default (no expand needed). packageTotalPaid
+  // itself is left sourced from the pricing engine's snapshot exactly as
+  // before (that IS the exact pre-tax number Stripe was told to charge as
+  // the line item, and refund-prepaid-package.ts's principal-refund math
+  // already depends on this specific value) — only cross-checked here, so
+  // a genuine mismatch is visible without ever silently overriding it.
+  const principal = bookingOrder.prepaidPackageTotal;
+  const taxAmount = session.total_details?.amount_tax !== undefined && session.total_details?.amount_tax !== null ? roundToCents(session.total_details.amount_tax / 100) : null;
+  const totalAmountPaid = session.amount_total !== undefined && session.amount_total !== null ? roundToCents(session.amount_total / 100) : null;
+  if (taxAmount !== null && totalAmountPaid !== null) {
+    const expectedTotal = roundToCents(principal + taxAmount);
+    if (Math.abs(expectedTotal - totalAmountPaid) > 0.01) {
+      console.error(
+        `[booking] prepaid package total mismatch for booking_order ${bookingOrderId}: package_total_paid (${principal}) + tax_amount (${taxAmount}) = ${expectedTotal}, but Stripe reported amount_total ${totalAmountPaid}`
+      );
+    }
+  }
+
+  let stripeTaxTransactionId: string | null = null;
+  if (paymentGateway && paymentIntentId) {
+    // Best-effort — mirrors refund-prepaid-package.ts's own live lookup;
+    // persisting it here too just avoids that flow needing a fresh Stripe
+    // round trip later. A lookup failure must never turn a successful
+    // package purchase into a failed webhook delivery.
+    try {
+      const association = await paymentGateway.findTaxAssociation(paymentIntentId);
+      stripeTaxTransactionId = association?.committedTransactionId ?? null;
+    } catch (error) {
+      console.error(`[booking] failed to look up Stripe Tax association for prepaid package booking_order ${bookingOrderId}:`, error);
+    }
+  }
+
   const { inserted } = await repo.activatePrepaidPackage({
     customerId: bookingOrder.customerId,
     bookingOrderId: bookingOrder.id,
     frequency: bookingOrder.frequency as PrepaidFrequency,
-    packageTotalPaid: bookingOrder.prepaidPackageTotal,
+    packageTotalPaid: principal,
     effectivePricePerVisit: bookingOrder.effectivePricePerVisit,
+    taxAmount,
+    totalAmountPaid,
+    stripeTaxTransactionId,
   });
 
   const changed = await repo.updateBookingOrderStatus(bookingOrderId, "awaiting_payment", "payment_completed");
@@ -273,7 +313,8 @@ async function handlePaymentSessionCompleted(
   session: Stripe.Checkout.Session,
   bookingOrderId: string,
   schedulingRepo?: SchedulingRepository,
-  consentRepo?: ConsentRepository
+  consentRepo?: ConsentRepository,
+  paymentGateway?: VisitPaymentGateway
 ): Promise<void> {
   if (session.payment_status !== "paid") {
     // Delayed/async payment method still settling — do not activate yet.
@@ -281,7 +322,7 @@ async function handlePaymentSessionCompleted(
     await repo.updatePaymentAttemptBySessionId(session.id, { status: "processing" });
     return;
   }
-  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
+  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
 }
 
 /**
@@ -338,7 +379,7 @@ export async function processStripeWebhookEvent(
       if (session.mode === "setup") {
         await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
       } else if (session.mode === "payment") {
-        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
+        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
       }
       return;
     }
@@ -347,7 +388,7 @@ export async function processStripeWebhookEvent(
       const session = event.data.object;
       const bookingOrderId = bookingOrderIdFromSession(session);
       if (!bookingOrderId || session.payment_status !== "paid") return;
-      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
+      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
       return;
     }
 
