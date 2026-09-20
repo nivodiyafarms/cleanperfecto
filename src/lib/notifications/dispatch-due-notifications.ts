@@ -109,6 +109,7 @@ export async function dispatchDueNotifications(
         customerName: contact?.name ?? "there",
         visitStartAtUtc: visit?.confirmedStartAt ?? null,
         timezone: visit?.timezone ?? "America/Chicago",
+        serviceVisitId: notification.serviceVisitId,
       });
 
       let outcome: { sent: boolean; providerMessageId?: string | null; failureReason?: string };

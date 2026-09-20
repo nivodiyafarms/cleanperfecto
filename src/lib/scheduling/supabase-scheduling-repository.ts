@@ -64,6 +64,7 @@ function toServiceVisitRow(row: Record<string, unknown>): ServiceVisitRow {
     recommendedCleanerCount: (row.recommended_cleaner_count as number | null) ?? null,
     turnaroundBufferMinutes: (row.turnaround_buffer_minutes as number | null) ?? null,
     timezone: row.timezone as string,
+    workFinishedAt: row.work_finished_at ? new Date(row.work_finished_at as string) : null,
     completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
     cancelledAt: row.cancelled_at ? new Date(row.cancelled_at as string) : null,
     serviceAddressLine1: (row.service_address_line1 as string | null) ?? null,
@@ -548,6 +549,11 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     async completeServiceVisitRpc(serviceVisitId) {
       const { error } = await supabase.rpc("complete_service_visit", { p_service_visit_id: serviceVisitId });
       if (error) throw new Error(`[scheduling] complete_service_visit failed: ${error.message}`);
+    },
+
+    async markServiceVisitWorkFinishedRpc(serviceVisitId) {
+      const { error } = await supabase.rpc("mark_service_visit_work_finished", { p_service_visit_id: serviceVisitId });
+      if (error) throw new Error(`[scheduling] mark_service_visit_work_finished failed: ${error.message}`);
     },
 
     async cancelServiceVisit(serviceVisitId) {

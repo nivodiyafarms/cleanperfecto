@@ -8,6 +8,7 @@ import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
 import { cancelServiceVisit } from "@/lib/scheduling/cancel-service-visit";
 import { completeServiceVisit } from "@/lib/scheduling/complete-service-visit";
 import { confirmServiceVisit } from "@/lib/scheduling/confirm-service-visit";
+import { markServiceVisitWorkFinished } from "@/lib/scheduling/mark-service-visit-work-finished";
 import type { DurationEstimateInput } from "@/lib/scheduling/duration-engine";
 import { InvalidVisitStateError, SchedulingConflictError } from "@/lib/scheduling/errors";
 import { reassignCleaners } from "@/lib/scheduling/reassign-cleaners";
@@ -204,6 +205,27 @@ export async function completeVisitAction(_prevState: ActionResult | null, formD
   revalidateVisitPaths(visitId);
   revalidatePath("/admin/packages");
   return actionOk(changed ? "Marked completed." : "This visit was already completed (or isn't currently scheduled).");
+}
+
+/**
+ * Cleaner/operations action marking the physical cleaning done. Gated at the
+ * same operations-permitted "complete_service_visit" capability as
+ * completeVisitAction — no money moves here, only a status/timestamp
+ * transition. No cleaner-facing login system exists in this codebase, so
+ * this is (like "Mark completed") an admin-UI action, not a separate
+ * cleaner-auth surface.
+ */
+export async function markWorkFinishedAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "complete_service_visit");
+  const visitId = String(formData.get("visitId") ?? "");
+  if (!visitId) return actionError("Visit not found.");
+
+  const repo = createSupabaseSchedulingRepository();
+  const changed = await markServiceVisitWorkFinished(repo, visitId, `admin:${admin.adminUserId}`);
+
+  revalidateVisitPaths(visitId);
+  return actionOk(changed ? "Marked work finished." : "This visit was already work finished (or isn't currently scheduled).");
 }
 
 /** Waiving a fee is a financial waiver/correction — explicitly owner-only per the Phase 2 RBAC split; operations cannot call this. */

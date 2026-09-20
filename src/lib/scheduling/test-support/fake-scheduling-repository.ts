@@ -216,6 +216,7 @@ export function createFakeSchedulingRepository(
         recommendedCleanerCount: null,
         turnaroundBufferMinutes: null,
         timezone: row.timezone,
+        workFinishedAt: null,
         completedAt: null,
         cancelledAt: null,
         serviceAddressLine1: row.serviceAddressLine1,
@@ -304,9 +305,17 @@ export function createFakeSchedulingRepository(
       });
     },
 
-    async completeServiceVisitRpc(serviceVisitId) {
+    async markServiceVisitWorkFinishedRpc(serviceVisitId) {
       const visit = serviceVisitsById.get(serviceVisitId);
       if (!visit || visit.status !== "scheduled") {
+        return; // idempotent no-op, mirrors mark_service_visit_work_finished()
+      }
+      serviceVisitsById.set(serviceVisitId, { ...visit, status: "work_finished", workFinishedAt: new Date() });
+    },
+
+    async completeServiceVisitRpc(serviceVisitId) {
+      const visit = serviceVisitsById.get(serviceVisitId);
+      if (!visit || (visit.status !== "scheduled" && visit.status !== "work_finished")) {
         return; // idempotent no-op, mirrors complete_service_visit()
       }
       serviceVisitsById.set(serviceVisitId, { ...visit, status: "completed", completedAt: new Date() });

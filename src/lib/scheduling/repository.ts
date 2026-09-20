@@ -89,8 +89,10 @@ export interface SchedulingRepository {
     turnaroundBufferMinutes: number;
     cleanerIds: string[];
   }): Promise<void>;
-  /** Atomic completion + package-credit consumption via the complete_service_visit() Postgres function. */
+  /** Atomic completion + package-credit consumption via the complete_service_visit() Postgres function. Accepts a visit currently 'scheduled' or 'work_finished'. */
   completeServiceVisitRpc(serviceVisitId: string): Promise<void>;
+  /** Idempotent scheduled -> work_finished transition via the mark_service_visit_work_finished() Postgres function. */
+  markServiceVisitWorkFinishedRpc(serviceVisitId: string): Promise<void>;
   cancelServiceVisit(serviceVisitId: string): Promise<boolean>;
   /** Admin toggle — never set automatically. See enqueue-review-request.ts. */
   setReviewRequestSuppressed(serviceVisitId: string, suppressed: boolean): Promise<void>;

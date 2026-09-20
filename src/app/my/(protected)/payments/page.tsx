@@ -1,3 +1,4 @@
+import Link from "next/link";
 import ActionForm from "@/components/admin/ActionForm";
 import { formatMoney } from "@/lib/admin/format";
 import { approveVisitPricingIncreaseAction } from "@/lib/customer-portal/actions/scope-actions";
@@ -7,11 +8,34 @@ import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-sc
 import { canCreateStripeCharge } from "@/lib/config/payment-capabilities";
 import VisitPaymentFlow from "@/components/customer-portal/VisitPaymentFlow";
 
-export default async function MyPaymentsPage() {
+interface MyPaymentsPageProps {
+  searchParams: Promise<{ visit?: string }>;
+}
+
+export default async function MyPaymentsPage({ searchParams }: MyPaymentsPageProps) {
   const session = await requireCustomer();
-  const summary = await getPaymentsSummary(session.customerId);
+  const query = await searchParams;
   const stripeChargesAvailable = canCreateStripeCharge();
 
+  // A deep link (e.g. from the Final Total notification email or the
+  // on-site QR code) renders ONE focused screen instead of the full
+  // dashboard — VisitPaymentFlow's own actions (getVisitPaymentReviewAction
+  // etc.) already call assertVisitBelongsToCustomer on every load/mutation,
+  // so a cross-customer id here safely errors inside the component rather
+  // than ever exposing another customer's charges.
+  if (query.visit) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-xl font-semibold text-foreground">Final Total</h1>
+        <VisitPaymentFlow serviceVisitId={query.visit} stripeChargesAvailable={stripeChargesAvailable} />
+        <Link href="/my/payments" className="inline-block text-sm font-medium text-secondary hover:underline">
+          ← All payments
+        </Link>
+      </div>
+    );
+  }
+
+  const summary = await getPaymentsSummary(session.customerId);
   const repo = createSupabaseSchedulingRepository();
   const visits = await repo.listServiceVisitsForCustomer(session.customerId);
   const visitsNeedingPayment: string[] = [];

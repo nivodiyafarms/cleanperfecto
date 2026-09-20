@@ -25,6 +25,7 @@ function baseVisit(overrides: Partial<ServiceVisitRow> = {}): ServiceVisitRow {
     recommendedCleanerCount: null,
     turnaroundBufferMinutes: null,
     timezone: "America/Chicago",
+    workFinishedAt: null,
     completedAt: new Date(),
     cancelledAt: null,
     serviceAddressLine1: "123 Main St",

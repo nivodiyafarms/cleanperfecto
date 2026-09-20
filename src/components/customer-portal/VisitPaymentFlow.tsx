@@ -9,6 +9,7 @@ import {
   getVisitPaymentReviewAction,
   getVisitPaymentStatusAction,
   getVisitPricingStateAction,
+  previewFinalTotalTipAction,
   selectVisitTipAction,
   type CustomerVisitPaymentStatus,
   type VisitPricingApprovalState,
@@ -29,7 +30,7 @@ function getStripe(): Promise<Stripe | null> {
   return stripePromise;
 }
 
-type Step = "loading" | "increase_pending" | "increase_awaiting_completion" | "increase_blocked" | "final_total" | "confirm" | "result" | "error";
+type Step = "loading" | "increase_pending" | "increase_awaiting_completion" | "increase_blocked" | "final_total_with_approval" | "final_total" | "confirm" | "result" | "error";
 
 const TIP_OPTIONS: { type: TipSelectionType; label: string }[] = [
   { type: "percentage_15", label: "15%" },
@@ -93,10 +94,20 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     }
     setPricingState(pricingResult.data);
     if (pricingResult.data.requiresCustomerApproval) {
-      // A pending increase can only be resolved into a payable total once
-      // the visit has completed — see confirm-final-total-and-pay.ts for
-      // why (the pricing/status columns freeze at that point).
-      setStep(pricingResult.data.visitCompleted ? "increase_blocked" : "increase_pending");
+      if (pricingResult.data.visitCompleted) {
+        // Only reachable if a visit was completed through some path other
+        // than Finalize & Send while still pending approval — see
+        // confirm-final-total-and-pay.ts's own doc comment.
+        setStep("increase_blocked");
+      } else if (pricingResult.data.visitWorkFinished) {
+        // The cleaning already happened (Finalize & Send) — the increase is
+        // chargeable right now, on this same screen, tax/tip included.
+        setStep("final_total_with_approval");
+      } else {
+        // The cleaning hasn't happened yet (a recurring price increase
+        // proposed ahead of the next visit) — nothing to pay yet.
+        setStep("increase_pending");
+      }
       return;
     }
 
@@ -134,6 +145,69 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     // concurrent admin update) — re-load to pick up the now-payable screen.
     setStep("loading");
     void load();
+  }
+
+  async function handlePreviewTip(type: TipSelectionType) {
+    setSelectedTip(type);
+    if (type === "custom") return;
+    setProcessing(true);
+    setError(null);
+    const outcome = await previewFinalTotalTipAction(serviceVisitId, type);
+    setProcessing(false);
+    if (!outcome.ok) {
+      setError(outcome.error);
+      return;
+    }
+    setTotals({ tipAmount: outcome.data.tipAmount, taxAmount: outcome.data.taxAmount, totalAmount: outcome.data.totalAmount });
+  }
+
+  async function handlePreviewCustomTip() {
+    const amount = Number(customAmount);
+    if (Number.isNaN(amount) || amount < 0) {
+      setError("Please enter a valid tip amount.");
+      return;
+    }
+    setProcessing(true);
+    setError(null);
+    const outcome = await previewFinalTotalTipAction(serviceVisitId, "custom", amount);
+    setProcessing(false);
+    if (!outcome.ok) {
+      setError(outcome.error);
+      return;
+    }
+    if (outcome.data.requiresConfirmation) {
+      const ok = window.confirm(`Please confirm that you want to leave a ${formatMoney(amount)} tip.`);
+      if (!ok) return;
+    }
+    setTotals({ tipAmount: outcome.data.tipAmount, taxAmount: outcome.data.taxAmount, totalAmount: outcome.data.totalAmount });
+    setSelectedTip("custom");
+  }
+
+  async function handleConfirmFinalTotalWithApproval() {
+    if (!selectedTip) {
+      setError("Select a tip to continue.");
+      return;
+    }
+    const customTipAmount = selectedTip === "custom" ? Number(customAmount) : undefined;
+    if (selectedTip === "custom" && (Number.isNaN(customTipAmount) || (customTipAmount as number) < 0)) {
+      setError("Please enter a valid tip amount.");
+      return;
+    }
+    setProcessing(true);
+    setError(null);
+    setNeedsPaymentMethod(false);
+    const outcome = await confirmFinalTotalAndPayAction(serviceVisitId, selectedTip, customTipAmount);
+    if (!outcome.ok) {
+      setProcessing(false);
+      setError(outcome.error);
+      return;
+    }
+    if (outcome.data.outcome === "approved_awaiting_completion") {
+      setProcessing(false);
+      setStep("increase_awaiting_completion");
+      return;
+    }
+    await processPaymentOutcome(outcome.data);
   }
 
   async function applyTip(type: TipSelectionType, amount?: number) {
@@ -307,6 +381,80 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     );
   }
 
+  if (step === "final_total_with_approval" && pricingState) {
+    const serviceAmount = pricingState.totalAmount ?? 0;
+    const displayTax = totals?.taxAmount ?? 0;
+    const displayTip = totals?.tipAmount ?? 0;
+    const displayTotal = totals?.totalAmount ?? serviceAmount;
+
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-foreground">Your Final Total</h3>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {pricingState.previouslyApprovedAmount !== null && <div>Previously approved: {formatMoney(pricingState.previouslyApprovedAmount)}</div>}
+          <div className="font-semibold">Updated service total: {formatMoney(serviceAmount)}</div>
+          <p className="mt-1 text-xs text-amber-800">Your cleaning is finished — this reflects the final reviewed scope.</p>
+        </div>
+        <dl className="space-y-1 text-sm text-foreground">
+          <div>Cleaning &amp; extras: {formatMoney(serviceAmount)}</div>
+          <div>Tax{totals ? "" : " (estimated)"}: {formatMoney(displayTax)}</div>
+          <div>Tip: {formatMoney(displayTip)}</div>
+          <div className="font-semibold text-base">Total: {formatMoney(displayTotal)}</div>
+        </dl>
+
+        <div>
+          <p className="text-sm font-medium text-foreground">Add a tip for your cleaning team</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {TIP_OPTIONS.map((option) => (
+              <button
+                key={option.type}
+                onClick={() => handlePreviewTip(option.type)}
+                disabled={processing}
+                className={`rounded-lg border px-4 py-2 text-sm font-medium ${selectedTip === option.type ? "border-primary bg-primary/10 text-primary" : "border-border text-foreground hover:bg-background-alt"}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {selectedTip === "custom" && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-sm text-foreground">$</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={customAmount}
+                onChange={(e) => setCustomAmount(e.target.value)}
+                className="w-32 rounded-lg border border-border px-3 py-2 text-sm text-foreground focus:border-secondary focus:outline-none focus:ring-1 focus:ring-secondary"
+              />
+              <button onClick={handlePreviewCustomTip} disabled={processing} className="rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-background-alt disabled:opacity-50">
+                {processing ? "Working…" : "Apply"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {needsPaymentMethod ? (
+          <div className="space-y-2">
+            <p className="text-sm text-muted">No saved payment method on file.</p>
+            <button onClick={handleAddPaymentMethod} disabled={processing} className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-background-alt disabled:opacity-50">
+              Add payment method
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={handleConfirmFinalTotalWithApproval}
+            disabled={processing || !totals}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {processing ? "Working…" : totals ? `Confirm Final Total & Pay ${formatMoney(displayTotal)}` : "Select a tip to continue"}
+          </button>
+        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+      </div>
+    );
+  }
+
   if (step === "increase_blocked" && pricingState) {
     return (
       <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 space-y-2">
@@ -318,7 +466,7 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
     );
   }
 
-  if (!stripeChargesAvailable && step === "final_total") {
+  if (!stripeChargesAvailable && (step === "final_total" || step === "final_total_with_approval")) {
     return (
       <div className="rounded-2xl border border-border bg-surface p-5">
         <p className="text-sm font-medium text-foreground">Online payment is temporarily unavailable</p>

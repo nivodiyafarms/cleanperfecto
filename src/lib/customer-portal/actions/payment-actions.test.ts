@@ -43,6 +43,8 @@ const {
   confirmVisitPaymentAction,
   createPaymentMethodSetupUrlAction,
   getVisitPaymentStatusAction,
+  getVisitPricingStateAction,
+  previewFinalTotalTipAction,
 } = await import("./payment-actions");
 
 const NEW_VISIT: NewServiceVisitRow = {
@@ -215,5 +217,97 @@ describe("getVisitPaymentStatusAction", () => {
     expect(keys).toEqual(
       expect.arrayContaining(["status", "approvedAmount", "tipAmount", "taxAmount", "totalAmount", "paidAt", "refundedAmount", "needsClientConfirmation"])
     );
+  });
+});
+
+async function seedWorkFinishedPendingApproval(customerId = "customer-1") {
+  const visit = await fakeScheduling.repo.insertServiceVisit({ ...NEW_VISIT, customerId });
+  await fakeScheduling.repo.upsertServiceVisitPricing({
+    serviceVisitId: visit.id,
+    pricingVersion: "v1",
+    pricingSnapshot: {},
+    baseAmount: 200,
+    addOnIds: [],
+    addOnAmount: 0,
+    totalAmount: 200,
+    amountDueFromCustomer: 200,
+    priceStatus: "estimated",
+    requiresCustomerApproval: false,
+    previouslyApprovedAmount: null,
+  });
+  await fakeScheduling.repo.confirmServiceVisitPricing(visit.id, "admin:1");
+  await fakeScheduling.repo.upsertServiceVisitPricing({
+    serviceVisitId: visit.id,
+    pricingVersion: "v1",
+    pricingSnapshot: {},
+    baseAmount: 230,
+    addOnIds: ["inside_oven"],
+    addOnAmount: 30,
+    totalAmount: 230,
+    amountDueFromCustomer: 230,
+    priceStatus: "pending_customer_approval",
+    requiresCustomerApproval: true,
+    previouslyApprovedAmount: 200,
+  });
+  fakeScheduling.state.serviceVisitsById.set(visit.id, {
+    ...(await fakeScheduling.repo.findServiceVisitById(visit.id))!,
+    status: "work_finished",
+    workFinishedAt: new Date(),
+  });
+  return visit.id;
+}
+
+describe("getVisitPricingStateAction", () => {
+  it("rejects a visit that does not belong to the authenticated customer", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedPendingApproval("customer-2");
+    await expect(getVisitPricingStateAction(visitId)).rejects.toThrow(CustomerOwnershipError);
+  });
+
+  it("reports visitWorkFinished=true and visitCompleted=false for a Finalize & Send'd visit still awaiting approval", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+    const result = await getVisitPricingStateAction(visitId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.requiresCustomerApproval).toBe(true);
+    expect(result.data.visitCompleted).toBe(false);
+    expect(result.data.visitWorkFinished).toBe(true);
+    expect(result.data.previouslyApprovedAmount).toBe(200);
+    expect(result.data.totalAmount).toBe(230);
+  });
+});
+
+describe("previewFinalTotalTipAction", () => {
+  it("rejects a visit that does not belong to the authenticated customer", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedPendingApproval("customer-2");
+    await expect(previewFinalTotalTipAction(visitId, "percentage_15")).rejects.toThrow(CustomerOwnershipError);
+  });
+
+  it("previews tax/tip without persisting anything — no service_visit_payments row is created", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+
+    const result = await previewFinalTotalTipAction(visitId, "percentage_20");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.tipAmount).toBeCloseTo(230 * 0.2, 2);
+    }
+    const payment = await fakeScheduling.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment).toBeNull();
+    const pricing = await fakeScheduling.repo.findServiceVisitPricingByVisitId(visitId);
+    expect(pricing?.priceStatus).toBe("pending_customer_approval"); // untouched by the preview
+  });
+
+  it("supports a custom $0 tip preview", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+
+    const result = await previewFinalTotalTipAction(visitId, "custom", 0);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.tipAmount).toBe(0);
   });
 });

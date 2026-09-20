@@ -10,6 +10,8 @@ export interface NotificationContentInput {
   visitStartAtUtc: Date | null;
   /** The visit's OWN timezone (service_visits.timezone) — never hardcoded, per the DFW-today-but-not-forever requirement. */
   timezone: string;
+  /** Deep-links final_total_ready straight to that visit's Final Total screen (/my/payments?visit=<id>) instead of the generic dashboard. Optional/unused for every other type today — see PORTAL_PATH_BY_TYPE. */
+  serviceVisitId?: string | null;
 }
 
 export interface NotificationContent {
@@ -34,6 +36,10 @@ const PORTAL_PATH_BY_TYPE: Partial<Record<ServiceVisitNotificationType, string>>
   payment_succeeded: "/my/payments",
   payment_failed: "/my/payments",
   payment_action_required: "/my/payments",
+  // Fallback only — final_total_ready always has a serviceVisitId in
+  // practice (the notification_type CHECK requires one), so the deep-linked
+  // /my/payments?visit=<id> branch below is what actually fires.
+  final_total_ready: "/my/payments",
   // review_request deliberately absent — its link is the external Google
   // review URL (see getGoogleReviewUrl), never a portal path.
 };
@@ -75,6 +81,10 @@ const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line
     subject: "Payment needs your attention",
     line: () => "Your bank requires additional verification to complete this payment. Please finish the secure authentication step.",
   },
+  final_total_ready: {
+    subject: "Your Final Total is ready",
+    line: (when) => `Your cleaning on ${when} is finished and reviewed. Your Final Total is ready — review and pay when you're ready.`,
+  },
 };
 
 function formatVisitWhen(visitStartAtUtc: Date | null, timezone: string): string {
@@ -106,6 +116,11 @@ export function buildNotificationContent(input: NotificationContentInput): Notif
       throw new Error("GOOGLE_REVIEW_URL is not configured — refusing to build review_request content with no destination.");
     }
     link = googleReviewUrl;
+  } else if (input.notificationType === "final_total_ready" && input.serviceVisitId) {
+    // Deep-links straight to this visit's Final Total screen — see
+    // /my/(protected)/payments/page.tsx's ?visit= handling — rather than the
+    // generic dashboard every other payment type still links to.
+    link = buildPortalLink(`/my/payments?visit=${input.serviceVisitId}`);
   } else {
     link = buildPortalLink(PORTAL_PATH_BY_TYPE[input.notificationType] ?? "/my");
   }
@@ -117,6 +132,7 @@ export function buildNotificationContent(input: NotificationContentInput): Notif
     payment_succeeded: "View payment",
     payment_failed: "Review & Pay",
     payment_action_required: "Review & Pay",
+    final_total_ready: "Confirm Final Total & Pay",
   };
   const linkLabel = LINK_LABEL_BY_TYPE[input.notificationType] ?? "View details";
 

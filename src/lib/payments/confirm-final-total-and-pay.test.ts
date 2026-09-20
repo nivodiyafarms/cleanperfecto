@@ -206,6 +206,60 @@ describe("confirmFinalTotalAndPay", () => {
     expect(gatewayState.createPaymentIntentCallCount).toBe(1);
   });
 
+  it("Finalize & Send flow: a pending increase on a work_finished (not yet completed) visit is approved, completed, tipped, and paid in the customer's ONE call", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
+    const { gateway } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
+    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
+    // work_finished, not completed — the state Finalize & Send leaves a
+    // still-pending-approval visit in (see finalize-and-send.ts).
+    const current = state.serviceVisitsById.get(visit.id)!;
+    state.serviceVisitsById.set(visit.id, { ...current, status: "work_finished", workFinishedAt: new Date() });
+
+    const outcome = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      tipSelectionType: "percentage_20",
+    });
+
+    expect(outcome.outcome).toBe("ready");
+    expect(state.serviceVisitsById.get(visit.id)?.status).toBe("completed");
+    const pricing = await schedulingRepo.findServiceVisitPricingByVisitId(visit.id);
+    expect(pricing?.priceStatus).toBe("confirmed");
+    expect(pricing?.previouslyApprovedAmount).toBe(230);
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+    expect(payment?.approvedAmount).toBe(230);
+    expect(payment?.tipAmount).toBe(46); // 20% of 230
+    expect(payment?.totalAmount).toBe(276); // 230 + 46, 0% tax
+  });
+
+  it("repeated confirmation on a work_finished visit cannot double-charge — the second call reuses the same PaymentIntent", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
+    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
+    const current = state.serviceVisitsById.get(visit.id)!;
+    state.serviceVisitsById.set(visit.id, { ...current, status: "work_finished", workFinishedAt: new Date() });
+
+    const first = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      tipSelectionType: "percentage_20",
+    });
+    const second = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      tipSelectionType: "percentage_20",
+    });
+
+    expect(first.outcome).toBe("ready");
+    expect(second.outcome).toBe("ready");
+    if (first.outcome === "ready" && second.outcome === "ready") {
+      expect(second.clientSecret).toBe(first.clientSecret);
+    }
+    expect(gatewayState.createPaymentIntentCallCount).toBe(1);
+  });
+
   it("translates a failure while finalizing the increase into a clear, actionable error instead of a raw exception", async () => {
     const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });

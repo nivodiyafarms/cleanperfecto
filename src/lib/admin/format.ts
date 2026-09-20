@@ -46,6 +46,8 @@ export function formatVisitStatusLabel(status: string): string {
       return "Requested";
     case "scheduled":
       return "Scheduled";
+    case "work_finished":
+      return "Work Finished";
     case "completed":
       return "Completed";
     case "cancelled":

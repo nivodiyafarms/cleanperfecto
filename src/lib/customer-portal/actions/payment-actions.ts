@@ -10,6 +10,10 @@ import { selectVisitTip, type SelectVisitTipResult } from "@/lib/payments/select
 import { createVisitPaymentIntent, type CreateVisitPaymentIntentOutcome } from "@/lib/payments/create-visit-payment-intent";
 import { confirmFinalTotalAndPay, type ConfirmFinalTotalAndPayOutcome } from "@/lib/payments/confirm-final-total-and-pay";
 import { createPaymentMethodSetupCheckoutSession } from "@/lib/payments/create-payment-method-setup";
+import { resolveTipBasisAmount } from "@/lib/payments/resolve-tip-basis";
+import { resolveTaxLocationAddress } from "@/lib/payments/resolve-tax-location";
+import { resolveTipAmount } from "@/lib/payments/tip-rules";
+import { toStripeCents } from "@/lib/booking/stripe/money";
 import { getStripeClient } from "@/lib/booking/stripe/client";
 import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import type { TipSelectionType } from "@/lib/scheduling/types";
@@ -132,8 +136,19 @@ export interface VisitPricingApprovalState {
   requiresCustomerApproval: boolean;
   previouslyApprovedAmount: number | null;
   totalAmount: number | null;
-  /** Whether the visit itself has completed — a pending increase can only be resolved into a charge once true; before that, approving it has nothing to pay yet. */
+  /** Whether the visit itself has completed. */
   visitCompleted: boolean;
+  /**
+   * Whether the physical cleaning is already done (Finalize & Send flow —
+   * see finalize-and-send.ts) even though the visit hasn't crossed into
+   * 'completed' yet because this exact pricing still needs the customer's
+   * approval. When true, a pending increase is chargeable RIGHT NOW in the
+   * customer's one confirmFinalTotalAndPay click (tax/tip included) rather
+   * than the legacy "approve now, pay once we complete it" flow used for a
+   * price increase proposed ahead of a recurring visit that hasn't
+   * happened yet.
+   */
+  visitWorkFinished: boolean;
 }
 
 /**
@@ -150,8 +165,12 @@ export async function getVisitPricingStateAction(serviceVisitId: string): Promis
 
   const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
   const visitCompleted = visit.status === "completed";
+  const visitWorkFinished = visit.status === "work_finished";
   if (!pricing) {
-    return { ok: true, data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null, visitCompleted } };
+    return {
+      ok: true,
+      data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null, visitCompleted, visitWorkFinished },
+    };
   }
   return {
     ok: true,
@@ -161,8 +180,71 @@ export async function getVisitPricingStateAction(serviceVisitId: string): Promis
       previouslyApprovedAmount: pricing.previouslyApprovedAmount,
       totalAmount: pricing.totalAmount,
       visitCompleted,
+      visitWorkFinished,
     },
   };
+}
+
+export interface PreviewFinalTotalTipResult {
+  tipAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  requiresConfirmation: boolean;
+}
+
+/**
+ * Read-only, never-persisted preview of tax+tip for a visit whose pricing
+ * still requires customer approval (price_status='pending_customer_approval')
+ * — prepareVisitPaymentReview/selectVisitTip both hard-gate on 'confirmed'
+ * pricing and would persist a service_visit_payments row keyed to an amount
+ * that could still change if admin revises scope again before the customer
+ * actually confirms, so this deliberately duplicates their tax-preview math
+ * (resolveTipBasisAmount + resolveTipAmount + a throwaway Stripe Tax
+ * Calculation) without ever writing anything. The customer's actual
+ * confirmFinalTotalAndPayAction call is what persists the real numbers.
+ */
+export async function previewFinalTotalTipAction(
+  serviceVisitId: string,
+  tipSelectionType: TipSelectionType,
+  customAmount?: number
+): Promise<PaymentActionResult<PreviewFinalTotalTipResult>> {
+  const session = await requireCustomer();
+  const repo = createSupabaseSchedulingRepository();
+  const visit = await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
+
+  const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  if (!pricing) {
+    return { ok: false, error: "No pricing estimate available yet for this visit." };
+  }
+
+  try {
+    const tipBasisAmount = await resolveTipBasisAmount(repo, visit, pricing);
+    const { tipAmount, requiresConfirmation } = resolveTipAmount({ tipSelectionType, tipBasisAmount, customAmount });
+
+    const collectibleTotal = pricing.amountDueFromCustomer + tipAmount;
+    if (collectibleTotal <= 0) {
+      return { ok: true, data: { tipAmount, taxAmount: 0, totalAmount: collectibleTotal, requiresConfirmation } };
+    }
+
+    const gateway = createStripeVisitPaymentGateway();
+    const calculation = await gateway.createTaxCalculation({
+      serviceAmountCents: toStripeCents(pricing.amountDueFromCustomer),
+      tipAmountCents: toStripeCents(tipAmount),
+      address: resolveTaxLocationAddress(visit),
+    });
+
+    return {
+      ok: true,
+      data: {
+        tipAmount,
+        taxAmount: calculation.taxAmountExclusiveCents / 100,
+        totalAmount: calculation.amountTotalCents / 100,
+        requiresConfirmation,
+      },
+    };
+  } catch (error) {
+    return toErrorResult(error);
+  }
 }
 
 /**

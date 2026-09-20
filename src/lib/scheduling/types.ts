@@ -2,7 +2,7 @@
 // no network — mirrors src/lib/pricing/types.ts's own separation between
 // pure types and the orchestrators that consume them.
 
-export type ServiceVisitStatus = "requested" | "scheduled" | "completed" | "cancelled";
+export type ServiceVisitStatus = "requested" | "scheduled" | "work_finished" | "completed" | "cancelled";
 
 export type RecurringCadence = "weekly" | "biweekly" | "every_4_weeks";
 
@@ -76,7 +76,8 @@ export type ServiceVisitNotificationType =
   | "review_request"
   | "payment_succeeded"
   | "payment_failed"
-  | "payment_action_required";
+  | "payment_action_required"
+  | "final_total_ready";
 
 export type ServiceVisitNotificationChannel = "email" | "sms";
 

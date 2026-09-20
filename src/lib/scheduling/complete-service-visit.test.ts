@@ -229,6 +229,20 @@ describe("completeServiceVisit", () => {
     expect(state.packageVisitUsages.size).toBe(0);
   });
 
+  it("also completes a visit starting from work_finished (the Finalize & Send path), firing side effects exactly as a normal scheduled->completed transition would", async () => {
+    const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+    await repo.markServiceVisitWorkFinishedRpc(visitId);
+    expect(state.serviceVisitsById.get(visitId)?.status).toBe("work_finished");
+
+    const changed = await completeServiceVisit(repo, visitId, "admin:1");
+
+    expect(changed).toBe(true);
+    expect(state.serviceVisitsById.get(visitId)?.status).toBe("completed");
+    expect(state.prepaidPackagesById.get("pkg-1")?.remainingVisitCount).toBe(5);
+    const completedEvents = state.events.filter((e) => e.serviceVisitId === visitId && e.eventType === "completed");
+    expect(completedEvents.length).toBe(1);
+  });
+
   it("enqueues exactly one pending completed notice, once, even on an idempotent retry", async () => {
     const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
     await completeServiceVisit(repo, visitId);

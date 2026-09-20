@@ -2,6 +2,7 @@ import type { BookingRepository } from "@/lib/booking/repository";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { TipSelectionType } from "@/lib/scheduling/types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
+import { completeServiceVisit } from "@/lib/scheduling/complete-service-visit";
 import { approveVisitPricingIncrease, confirmVisitPricing } from "@/lib/scheduling/confirm-visit-pricing";
 import { selectVisitTip } from "./select-visit-tip";
 import { createVisitPaymentIntent, type CreateVisitPaymentIntentOutcome } from "./create-visit-payment-intent";
@@ -35,17 +36,28 @@ export type ConfirmFinalTotalAndPayOutcome =
  * the same durable confirmed_at/confirmed_by/previously_approved_amount
  * evidence trail every admin confirmation uses; nothing new to audit).
  *
- * A price increase can only be resolved this way while the visit has not
- * yet completed — service_visit_pricing.price_status and
- * previously_approved_amount are frozen by a BEFORE UPDATE trigger once
- * service_visits.status = 'completed' (see
- * 20260824100400_create_service_visit_pricing.sql), by design: historical
- * completed-visit pricing must never be rewritten. If the visit isn't
- * completed yet, approval is captured and this returns
- * "approved_awaiting_completion" — there is nothing to charge yet (the
- * cleaning hasn't happened), so no tip/payment step runs. If a price
- * increase is somehow still pending on an ALREADY-completed visit (only
- * reachable if an admin left one unresolved before marking the visit done),
+ * A price increase can only be resolved this way while pricing is still
+ * mutable — service_visit_pricing.price_status and previously_approved_amount
+ * are frozen by a BEFORE UPDATE trigger once service_visits.status =
+ * 'completed' (see 20260824100400_create_service_visit_pricing.sql), by
+ * design: historical completed-visit pricing must never be rewritten. This
+ * is exactly why Finalize & Send (finalize-and-send.ts) deliberately leaves
+ * a visit at 'work_finished' — never 'completed' — whenever its final
+ * pricing still requires customer approval: the approve+confirm step above
+ * must still be legal to run when the customer opens their Final Total link.
+ *
+ * If the visit is 'work_finished' (physical work is done; pricing is now
+ * frozen by the approve+confirm above, or was already confirmed with
+ * nothing to approve), THIS call also crosses the completion boundary right
+ * here — only after pricing is frozen — so the customer's one click both
+ * resolves the price increase AND is immediately followed by tip/payment,
+ * with no separate "wait for admin" round trip. If the visit hasn't even
+ * been cleaned yet (still 'requested'/'scheduled' — the original use case
+ * this function was built for: a recurring Pay Per Cleaning price increase
+ * proposed ahead of the next visit), approval is captured and this returns
+ * "approved_awaiting_completion" — there is genuinely nothing to charge yet.
+ * If a price increase is somehow still pending on an ALREADY-completed
+ * visit (only reachable via a direct completion bypassing Finalize & Send),
  * the confirm step is rejected by that same trigger; the resulting Postgres
  * error is translated into a clear, actionable InvalidVisitStateError
  * rather than surfacing a raw DB error to the customer.
@@ -90,10 +102,16 @@ export async function confirmFinalTotalAndPay(
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} pricing is not confirmed`);
   }
 
-  if (visit.status !== "completed") {
-    // Approval evidence is captured; nothing is chargeable until the
-    // cleaning itself is marked completed — this is not friction, there is
-    // genuinely no total to pay yet.
+  if (visit.status === "work_finished") {
+    // Pricing is frozen (just above) and the physical cleaning already
+    // happened — cross scheduled/work_finished -> completed right here, as
+    // part of this same customer confirmation, then fall through to the
+    // tip/payment steps below in the same call.
+    await completeServiceVisit(repo, input.serviceVisitId, `customer:${input.customerId}`);
+  } else if (visit.status !== "completed") {
+    // The cleaning itself hasn't happened yet (recurring Pay Per Cleaning
+    // price increase proposed ahead of the next visit) — approval evidence
+    // is captured; nothing is chargeable until it does.
     return { outcome: "approved_awaiting_completion" };
   }
 

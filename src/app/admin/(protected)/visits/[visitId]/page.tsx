@@ -6,16 +6,19 @@ import { CANCELLATION_POLICY_TIERS } from "@/lib/booking/cancellation-policy";
 import { listCleaners } from "@/lib/admin/queries/cleaners";
 import { findServiceVisitDetail, listServiceFeeAssessments, listServiceVisitEvents } from "@/lib/admin/queries/service-visits";
 import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
-import { cancelVisitAction, completeVisitAction, reassignCleanersAction, rescheduleVisitAction, waiveFeeAction } from "@/lib/admin/actions/schedule-actions";
+import { cancelVisitAction, completeVisitAction, markWorkFinishedAction, reassignCleanersAction, rescheduleVisitAction, waiveFeeAction } from "@/lib/admin/actions/schedule-actions";
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
+import { finalizeAndSendAction, resendFinalTotalLinkAction, updateFinalScopeAction } from "@/lib/admin/actions/finalize-send-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
 import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxReversalAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { hasCapability } from "@/lib/admin/rbac/capabilities";
 import { requireAdmin } from "@/lib/admin/require-admin";
+import { computeVisitProgressStatus, formatVisitProgressStatusLabel } from "@/lib/admin/visit-progress-status";
 import { computeVisitTaxReversalStatus } from "@/lib/admin/visit-tax-reversal-status";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
+import { buildVisitPaymentQrCode } from "@/lib/payments/visit-qr-code";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
 import { findAvailableCleaners } from "@/lib/scheduling/find-available-cleaners";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
@@ -83,13 +86,26 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   // via service_visit_pricing/estimateVisitPricing (see that file's own
   // doc comment for how the base amount differs by source).
   const isPayPerCleaningVisit = !visit.prepaidPackageId && (visit.status === "requested" || visit.status === "scheduled");
-  const visitPricing = isPayPerCleaningVisit ? await schedulingRepo.findServiceVisitPricingByVisitId(visitId) : null;
+  // Finalize & Send applies regardless of payment model (Pay Per Cleaning
+  // or prepaid-package) — the visit's Final Scope/pricing review window
+  // opens once the cleaner marks work finished, and stays visible after
+  // completion so admin can still see what was sent / resend it.
+  const showFinalizeFlow = visit.status === "work_finished" || visit.status === "completed";
+  const visitPricing = isPayPerCleaningVisit || showFinalizeFlow ? await schedulingRepo.findServiceVisitPricingByVisitId(visitId) : null;
+  const finalTotalAlreadySent = notifications.some((n) => n.notificationType === "final_total_ready");
+  const visitPaymentQr = showFinalizeFlow ? await buildVisitPaymentQrCode(visitId) : null;
 
   const consentRepo = createSupabaseConsentRepository();
   const activeConsentVersion = await consentRepo.findActiveVersion();
   const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(visit.customerId, activeConsentVersion.id) : null;
 
   const visitPayment = visit.status === "completed" ? await schedulingRepo.findServiceVisitPaymentByVisitId(visitId) : null;
+  const progressStatus = computeVisitProgressStatus({
+    visitStatus: visit.status,
+    priceStatus: visitPricing?.priceStatus ?? null,
+    finalTotalSent: finalTotalAlreadySent,
+    paymentStatus: visitPayment?.status ?? null,
+  });
 
   // Tax reconciliation retry UI (owner-admin operational recovery for the
   // per-visit custom PaymentIntent + Stripe Tax refund flow only — a
@@ -112,9 +128,12 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
 
   return (
     <div className="max-w-3xl">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-foreground">Visit — {visit.customerName}</h1>
         <StatusBadge status={visit.status} />
+        <span className="rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted">
+          {formatVisitProgressStatusLabel(progressStatus)}
+        </span>
       </div>
       <p className="mt-1 text-sm text-muted">
         {visit.confirmedStartAt && visit.confirmedEndAt
@@ -162,12 +181,26 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
           </div>
 
           <div className="rounded-2xl border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold text-foreground">Mark work finished</h2>
+            <p className="mt-1 text-xs text-muted">
+              Use this when the cleaning is physically done but you still need to review/finalize the scope and price before sending the customer their Final Total. Does not charge or complete the visit yet.
+            </p>
+            <ActionForm action={markWorkFinishedAction} className="mt-3">
+              <input type="hidden" name="visitId" value={visitId} />
+              <button type="submit" className="rounded-lg bg-secondary px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90">
+                Mark work finished
+              </button>
+            </ActionForm>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-surface p-5">
             <h2 className="text-sm font-semibold text-foreground">Mark completed</h2>
             <p className="mt-1 text-xs text-muted">
               {visit.prepaidPackageId
                 ? "This will consume exactly one package credit. The customer is not charged automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."
                 : "This does not charge the customer automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."}
             </p>
+            <p className="mt-1 text-xs text-muted">For a simple visit needing no scope/price review, this skips straight to completed. Otherwise use &quot;Mark work finished&quot; above.</p>
             <ActionForm action={completeVisitAction} className="mt-3">
               <input type="hidden" name="visitId" value={visitId} />
               <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90">
@@ -292,6 +325,73 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {showFinalizeFlow && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-foreground">Final Scope &amp; Finalize &amp; Send</h2>
+
+          <dl className="space-y-1 text-sm text-foreground">
+            <div>Originally approved: {visitPricing?.previouslyApprovedAmount !== null && visitPricing?.previouslyApprovedAmount !== undefined ? formatMoney(visitPricing.previouslyApprovedAmount) : "Not yet approved"}</div>
+            <div>Final (current estimate): {visitPricing ? formatMoney(visitPricing.totalAmount) : "No estimate yet"}</div>
+            <div>
+              Customer approval required:{" "}
+              <span className={visitPricing?.requiresCustomerApproval ? "font-semibold text-amber-700" : "font-semibold text-emerald-700"}>
+                {visitPricing?.requiresCustomerApproval ? "YES" : "NO"}
+              </span>
+            </div>
+            <div className="text-xs text-muted">Final Total sent: {finalTotalAlreadySent ? "Yes" : "Not yet"}</div>
+          </dl>
+
+          {visit.status === "work_finished" && (
+            <>
+              <div>
+                <p className="text-xs font-medium text-muted">Final scope — currently selected extras (unchecked items were removed, newly checked items were added):</p>
+                <ActionForm action={updateFinalScopeAction} className="mt-2 space-y-2">
+                  <input type="hidden" name="serviceVisitId" value={visitId} />
+                  <div className="flex flex-wrap gap-3">
+                    {PRICED_ADD_ONS.map((addOn) => (
+                      <label key={addOn.id} className="flex items-center gap-1.5 text-sm text-foreground">
+                        <input type="checkbox" name="addOnIds" value={addOn.id} defaultChecked={visitPricing?.addOnIds.includes(addOn.id)} />
+                        {addOn.label} ({formatMoney(addOn.amount ?? 0)})
+                      </label>
+                    ))}
+                  </div>
+                  <button type="submit" className="rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                    Update Final Scope
+                  </button>
+                </ActionForm>
+              </div>
+
+              <ActionForm action={finalizeAndSendAction}>
+                <input type="hidden" name="serviceVisitId" value={visitId} />
+                <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+                  Finalize &amp; Send
+                </button>
+              </ActionForm>
+            </>
+          )}
+
+          {finalTotalAlreadySent && (
+            <ActionForm action={resendFinalTotalLinkAction}>
+              <input type="hidden" name="serviceVisitId" value={visitId} />
+              <button type="submit" className="rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                Resend Final Total Link
+              </button>
+            </ActionForm>
+          )}
+
+          {visitPaymentQr && (
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium text-foreground">Show Payment QR</summary>
+              <div className="mt-3 flex flex-col items-start gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={visitPaymentQr.qrDataUrl} alt="QR code linking to this visit's secure Final Total payment screen" width={240} height={240} />
+                <p className="text-xs text-muted break-all">{visitPaymentQr.url}</p>
+              </div>
+            </details>
+          )}
         </div>
       )}
 

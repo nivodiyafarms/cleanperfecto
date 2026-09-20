@@ -84,6 +84,7 @@ export interface ServiceVisitRow {
   recommendedCleanerCount: number | null;
   turnaroundBufferMinutes: number | null;
   timezone: string;
+  workFinishedAt: Date | null;
   completedAt: Date | null;
   cancelledAt: Date | null;
   serviceAddressLine1: string | null;
@@ -396,7 +397,9 @@ export interface ServiceVisitEventRow {
     | "cleaner_unassigned"
     | "cancelled"
     | "completed"
-    | "no_access_recorded";
+    | "no_access_recorded"
+    | "work_finished"
+    | "final_total_sent";
   actor: string | null;
   previousState: Record<string, unknown> | null;
   newState: Record<string, unknown> | null;

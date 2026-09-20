@@ -18,7 +18,7 @@ export interface AdminAssignedCleaner {
  */
 export interface AdminScheduleVisit {
   id: string;
-  status: "requested" | "scheduled" | "completed" | "cancelled";
+  status: "requested" | "scheduled" | "work_finished" | "completed" | "cancelled";
   cleaningType: string | null;
   frequency: string | null;
   visitNumber: number | null;
