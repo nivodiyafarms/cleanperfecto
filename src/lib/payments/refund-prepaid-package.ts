@@ -5,7 +5,6 @@ import type { PrepaidPackageRow } from "@/lib/scheduling/domain-types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { roundToCents } from "@/lib/pricing/money";
 import { toStripeCents } from "@/lib/booking/stripe/money";
-import { attemptTaxReversal } from "./attempt-tax-reversal";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundPrepaidPackageInput {
@@ -18,6 +17,7 @@ export interface RefundPrepaidPackageInput {
 export interface RefundPrepaidPackageResult {
   package: PrepaidPackageRow;
   refundAmount: number;
+  refundTaxAmount: number;
 }
 
 /**
@@ -33,9 +33,43 @@ export interface RefundPrepaidPackageResult {
  * already reflects. Tips, separately-paid add-ons/travel/supplies, and any
  * other per-visit charge were never part of package_total_paid to begin
  * with, so they are excluded automatically by this formula, not by a
- * separate deduction step. Rounded exactly once, at the end (roundToCents),
- * matching this codebase's pricing-engine convention — never rounding the
- * intermediate fraction.
+ * separate deduction step.
+ *
+ * Phase H.2 (owner-directed tax-refund investigation, this milestone):
+ * refundTaxAmount = taxAmount × (remainingVisitCount / purchasedVisitCount)
+ * — the SAME proportion as the principal, computed and rounded completely
+ * independently (never derived from refundAmount, never combined with it
+ * before rounding). Both are rounded via roundToCents — verified equivalent
+ * to pure integer-cent arithmetic at these magnitudes (e.g. 63.58×5/6 in
+ * cents: round(31790/6)=5298 — identical to roundToCents(63.58×5/6)=52.98).
+ * The two amounts are then converted to integer cents independently
+ * (toStripeCents) and summed as integers — never as floats — before being
+ * sent to Stripe as ONE combined refund, avoiding the float noise a direct
+ * dollar-sum would reintroduce (642.19 + 52.98 !== 695.17 in IEEE-754).
+ * taxAmount is null for a legacy package purchased before this fix existed,
+ * or one purchased with TAX_MODE disabled — refundTaxAmount is exactly 0 in
+ * that case, never invented.
+ *
+ * Real Stripe TEST mode investigation (this milestone) established that a
+ * prepaid package's PaymentIntent — created by a Checkout Session with
+ * automatic_tax (create-prepaid-package-checkout.ts) — is NEVER wired to a
+ * standalone Tax Calculation the way the per-visit flow's PaymentIntents
+ * are (createPaymentIntent's hooks.inputs.tax.calculation). Per Stripe's
+ * own Tax reporting docs (docs.stripe.com/tax/reports), creating an
+ * ordinary refund against a Checkout-Session-originated charge is, on its
+ * own, one of the operations that decreases Stripe's reported tax balance
+ * for that transaction — listed as independent from, not dependent on,
+ * calling the Tax Transactions API's createReversal. There is therefore
+ * nothing left for this function to do beyond issuing that one combined
+ * refund: no findTaxAssociation lookup (confirmed, twice, against real
+ * Checkout-originated PaymentIntents, to always fail with "no associated
+ * tax calculation" — there is nothing to find), and certainly no
+ * createReversal call, which would either fail for the same reason or, far
+ * worse, double-reverse tax Stripe has already adjusted via the refund
+ * itself. (The per-visit flow's own reversal path — refund-visit-payment.ts,
+ * attempt-tax-reversal.ts — is untouched by this change; it uses the other,
+ * manual PaymentIntent+Tax-Calculation integration, where a reversal really
+ * must be created explicitly.)
  *
  * A separately assessed service-visit cancellation fee (service_fee_assessments)
  * is never netted against this refund — package cancellation itself
@@ -43,10 +77,11 @@ export interface RefundPrepaidPackageResult {
  * independent financial fact (see the finalized policy).
  *
  * remainingVisitCount === 0 (all purchased visits already completed) is a
- * valid, expected case: the computed refund is exactly 0, no Stripe refund
- * or tax reversal is attempted, but the package is still marked cancelled
- * (with refundedAmount = 0) via the same atomic RPC, so there is exactly
- * one consistent audit trail for every cancellation regardless of amount.
+ * valid, expected case: both computed refund amounts are exactly 0, no
+ * Stripe refund is attempted, but the package is still marked cancelled
+ * (with refundedAmount = refundedTaxAmount = 0) via the same atomic RPC, so
+ * there is exactly one consistent audit trail for every cancellation
+ * regardless of amount.
  */
 export async function refundPrepaidPackage(
   schedulingRepo: SchedulingRepository,
@@ -65,68 +100,34 @@ export async function refundPrepaidPackage(
     throw new InvalidVisitStateError(`prepaid_packages ${pkg.id} has no recorded packageTotalPaid — cannot compute a refund.`);
   }
 
-  const refundAmount = roundToCents(pkg.packageTotalPaid * (pkg.remainingVisitCount / pkg.purchasedVisitCount));
-  const isFullPackageRefund = pkg.remainingVisitCount === pkg.purchasedVisitCount;
+  const visitFraction = pkg.remainingVisitCount / pkg.purchasedVisitCount;
+  const refundAmount = roundToCents(pkg.packageTotalPaid * visitFraction);
+  const refundTaxAmount = pkg.taxAmount != null ? roundToCents(pkg.taxAmount * visitFraction) : 0;
+  const stripeRefundAmountCents = toStripeCents(refundAmount) + toStripeCents(refundTaxAmount);
 
   let stripeRefundId: string | null = null;
-  let stripePaymentIntentId: string | null = null;
+  let totalRefundAmount: number | null = null;
 
-  if (refundAmount > 0) {
+  if (stripeRefundAmountCents > 0) {
     const paymentAttempt = await bookingRepo.findCompletedPaymentAttemptForBookingOrder(pkg.bookingOrderId);
     if (!paymentAttempt || !paymentAttempt.stripePaymentIntentId) {
       throw new InvalidVisitStateError(`prepaid_packages ${pkg.id} has no completed Stripe payment on file — cannot issue a refund.`);
     }
-    stripePaymentIntentId = paymentAttempt.stripePaymentIntentId;
 
     const refund = await gateway.createRefund({
-      stripePaymentIntentId,
-      amountCents: toStripeCents(refundAmount),
+      stripePaymentIntentId: paymentAttempt.stripePaymentIntentId,
+      amountCents: stripeRefundAmountCents,
       idempotencyKey: `refund:${randomUUID()}`,
     });
     stripeRefundId = refund.id;
+    totalRefundAmount = roundToCents(refund.amountCents / 100);
   }
 
   const updated = await schedulingRepo.cancelPrepaidPackageWithRefundAudit(
     pkg.id,
-    { refundAmount, stripeRefundId, reason: input.reason },
+    { refundAmount, refundTaxAmount, totalRefundAmount, stripeRefundId, reason: input.reason },
     { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole }
   );
 
-  // Phase F / F.1 — Stripe Tax reversal: never rolls back the already-
-  // committed cancellation/refund on failure, deterministically skipped
-  // (not an error) when there is nothing to reverse. When a reversal IS
-  // owed, intent to reverse is durably persisted BEFORE the Stripe call
-  // is attempted — see attempt-tax-reversal.ts.
-  //
-  // findTaxAssociation itself can throw — confirmed against real Stripe
-  // TEST mode: a prepaid package's PaymentIntent is created by a Checkout
-  // Session with automatic_tax (create-prepaid-package-checkout.ts), which
-  // never wires the PaymentIntent to a standalone Tax Calculation via
-  // hooks.inputs.tax.calculation (that path is only used by the per-visit
-  // flow, createPaymentIntent). Stripe's Tax Association API only serves
-  // that latter integration, so it reports "no associated tax calculation"
-  // for every Checkout-originated PaymentIntent, even one that genuinely
-  // collected Stripe Tax. This must never crash an already-committed
-  // refund/cancellation — mirrors the same try/catch already used for this
-  // exact lookup in process-stripe-webhook-event.ts's finalizeVerifiedPayment.
-  if (refundAmount > 0 && stripePaymentIntentId) {
-    try {
-      const taxAssociation = await gateway.findTaxAssociation(stripePaymentIntentId);
-      if (taxAssociation?.committedTransactionId) {
-        const reconciliation = await schedulingRepo.createTaxReversalReconciliation({
-          targetEntityType: "prepaid_package",
-          targetEntityId: updated.id,
-          originalTransactionId: taxAssociation.committedTransactionId,
-          intendedAmount: refundAmount,
-          mode: isFullPackageRefund ? "full" : "partial",
-        });
-        await attemptTaxReversal(schedulingRepo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown Stripe Tax association lookup error";
-      console.error(`[payments] failed to look up Stripe Tax association for prepaid_packages ${pkg.id} refund (paymentIntent=${stripePaymentIntentId}): ${message}`);
-    }
-  }
-
-  return { package: updated, refundAmount };
+  return { package: updated, refundAmount, refundTaxAmount };
 }

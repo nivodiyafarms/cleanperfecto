@@ -140,7 +140,7 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
       }
       const id = `re_${randomUUID()}`;
       state.refunds.set(id, { stripePaymentIntentId: input.stripePaymentIntentId, amountCents: input.amountCents });
-      return { id, status: "succeeded" };
+      return { id, status: "succeeded", amountCents: input.amountCents };
     },
 
     async reverseTaxTransaction(input: ReverseTaxTransactionInput): Promise<{ id: string }> {

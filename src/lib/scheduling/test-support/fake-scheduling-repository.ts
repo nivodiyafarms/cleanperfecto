@@ -588,9 +588,19 @@ export function createFakeSchedulingRepository(
       if (patch.refundAmount < 0) {
         throw new Error(`[fake-scheduling] refund amount must be >= 0, got ${patch.refundAmount}`);
       }
+      if (patch.refundTaxAmount < 0) {
+        throw new Error(`[fake-scheduling] refund tax amount must be >= 0, got ${patch.refundTaxAmount}`);
+      }
       const packageTotalPaid = existing.packageTotalPaid ?? 0;
       if (patch.refundAmount > packageTotalPaid) {
         throw new Error(`[fake-scheduling] refund of ${patch.refundAmount} would exceed the original package principal ${packageTotalPaid} (id=${id})`);
+      }
+      if (existing.taxAmount === null || existing.taxAmount === undefined) {
+        if (patch.refundTaxAmount !== 0) {
+          throw new Error(`[fake-scheduling] prepaid_packages ${id} has no recorded taxAmount — refundTaxAmount must be 0, got ${patch.refundTaxAmount}`);
+        }
+      } else if (patch.refundTaxAmount > existing.taxAmount) {
+        throw new Error(`[fake-scheduling] tax refund of ${patch.refundTaxAmount} would exceed the original taxAmount ${existing.taxAmount} (id=${id})`);
       }
 
       const now = new Date();
@@ -598,7 +608,9 @@ export function createFakeSchedulingRepository(
         ...existing,
         status: "cancelled",
         refundedAmount: patch.refundAmount,
-        refundedAt: patch.refundAmount > 0 ? now : (existing.refundedAt ?? null),
+        refundedTaxAmount: patch.refundTaxAmount,
+        totalRefundedAmount: patch.totalRefundAmount ?? existing.totalRefundedAmount ?? null,
+        refundedAt: patch.refundAmount > 0 || patch.refundTaxAmount > 0 ? now : (existing.refundedAt ?? null),
         cancelledAt: now,
         cancellationReason: patch.reason,
       };
@@ -614,8 +626,11 @@ export function createFakeSchedulingRepository(
         reason: patch.reason,
         metadata: {
           refundAmount: patch.refundAmount,
+          refundTaxAmount: patch.refundTaxAmount,
+          totalRefundAmount: patch.totalRefundAmount,
           stripeRefundId: patch.stripeRefundId,
           packageTotalPaid,
+          taxAmount: existing.taxAmount ?? null,
           purchasedVisitCount: existing.purchasedVisitCount,
           remainingVisitCountAtCancellation: existing.remainingVisitCount,
         },

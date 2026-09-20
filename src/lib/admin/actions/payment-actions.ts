@@ -153,14 +153,19 @@ export async function refundPrepaidPackageAction(_prevState: ActionResult | null
   if (!reason) return actionError("A reason is required for a package cancellation.");
 
   try {
-    const { refundAmount } = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+    const { refundAmount, refundTaxAmount } = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
       prepaidPackageId,
       reason,
       actorAdminUserId: admin.adminUserId,
       actorRole: admin.role,
     });
     revalidatePath("/admin");
-    return actionOk(refundAmount > 0 ? `Package cancelled. $${refundAmount.toFixed(2)} refunded.` : "Package cancelled. No unused credits remained to refund.");
+    const totalRefund = refundAmount + refundTaxAmount;
+    return actionOk(
+      totalRefund > 0
+        ? `Package cancelled. $${refundAmount.toFixed(2)} principal + $${refundTaxAmount.toFixed(2)} tax ($${totalRefund.toFixed(2)} total) refunded.`
+        : "Package cancelled. No unused credits remained to refund."
+    );
   } catch (error) {
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
     throw error;

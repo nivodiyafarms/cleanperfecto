@@ -60,6 +60,8 @@ export interface RefundResult {
   id: string;
   /** Stripe's own refund status: 'pending' | 'requires_action' | 'succeeded' | 'failed' | 'canceled'. */
   status: string;
+  /** The exact amount Stripe actually refunded, in cents, read back from Stripe's own response — the authoritative cross-check for a caller that wants to persist "total refunded" without deriving it by local addition. */
+  amountCents: number;
 }
 
 export interface ReverseTaxTransactionInput {
@@ -208,7 +210,7 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
         { payment_intent: input.stripePaymentIntentId, amount: input.amountCents },
         { idempotencyKey: input.idempotencyKey }
       );
-      return { id: refund.id, status: refund.status ?? "unknown" };
+      return { id: refund.id, status: refund.status ?? "unknown", amountCents: refund.amount };
     },
 
     async reverseTaxTransaction(input) {

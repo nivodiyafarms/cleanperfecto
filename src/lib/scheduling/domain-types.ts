@@ -194,6 +194,10 @@ export interface PrepaidPackageRow {
   purchasedAt: Date;
   /** Set only on cancellation — the exact dollar amount refunded to the original payment method for unused visit credits (0 when all purchased visits had already been completed). Optional for the same pre-existing-fixture reason as packageTotalPaid; refund-prepaid-package.ts treats a missing value as 0 (not yet refunded), same as the DB column's own default. */
   refundedAmount?: number;
+  /** Set once, at cancellation — the proportional share of taxAmount refunded for unused visit credits (taxAmount * remaining/purchased). 0 when taxAmount was null at purchase or nothing was refunded — see refund-prepaid-package.ts and 20260920100000's migration comment for why this is never combined with refundedAmount in the eligibility/bounds math. */
+  refundedTaxAmount?: number;
+  /** The exact amount Stripe actually refunded (refundedAmount + refundedTaxAmount as ONE combined Stripe refund), read directly from Stripe's own refund response — never derived by addition at read time. Null when nothing was refunded yet, or for a package cancelled before this field existed (its refundedAmount alone is the complete historical fact for that cancellation). */
+  totalRefundedAmount?: number | null;
   refundedAt?: Date | null;
   cancelledAt?: Date | null;
   cancellationReason?: string | null;

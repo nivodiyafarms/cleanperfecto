@@ -207,7 +207,7 @@ export interface SchedulingRepository {
    */
   cancelPrepaidPackageWithRefundAudit(
     id: string,
-    patch: { refundAmount: number; stripeRefundId: string | null; reason: string },
+    patch: { refundAmount: number; refundTaxAmount: number; totalRefundAmount: number | null; stripeRefundId: string | null; reason: string },
     audit: { actorAdminUserId: string; actorRole: string }
   ): Promise<PrepaidPackageRow>;
   listPackageVisitPlans(prepaidPackageId: string): Promise<PackageVisitPlanRow[]>;
