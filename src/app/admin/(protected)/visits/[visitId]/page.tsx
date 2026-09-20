@@ -10,8 +10,11 @@ import { cancelVisitAction, completeVisitAction, reassignCleanersAction, resched
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
-import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
+import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxReversalAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
+import { hasCapability } from "@/lib/admin/rbac/capabilities";
+import { requireAdmin } from "@/lib/admin/require-admin";
+import { computeVisitTaxReversalStatus } from "@/lib/admin/visit-tax-reversal-status";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
 import { findAvailableCleaners } from "@/lib/scheduling/find-available-cleaners";
@@ -87,6 +90,25 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(visit.customerId, activeConsentVersion.id) : null;
 
   const visitPayment = visit.status === "completed" ? await schedulingRepo.findServiceVisitPaymentByVisitId(visitId) : null;
+
+  // Tax reconciliation retry UI (owner-admin operational recovery for the
+  // per-visit custom PaymentIntent + Stripe Tax refund flow only — a
+  // tax_reversal_reconciliations row is only ever created by
+  // refund-visit-payment.ts when the original payment had a committed
+  // Stripe Tax transaction to reverse, so this array is naturally empty
+  // for a never-refunded visit, an external zelle/cash settlement (no
+  // Stripe Tax involvement), or a visit whose refund had no tax to
+  // reverse — no extra filtering is needed here beyond that existence
+  // check. Deliberately does NOT apply to prepaid-package Checkout
+  // automatic_tax refunds (refund-prepaid-package.ts never creates one —
+  // see its own doc comment for why Stripe already handles that
+  // automatically), and that page is untouched by this feature.
+  const admin = await requireAdmin();
+  const canRetryTaxReversal = hasCapability(admin.role, "issue_refund");
+  const taxReversalReconciliations = visitPayment
+    ? await schedulingRepo.listTaxReversalReconciliationsForTarget("service_visit_payment", visitPayment.id)
+    : [];
+  const { pendingTaxReversals, hasSucceededTaxReversal } = computeVisitTaxReversalStatus(taxReversalReconciliations);
 
   return (
     <div className="max-w-3xl">
@@ -356,6 +378,33 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               </button>
             </ActionForm>
           )}
+
+          {pendingTaxReversals.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {pendingTaxReversals.map((r) => (
+                <div key={r.id} className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs">
+                  <p className="font-semibold text-amber-900">Tax reconciliation needs attention</p>
+                  <dl className="mt-1 space-y-0.5 text-amber-800">
+                    <div>Customer refund: Completed</div>
+                    <div>Tax reversal: {r.status === "failed" ? "Failed" : "Pending"}</div>
+                    <div>Amount: {formatMoney(r.intendedAmount)}</div>
+                  </dl>
+                  {r.failureMessage && <p className="mt-1 text-amber-700">{r.failureMessage}</p>}
+                  {canRetryTaxReversal ? (
+                    <ActionForm action={retryTaxReversalAction} className="mt-2">
+                      <input type="hidden" name="reconciliationId" value={r.id} />
+                      <button type="submit" className="rounded-md border border-amber-400 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100">
+                        Retry Tax Reconciliation
+                      </button>
+                    </ActionForm>
+                  ) : (
+                    <p className="mt-2 text-amber-700">Retry requires owner access.</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingTaxReversals.length === 0 && hasSucceededTaxReversal && <p className="mt-2 text-xs text-emerald-700">Tax: Reconciled</p>}
         </div>
       )}
 

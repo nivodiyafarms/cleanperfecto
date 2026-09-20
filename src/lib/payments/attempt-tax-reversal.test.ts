@@ -144,6 +144,19 @@ describe("attemptTaxReversal — Phase F.1 durable Tax reversal recovery", () =>
     );
   });
 
+  it("retry never issues a customer refund — it is exclusively Stripe Tax bookkeeping after the monetary refund already succeeded", async () => {
+    const { repo: schedulingRepo } = createFakeSchedulingRepository();
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway({ failNextTaxReversalCreate: true });
+    let reconciliation = await seedPendingReconciliation(schedulingRepo);
+
+    reconciliation = await attemptTaxReversal(schedulingRepo, gateway, reconciliation, ACTOR);
+    expect(reconciliation.status).toBe("failed");
+    await retryTaxReversal(schedulingRepo, gateway, { reconciliationId: reconciliation.id, ...ACTOR });
+
+    expect(gatewayState.createRefundCallCount).toBe(0);
+    expect(gatewayState.refunds.size).toBe(0);
+  });
+
   it("over-reversal prevention: rejects creating a reconciliation with a non-positive intended amount", async () => {
     const { repo: schedulingRepo } = createFakeSchedulingRepository();
 
