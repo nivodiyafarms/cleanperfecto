@@ -91,6 +91,16 @@ export interface AdminPackagePlanHistoryEntry {
 
 export interface AdminPackageDetail extends AdminPackageSummary {
   bookingOrderId: string;
+  /** The pre-tax package principal actually charged — null only for a package purchased before this field existed. See PrepaidPackageRow's own doc comment (domain-types.ts) for why this is never combined with taxAmount in refund math. */
+  packageTotalPaid: number | null;
+  taxAmount: number | null;
+  totalAmountPaid: number | null;
+  /** Set only once the package has been canceled — the immutable historical facts of that one cancellation/refund event. */
+  refundedAmount: number;
+  refundedTaxAmount: number;
+  totalRefundedAmount: number | null;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
   plans: AdminPackageVisitPlan[];
   amendments: AdminPackageAmendment[];
   usages: AdminPackageUsage[];
@@ -102,7 +112,9 @@ export async function findPackageDetail(packageId: string): Promise<AdminPackage
 
   const { data: pkg, error: pkgError } = await supabase
     .from("prepaid_packages")
-    .select("id,customer_id,booking_order_id,frequency,status,purchased_visit_count,remaining_visit_count,effective_price_per_visit")
+    .select(
+      "id,customer_id,booking_order_id,frequency,status,purchased_visit_count,remaining_visit_count,effective_price_per_visit,package_total_paid,tax_amount,total_amount_paid,refunded_amount,refunded_tax_amount,total_refunded_amount,cancelled_at,cancellation_reason"
+    )
     .eq("id", packageId)
     .maybeSingle();
   if (pkgError) {
@@ -179,6 +191,14 @@ export async function findPackageDetail(packageId: string): Promise<AdminPackage
     purchasedVisitCount: pkg.purchased_visit_count,
     remainingVisitCount: pkg.remaining_visit_count,
     effectivePricePerVisit: Number(pkg.effective_price_per_visit),
+    packageTotalPaid: pkg.package_total_paid === null || pkg.package_total_paid === undefined ? null : Number(pkg.package_total_paid),
+    taxAmount: pkg.tax_amount === null || pkg.tax_amount === undefined ? null : Number(pkg.tax_amount),
+    totalAmountPaid: pkg.total_amount_paid === null || pkg.total_amount_paid === undefined ? null : Number(pkg.total_amount_paid),
+    refundedAmount: Number(pkg.refunded_amount ?? 0),
+    refundedTaxAmount: Number(pkg.refunded_tax_amount ?? 0),
+    totalRefundedAmount: pkg.total_refunded_amount === null || pkg.total_refunded_amount === undefined ? null : Number(pkg.total_refunded_amount),
+    cancelledAt: pkg.cancelled_at,
+    cancellationReason: pkg.cancellation_reason,
     plans: ((planRows ?? []) as unknown as PlanRow[]).map((p) => ({
       id: p.id,
       visitNumber: p.visit_number,

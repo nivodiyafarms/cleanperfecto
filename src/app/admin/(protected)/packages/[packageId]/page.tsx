@@ -13,7 +13,11 @@ import {
   replanPackageVisitAction,
   schedulePackageVisitPlanAction,
 } from "@/lib/admin/actions/package-actions";
+import { refundPrepaidPackageAction } from "@/lib/admin/actions/payment-actions";
 import { formatCadenceLabel, formatMoney, formatTimeOfDay } from "@/lib/admin/format";
+import { hasCapability } from "@/lib/admin/rbac/capabilities";
+import { requireAdmin } from "@/lib/admin/require-admin";
+import { computePrepaidPackageRefund } from "@/lib/payments/compute-prepaid-package-refund";
 
 const CADENCE_OPTIONS = [
   { value: "weekly", label: "Weekly" },
@@ -48,6 +52,29 @@ export default async function AdminPackageDetailPage({ params }: PackageDetailPa
 
   const plannableVisitNumbers = pkg.plans.filter((p) => p.status === "planned").map((p) => p.visitNumber);
 
+  // Cancellation/refund UI — reuses the existing, already-authoritative
+  // refundPrepaidPackage() pathway unchanged (via refundPrepaidPackageAction).
+  // The figures below are a PREVIEW only, computed server-side (this is a
+  // Server Component — nothing here runs in the browser) from whatever
+  // package state was current at render time, using the exact same pure
+  // formula (computePrepaidPackageRefund) the action re-runs fresh against
+  // the CURRENT row the moment cancellation is actually submitted. A credit
+  // consumed between this render and the confirm click is reflected in the
+  // real refund regardless of what this preview showed — the form below
+  // submits only prepaidPackageId + reason, never an amount.
+  const admin = await requireAdmin();
+  const canRefundPackage = hasCapability(admin.role, "issue_refund");
+  const consumedVisitCount = pkg.purchasedVisitCount - pkg.remainingVisitCount;
+  const refundPreview =
+    pkg.status === "active" && pkg.packageTotalPaid != null
+      ? computePrepaidPackageRefund({
+          packageTotalPaid: pkg.packageTotalPaid,
+          taxAmount: pkg.taxAmount,
+          remainingVisitCount: pkg.remainingVisitCount,
+          purchasedVisitCount: pkg.purchasedVisitCount,
+        })
+      : null;
+
   return (
     <div className="max-w-3xl">
       <h1 className="text-xl font-semibold text-foreground">{pkg.customerName}&apos;s package</h1>
@@ -57,6 +84,73 @@ export default async function AdminPackageDetailPage({ params }: PackageDetailPa
       <p className="mt-1 text-sm font-medium text-foreground">
         {pkg.remainingVisitCount} of {pkg.purchasedVisitCount} visits remaining
       </p>
+
+      {refundPreview && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <h2 className="text-sm font-semibold text-foreground">Package financial summary</h2>
+          <dl className="mt-2 space-y-1 text-sm text-muted">
+            <div>Package: {pkg.purchasedVisitCount} Cleanings</div>
+            <div>Original package principal: {formatMoney(pkg.packageTotalPaid!)}</div>
+            {pkg.taxAmount != null && <div>Original tax: {formatMoney(pkg.taxAmount)}</div>}
+            {pkg.totalAmountPaid != null && <div>Original total paid: {formatMoney(pkg.totalAmountPaid)}</div>}
+            <div>
+              Completed/consumed visits: {consumedVisitCount} of {pkg.purchasedVisitCount}
+            </div>
+            <div>Remaining credits: {pkg.remainingVisitCount}</div>
+          </dl>
+
+          {canRefundPackage ? (
+            <details className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-red-700">Cancel Package &amp; Refund Remaining Balance</summary>
+              <div className="mt-3 space-y-1 text-xs text-muted">
+                <div>
+                  Completed visits: {consumedVisitCount} of {pkg.purchasedVisitCount}
+                </div>
+                <div>Remaining visits: {pkg.remainingVisitCount}</div>
+                <div className="mt-2 font-medium text-foreground">Refund principal: {formatMoney(refundPreview.refundAmount)}</div>
+                <div className="font-medium text-foreground">Refund tax: {formatMoney(refundPreview.refundTaxAmount)}</div>
+                <div className="font-semibold text-foreground">Total refund: {formatMoney(refundPreview.refundAmount + refundPreview.refundTaxAmount)}</div>
+              </div>
+              <ActionForm action={refundPrepaidPackageAction} className="mt-3">
+                <input type="hidden" name="prepaidPackageId" value={packageId} />
+                <label className="block text-xs font-medium text-muted" htmlFor="cancelPackageReason">
+                  Reason (required)
+                </label>
+                <input
+                  id="cancelPackageReason"
+                  name="reason"
+                  type="text"
+                  required
+                  className="mt-1 w-full rounded-lg border border-border px-3 py-1.5 text-sm"
+                />
+                <button type="submit" className="mt-3 rounded-lg border border-red-300 px-4 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50">
+                  Confirm Cancellation &amp; Refund {formatMoney(refundPreview.refundAmount + refundPreview.refundTaxAmount)}
+                </button>
+              </ActionForm>
+            </details>
+          ) : (
+            <p className="mt-3 text-xs text-muted">Cancellation/refund requires owner access.</p>
+          )}
+        </div>
+      )}
+
+      {pkg.status === "cancelled" && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <h2 className="text-sm font-semibold text-foreground">Package canceled — refund issued</h2>
+          <dl className="mt-2 space-y-1 text-sm text-muted">
+            {pkg.packageTotalPaid != null && <div>Original principal: {formatMoney(pkg.packageTotalPaid)}</div>}
+            <div>Refunded principal: {formatMoney(pkg.refundedAmount)}</div>
+            {pkg.taxAmount != null && <div>Original tax: {formatMoney(pkg.taxAmount)}</div>}
+            <div>Refunded tax: {formatMoney(pkg.refundedTaxAmount)}</div>
+            {pkg.totalRefundedAmount != null && (
+              <div className="font-medium text-foreground">Total refunded: {formatMoney(pkg.totalRefundedAmount)}</div>
+            )}
+            <div>Remaining package credits: {pkg.remainingVisitCount}</div>
+            <div>Package status: {pkg.status}</div>
+            {pkg.cancellationReason && <div>Reason: {pkg.cancellationReason}</div>}
+          </dl>
+        </div>
+      )}
 
       <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold text-foreground">Visit plan</h2>

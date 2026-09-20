@@ -5,6 +5,7 @@ import type { PrepaidPackageRow } from "@/lib/scheduling/domain-types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { roundToCents } from "@/lib/pricing/money";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { computePrepaidPackageRefund } from "./compute-prepaid-package-refund";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundPrepaidPackageInput {
@@ -100,9 +101,12 @@ export async function refundPrepaidPackage(
     throw new InvalidVisitStateError(`prepaid_packages ${pkg.id} has no recorded packageTotalPaid — cannot compute a refund.`);
   }
 
-  const visitFraction = pkg.remainingVisitCount / pkg.purchasedVisitCount;
-  const refundAmount = roundToCents(pkg.packageTotalPaid * visitFraction);
-  const refundTaxAmount = pkg.taxAmount != null ? roundToCents(pkg.taxAmount * visitFraction) : 0;
+  const { refundAmount, refundTaxAmount } = computePrepaidPackageRefund({
+    packageTotalPaid: pkg.packageTotalPaid,
+    taxAmount: pkg.taxAmount ?? null,
+    remainingVisitCount: pkg.remainingVisitCount,
+    purchasedVisitCount: pkg.purchasedVisitCount,
+  });
   const stripeRefundAmountCents = toStripeCents(refundAmount) + toStripeCents(refundTaxAmount);
 
   let stripeRefundId: string | null = null;

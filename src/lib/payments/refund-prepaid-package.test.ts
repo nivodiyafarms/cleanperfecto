@@ -305,4 +305,32 @@ describe("refundPrepaidPackage — Phase H.2: proportional tax refund", () => {
     const result = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, { prepaidPackageId: "pkg-1", reason: "full refund", actorAdminUserId: "owner-1", actorRole: "owner_admin" });
     expect(result.refundTaxAmount).toBe(63.58);
   });
+
+  it("stale UI state: a credit consumed after the admin page rendered its preview is reflected in the actual refund, never the stale earlier reading", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository({ prepaidPackages: [makeTaxedPackage({ remainingVisitCount: 6 })] });
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    await seedCompletedPaymentAttempt(bookingRepo, "booking-1");
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
+
+    // Simulates what the admin package page read when it rendered its refund preview (6/6 remaining -> full refund).
+    const renderedPreview = await schedulingRepo.findPrepaidPackageById("pkg-1");
+    expect(renderedPreview!.remainingVisitCount).toBe(6);
+
+    // Between that render and the owner's click, a completely unrelated visit completion consumes one credit.
+    const currentlySeeded = state.prepaidPackagesById.get("pkg-1")!;
+    state.prepaidPackagesById.set("pkg-1", { ...currentlySeeded, remainingVisitCount: 5 });
+
+    // The action re-fetches fresh — it never trusts the earlier preview's remainingVisitCount.
+    const result = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+      prepaidPackageId: "pkg-1",
+      reason: "owner clicked using a now-stale preview",
+      actorAdminUserId: "owner-1",
+      actorRole: "owner_admin",
+    });
+
+    expect(result.refundAmount).toBe(642.19); // 5/6, not the stale 6/6 preview's 770.63
+    expect(result.refundTaxAmount).toBe(52.98);
+    const [refund] = gatewayState.refunds.values();
+    expect(refund.amountCents).toBe(69517);
+  });
 });
