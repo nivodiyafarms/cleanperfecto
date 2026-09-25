@@ -439,10 +439,24 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       // column rather than an embedded/joined one; unassigned_at IS NULL is
       // then applied client-side over the nested assignment rows, avoiding
       // any ambiguity in filtering an embedded resource's own columns.
+      //
+      // Deliberately NOT filtered by service_visits.status: per this
+      // interface's own contract (see SchedulingRepository.listActiveAssignmentsInRange
+      // in repository.ts) and the service_visit_assignments table comment
+      // (20260822090500_enable_btree_gist_and_create_service_visit_assignments.sql),
+      // unassigned_at IS NULL is the sole source of truth for "this cleaner
+      // is genuinely reserved for this interval" — true for 'scheduled',
+      // 'work_finished', AND 'completed' alike (only cancellation clears
+      // unassigned_at; a merely-'requested' visit never has a row here at
+      // all). Filtering to status='scheduled' here previously caused the
+      // admin availability screen to show a cleaner as free during a slot
+      // already occupied by one of their work_finished/completed visits,
+      // which the set_service_visit_schedule() EXCLUDE constraint then
+      // correctly rejected at write time — a real read/write mismatch, not
+      // just a cosmetic one.
       let query = supabase
         .from("service_visits")
         .select("confirmed_start_at,confirmed_end_at,turnaround_buffer_minutes,service_visit_assignments(cleaner_id,unassigned_at)")
-        .eq("status", "scheduled")
         .gte("confirmed_start_at", rangeStartUtc.toISOString())
         .lt("confirmed_start_at", rangeEndUtc.toISOString());
       if (excludeServiceVisitId) {

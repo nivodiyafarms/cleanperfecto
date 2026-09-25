@@ -1,6 +1,8 @@
 import "server-only";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { sanitizeNextPath } from "./next-path";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -59,6 +61,18 @@ async function findActiveCustomerAccountBySupabaseUserId(supabaseUserId: string)
   return data ? { id: data.id, customerId: data.customer_id } : null;
 }
 
+/**
+ * Builds the /my/activate redirect target for a not-yet-linked customer,
+ * carrying the originally-requested deep link through as ?next= (see
+ * requireCustomer()'s own doc comment for why). Pure and separated from the
+ * headers()/redirect() calls so this stays unit-testable without a real
+ * Next.js request context, same rationale as resolveCustomerSession above.
+ */
+export function buildActivateRedirectUrl(requestedPath: string | null): string {
+  const next = sanitizeNextPath(requestedPath);
+  return `/my/activate?next=${encodeURIComponent(next)}`;
+}
+
 async function resolveCustomerSessionForCurrentRequest(lookup: CustomerAccountLookup): Promise<CustomerSessionResult> {
   const supabase = await createSupabaseServerClient();
   const {
@@ -83,6 +97,14 @@ async function resolveCustomerSessionForCurrentRequest(lookup: CustomerAccountLo
  * admin's AdminUnauthorizedError (a hard "you will never be an admin"),
  * "not linked yet" is an EXPECTED first-time state for an existing customer
  * activating portal access, not an error screen.
+ *
+ * Both redirects forward the originally-requested path (proxy.ts's
+ * x-cleanperfecto-path header — see that file's own comment) as ?next=, so
+ * a customer whose very first authenticated portal visit is a deep link
+ * (a notification link or the Payment QR straight to
+ * /my/payments?visit=<id>, an invoice, a receipt, ...) still lands there
+ * after activation instead of the generic /my dashboard. Mirrors the exact
+ * next-param handling /my/auth/callback already does post-login.
  */
 export async function requireCustomer(): Promise<CustomerSession> {
   const result = await resolveCustomerSessionForCurrentRequest(findActiveCustomerAccountBySupabaseUserId);
@@ -91,7 +113,8 @@ export async function requireCustomer(): Promise<CustomerSession> {
     redirect("/my/login");
   }
   if (result.status === "not_linked") {
-    redirect("/my/activate");
+    const requestHeaders = await headers();
+    redirect(buildActivateRedirectUrl(requestHeaders.get("x-cleanperfecto-path")));
   }
   return result.session;
 }

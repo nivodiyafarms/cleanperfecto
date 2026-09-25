@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCustomerSession } from "./require-customer";
+import { buildActivateRedirectUrl, resolveCustomerSession } from "./require-customer";
 
 describe("resolveCustomerSession", () => {
   it("is unauthenticated when there is no supabase user id", () => {
@@ -27,5 +27,27 @@ describe("resolveCustomerSession", () => {
       return { id: "acct-4", customerId: "customer-4" };
     });
     expect(queriedId).toBe("user-4");
+  });
+});
+
+describe("buildActivateRedirectUrl", () => {
+  // Regression for a real E2E-discovered bug: a customer's first-ever
+  // authenticated portal visit via a deep link (e.g. the Finalize & Send
+  // notification's /my/payments?visit=<id>, or the on-site Payment QR)
+  // used to land back on the generic /my dashboard after activation,
+  // because requireCustomer()'s not_linked redirect dropped the originally
+  // -requested path entirely.
+  it("preserves a deep link's path and query string", () => {
+    expect(buildActivateRedirectUrl("/my/payments?visit=edc7d604-4e54-4746-b968-5c7052fff752")).toBe(
+      "/my/activate?next=%2Fmy%2Fpayments%3Fvisit%3Dedc7d604-4e54-4746-b968-5c7052fff752"
+    );
+  });
+
+  it("defaults to /my when no path was forwarded", () => {
+    expect(buildActivateRedirectUrl(null)).toBe("/my/activate?next=%2Fmy");
+  });
+
+  it("never forwards a path outside the /my allowlist", () => {
+    expect(buildActivateRedirectUrl("https://evil.example/phish")).toBe("/my/activate?next=%2Fmy");
   });
 });

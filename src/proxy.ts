@@ -22,6 +22,12 @@ import { getSupabasePublicConfig } from "@/lib/supabase/env";
  */
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  // Full path + query, for forwarding as ?next= — a deep link like
+  // /my/payments?visit=<id> must survive both the login redirect below AND
+  // requireCustomer()'s own "authenticated but not yet linked" redirect to
+  // /my/activate (see requestHeaders below), or the customer lands on the
+  // generic dashboard instead of the page their notification/QR pointed at.
+  const requestedPath = pathname + request.nextUrl.search;
 
   // /admin/login must never be redirected to itself — an unauthenticated
   // visit there would otherwise loop forever, since the matcher below
@@ -42,7 +48,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next({ request });
+  // Forwarded to Server Components (see requireCustomer()) as a request
+  // header, since a generically-called function has no other way to learn
+  // the path that was actually requested — the documented Next.js pattern
+  // for exposing pathname/search to Server Components.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-cleanperfecto-path", requestedPath);
+
+  let response = NextResponse.next({ request: { headers: requestHeaders } });
 
   const { supabaseUrl, supabasePublishableKey } = getSupabasePublicConfig();
   const supabase = createServerClient(supabaseUrl, supabasePublishableKey, {
@@ -54,7 +67,7 @@ export async function proxy(request: NextRequest) {
         for (const { name, value } of cookiesToSet) {
           request.cookies.set(name, value);
         }
-        response = NextResponse.next({ request });
+        response = NextResponse.next({ request: { headers: requestHeaders } });
         for (const { name, value, options } of cookiesToSet) {
           response.cookies.set(name, value, options);
         }
@@ -77,7 +90,7 @@ export async function proxy(request: NextRequest) {
     // unchanged (no admin notification-link use case exists).
     if (pathname.startsWith("/my")) {
       const loginUrl = new URL("/my/login", request.url);
-      loginUrl.searchParams.set("next", sanitizeNextPath(pathname));
+      loginUrl.searchParams.set("next", sanitizeNextPath(requestedPath));
       return NextResponse.redirect(loginUrl);
     }
     return NextResponse.redirect(new URL("/admin/login", request.url));
