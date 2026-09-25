@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import ActionForm from "@/components/admin/ActionForm";
 import { formatMoney } from "@/lib/admin/format";
 import { approveVisitPricingIncreaseAction } from "@/lib/customer-portal/actions/scope-actions";
 import { getPaymentsSummary } from "@/lib/customer-portal/queries";
+import { assertVisitBelongsToCustomer, CustomerOwnershipError } from "@/lib/customer-portal/ownership";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { canCreateStripeCharge } from "@/lib/config/payment-capabilities";
@@ -16,14 +18,29 @@ export default async function MyPaymentsPage({ searchParams }: MyPaymentsPagePro
   const session = await requireCustomer();
   const query = await searchParams;
   const stripeChargesAvailable = canCreateStripeCharge();
+  const repo = createSupabaseSchedulingRepository();
 
   // A deep link (e.g. from the Final Total notification email or the
   // on-site QR code) renders ONE focused screen instead of the full
-  // dashboard — VisitPaymentFlow's own actions (getVisitPaymentReviewAction
-  // etc.) already call assertVisitBelongsToCustomer on every load/mutation,
-  // so a cross-customer id here safely errors inside the component rather
-  // than ever exposing another customer's charges.
+  // dashboard. Ownership is checked HERE, before VisitPaymentFlow ever
+  // mounts — the exact same notFound()-on-CustomerOwnershipError pattern
+  // already used by /my/invoices/[invoiceId] and /my/receipts/[receiptId]
+  // — so a cross-customer or bogus visit id renders a plain 404 instead of
+  // a client component stuck on an uncaught server-action rejection (a
+  // real bug: the ownership check used to live ONLY inside
+  // VisitPaymentFlow's own actions, which throw CustomerOwnershipError
+  // uncaught by design — see payment-actions.ts's toErrorResult — so the
+  // client's load() promise never resolved and the screen spun forever).
+  // Those per-action checks still run on every load/mutation as
+  // defense-in-depth; this is the first gate, not a replacement.
   if (query.visit) {
+    try {
+      await assertVisitBelongsToCustomer(repo, query.visit, session.customerId);
+    } catch (error) {
+      if (error instanceof CustomerOwnershipError) notFound();
+      throw error;
+    }
+
     return (
       <div className="space-y-4">
         <h1 className="text-xl font-semibold text-foreground">Final Total</h1>
@@ -36,7 +53,6 @@ export default async function MyPaymentsPage({ searchParams }: MyPaymentsPagePro
   }
 
   const summary = await getPaymentsSummary(session.customerId);
-  const repo = createSupabaseSchedulingRepository();
   const visits = await repo.listServiceVisitsForCustomer(session.customerId);
   const visitsNeedingPayment: string[] = [];
   for (const visit of visits) {

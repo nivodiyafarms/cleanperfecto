@@ -90,6 +90,14 @@ export async function finalizeAndSend(
   const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const addOnIds = (existingPricing?.addOnIds ?? []) as AddOnId[];
   let pricing = await estimateVisitPricing(repo, { serviceVisitId: input.serviceVisitId, addOnIds }, bookingRepo);
+  // Captured BEFORE confirmVisitPricing (below) can overwrite it — see that
+  // function's own repo method, which always sets
+  // previously_approved_amount to the row's OWN total_amount at confirm
+  // time. Without capturing it here first, a genuine price increase's
+  // actual prior baseline would never appear in any durable record once
+  // confirmed: the pricing row would show only the new amount, and (before
+  // this fix) this event recorded nothing about what it increased FROM.
+  const priorApprovedAmount = pricing.previouslyApprovedAmount;
 
   let resultVisit = visit;
   if (!pricing.requiresCustomerApproval) {
@@ -106,7 +114,7 @@ export async function finalizeAndSend(
     serviceVisitId: input.serviceVisitId,
     eventType: "final_total_sent",
     actor: input.actor,
-    previousState: null,
+    previousState: priorApprovedAmount !== null ? { previouslyApprovedAmount: priorApprovedAmount } : null,
     newState: { totalAmount: pricing.totalAmount, requiresCustomerApproval: pricing.requiresCustomerApproval },
     notes: null,
   });

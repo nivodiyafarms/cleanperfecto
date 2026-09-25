@@ -190,6 +190,51 @@ describe("finalizeAndSend", () => {
     expect(notices.length).toBe(1);
   });
 
+  // Regression: confirmVisitPricing() (run once the customer approves)
+  // always overwrites previously_approved_amount to the NEW total — so the
+  // service_visit_pricing row itself can never again show what the amount
+  // increased FROM once confirmed. The final_total_sent event, logged here
+  // at send time (before that overwrite), is the only place the prior
+  // baseline survives durably.
+  it("records the prior approved amount on the final_total_sent event, since the pricing row's own field gets overwritten once confirmed", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit, baseAmount } = await seedWorkFinishedVisit(repo, state);
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const [sentEvent] = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
+    expect(sentEvent.previousState).toEqual({ previouslyApprovedAmount: baseAmount });
+    expect(sentEvent.newState).toEqual({ totalAmount: baseAmount + 30, requiresCustomerApproval: true });
+  });
+
+  it("records no prior-approved-amount on the final_total_sent event when there was never a baseline to increase from", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+    // No baseline exists yet for THIS test — undo the seed helper's own
+    // pre-confirmation so this is a genuine first-ever finalize.
+    await repo.upsertServiceVisitPricing({
+      serviceVisitId: visit.id,
+      pricingVersion: "pricing-engine-2026-08",
+      pricingSnapshot: {},
+      baseAmount: 100,
+      addOnIds: [],
+      addOnAmount: 0,
+      totalAmount: 100,
+      amountDueFromCustomer: 100,
+      priceStatus: "estimated",
+      requiresCustomerApproval: false,
+      previouslyApprovedAmount: null,
+    });
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const [sentEvent] = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
+    expect(sentEvent.previousState).toBeNull();
+  });
+
   it("is idempotent: a repeat call after the visit is already completed short-circuits to alreadySent without re-running pricing/events/notifications", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();
