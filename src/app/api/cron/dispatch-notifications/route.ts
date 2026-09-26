@@ -10,6 +10,8 @@ import { createNotYetSupportedNotificationSmsSender } from "@/lib/notifications/
 import { createFakeEmailSender } from "@/lib/notifications/test-support/fake-email-sender";
 import { createFakeSmsSender } from "@/lib/notifications/test-support/fake-sms-sender";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
+import { createSupabaseCustomerAuthLinkGenerator } from "@/lib/customer-portal/customer-auth-link";
+import { createFakeCustomerAuthLinkGenerator } from "@/lib/customer-portal/test-support/fake-customer-auth-link-generator";
 
 /**
  * Invoked every 5 minutes by Supabase Cron (pg_cron + pg_net calling this
@@ -48,8 +50,10 @@ async function handleDispatch(request: NextRequest): Promise<NextResponse> {
   const dispatchMode = process.env.NOTIFICATION_DISPATCH_MODE;
   const email = dispatchMode === "fake" ? createFakeEmailSender().sender : createResendNotificationEmailSender();
   const sms = dispatchMode === "fake" ? createFakeSmsSender().sender : createNotYetSupportedNotificationSmsSender();
+  const authLinkGenerator =
+    dispatchMode === "fake" ? createFakeCustomerAuthLinkGenerator().generator : createSupabaseCustomerAuthLinkGenerator();
 
-  const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, getNotificationRecipientContact);
+  const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, getNotificationRecipientContact, new Date(), authLinkGenerator);
   return NextResponse.json({ ok: true, mode: dispatchMode === "fake" ? "fake" : "live", ...result });
 }
 

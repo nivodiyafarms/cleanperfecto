@@ -12,6 +12,15 @@ export interface NotificationContentInput {
   timezone: string;
   /** Deep-links final_total_ready straight to that visit's Final Total screen (/my/payments?visit=<id>) instead of the generic dashboard. Optional/unused for every other type today — see PORTAL_PATH_BY_TYPE. */
   serviceVisitId?: string | null;
+  /**
+   * A one-click authenticated link (see customer-auth-link.ts), already
+   * pointed at this exact notification's destination — used verbatim
+   * instead of the plain (login-required) portal link when present. Only
+   * ever supplied for final_total_ready today; the dispatcher falls back to
+   * the plain link on any generation failure, so this stays optional
+   * rather than a hard requirement.
+   */
+  authenticatedLink?: string | null;
 }
 
 export interface NotificationContent {
@@ -116,10 +125,18 @@ export function buildNotificationContent(input: NotificationContentInput): Notif
       throw new Error("GOOGLE_REVIEW_URL is not configured — refusing to build review_request content with no destination.");
     }
     link = googleReviewUrl;
+  } else if (input.notificationType === "final_total_ready" && input.authenticatedLink) {
+    // One-click authenticated link — skips the login/second-email step
+    // entirely. See customer-auth-link.ts and the dispatcher's own
+    // fallback-on-failure handling.
+    link = input.authenticatedLink;
   } else if (input.notificationType === "final_total_ready" && input.serviceVisitId) {
     // Deep-links straight to this visit's Final Total screen — see
     // /my/(protected)/payments/page.tsx's ?visit= handling — rather than the
-    // generic dashboard every other payment type still links to.
+    // generic dashboard every other payment type still links to. Falls
+    // through to here whenever an authenticated link could not be
+    // generated; the customer still gets a working link, just one that
+    // requires the normal /my/login sign-in step.
     link = buildPortalLink(`/my/payments?visit=${input.serviceVisitId}`);
   } else {
     link = buildPortalLink(PORTAL_PATH_BY_TYPE[input.notificationType] ?? "/my");

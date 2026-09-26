@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
+import { resolveCustomerAuthCallbackRedirectPath } from "@/lib/customer-portal/resolve-customer-auth-callback-redirect";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
 /**
@@ -21,10 +22,10 @@ export async function GET(request: NextRequest) {
   const next = sanitizeNextPath(searchParams.get("next"));
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/my/login`);
+    return NextResponse.redirect(`${origin}${resolveCustomerAuthCallbackRedirectPath({ status: "missing_code" })}`);
   }
 
-  const response = NextResponse.redirect(`${origin}/my/activate?next=${encodeURIComponent(next)}`);
+  const response = NextResponse.redirect(`${origin}${resolveCustomerAuthCallbackRedirectPath({ status: "success", next })}`);
 
   const cookieStore = await cookies();
   const { supabaseUrl, supabasePublishableKey } = getSupabasePublicConfig();
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
 
   const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) {
-    return NextResponse.redirect(`${origin}/my/login`);
+    return NextResponse.redirect(`${origin}${resolveCustomerAuthCallbackRedirectPath({ status: "exchange_failed" })}`);
   }
 
   return response;

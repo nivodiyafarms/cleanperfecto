@@ -1,5 +1,6 @@
 import type { ServiceVisitNotificationRow } from "@/lib/scheduling/domain-types";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
+import type { CustomerAuthLinkGenerator } from "@/lib/customer-portal/customer-auth-link";
 import { buildNotificationContent } from "./notification-content";
 import type { NotificationRecipientContact } from "./customer-contact-lookup";
 import type { CustomerNotificationPreferencesRepository } from "./customer-notification-preferences-repository";
@@ -81,7 +82,14 @@ export async function dispatchDueNotifications(
   preferencesRepo: CustomerNotificationPreferencesRepository,
   senders: NotificationSenders,
   contactLookup: ContactLookup,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /**
+   * Optional so every existing/internal caller and test is unaffected —
+   * omitted entirely means final_total_ready always uses the plain
+   * (login-required) portal link, exactly today's behavior. The real cron
+   * route is the one caller that supplies createSupabaseCustomerAuthLinkGenerator().
+   */
+  authLinkGenerator?: CustomerAuthLinkGenerator
 ): Promise<DispatchDueNotificationsResult> {
   const claimed = await repo.claimDueServiceVisitNotifications(CLAIM_BATCH_LIMIT, STALE_CLAIM_MINUTES);
   const result: DispatchDueNotificationsResult = { claimed: claimed.length, sent: 0, retried: 0, failedTerminal: 0 };
@@ -104,12 +112,30 @@ export async function dispatchDueNotifications(
         notification.serviceVisitId ? repo.findServiceVisitById(notification.serviceVisitId) : Promise.resolve(null),
       ]);
 
+      // final_total_ready gets a one-click authenticated link when possible
+      // — see customer-auth-link.ts. A generation failure (transient
+      // Supabase API issue, misconfigured NEXT_PUBLIC_SITE_URL, etc.) is
+      // logged and gracefully degraded to the plain portal link rather than
+      // failing/retrying the whole notification: the customer still gets a
+      // working, ownership-checked link either way, just one that may
+      // require the normal /my/login sign-in step.
+      let authenticatedLink: string | null = null;
+      if (notification.notificationType === "final_total_ready" && notification.channel === "email" && contact?.email && authLinkGenerator) {
+        const outcome = await authLinkGenerator.generate(contact.email, `/my/payments?visit=${notification.serviceVisitId}`);
+        if (outcome.ok) {
+          authenticatedLink = outcome.actionLink;
+        } else {
+          console.warn(`[notifications] customer auth link generation failed for notification ${notification.id}: ${outcome.reason}`);
+        }
+      }
+
       const content = buildNotificationContent({
         notificationType: notification.notificationType,
         customerName: contact?.name ?? "there",
         visitStartAtUtc: visit?.confirmedStartAt ?? null,
         timezone: visit?.timezone ?? "America/Chicago",
         serviceVisitId: notification.serviceVisitId,
+        authenticatedLink,
       });
 
       let outcome: { sent: boolean; providerMessageId?: string | null; failureReason?: string };

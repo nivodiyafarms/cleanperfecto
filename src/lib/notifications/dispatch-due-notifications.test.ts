@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
+import { createFakeCustomerAuthLinkGenerator } from "@/lib/customer-portal/test-support/fake-customer-auth-link-generator";
 import { dispatchDueNotifications } from "./dispatch-due-notifications";
 import { enqueueNotification } from "./enqueue-notification";
 import { createFakeCustomerNotificationPreferencesRepository } from "./test-support/fake-customer-notification-preferences-repository";
@@ -318,5 +319,132 @@ describe("dispatchDueNotifications", () => {
     expect(result.sent).toBe(1);
     expect(smsState.sentSms.length).toBe(1);
     expect(smsState.sentSms[0].to).toBe(CONTACT.phone);
+  });
+
+  describe("final_total_ready one-click authenticated link", () => {
+    it("without an authLinkGenerator supplied, sends the plain (login-required) portal link — existing behavior unaffected", async () => {
+      const { repo } = createFakeSchedulingRepository();
+      const visit = await seedVisit(repo);
+      await enqueueNotification(repo, {
+        serviceVisitId: visit.id,
+        customerId: "customer-1",
+        notificationType: "final_total_ready",
+        channel: "email",
+        scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+        versionKey: "v1",
+      });
+      const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+      const { sender: email, state: emailState } = createFakeEmailSender();
+      const { sender: sms } = createFakeSmsSender();
+
+      const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"));
+
+      expect(result).toEqual({ claimed: 1, sent: 1, retried: 0, failedTerminal: 0 });
+      expect(emailState.sentEmails[0].text).toContain(`/my/payments?visit=${visit.id}`);
+    });
+
+    it("with an authLinkGenerator supplied, sends the one-click authenticated link instead, calling the generator with the customer's own contact email and the visit-specific path", async () => {
+      const { repo } = createFakeSchedulingRepository();
+      const visit = await seedVisit(repo);
+      await enqueueNotification(repo, {
+        serviceVisitId: visit.id,
+        customerId: "customer-1",
+        notificationType: "final_total_ready",
+        channel: "email",
+        scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+        versionKey: "v1",
+      });
+      const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+      const { sender: email, state: emailState } = createFakeEmailSender();
+      const { sender: sms } = createFakeSmsSender();
+      const { generator: authLinkGenerator, state: authState } = createFakeCustomerAuthLinkGenerator();
+
+      const result = await dispatchDueNotifications(
+        repo,
+        preferencesRepo,
+        { email, sms },
+        contactLookup,
+        new Date("2026-08-24T01:00:00Z"),
+        authLinkGenerator
+      );
+
+      expect(result).toEqual({ claimed: 1, sent: 1, retried: 0, failedTerminal: 0 });
+      expect(authState.calls).toEqual([{ email: CONTACT.email, path: `/my/payments?visit=${visit.id}` }]);
+      expect(emailState.sentEmails[0].text).not.toContain(`/my/payments?visit=${visit.id}`);
+      expect(emailState.sentEmails[0].text).toContain("fake.supabase.co");
+    });
+
+    it("gracefully degrades to the plain portal link (never fails/retries the notification) when the authenticated link generator fails", async () => {
+      const { repo } = createFakeSchedulingRepository();
+      const visit = await seedVisit(repo);
+      await enqueueNotification(repo, {
+        serviceVisitId: visit.id,
+        customerId: "customer-1",
+        notificationType: "final_total_ready",
+        channel: "email",
+        scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+        versionKey: "v1",
+      });
+      const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+      const { sender: email, state: emailState } = createFakeEmailSender();
+      const { sender: sms } = createFakeSmsSender();
+      const { generator: authLinkGenerator } = createFakeCustomerAuthLinkGenerator({
+        behavior: () => ({ ok: false, reason: "simulated Supabase Admin API failure" }),
+      });
+
+      const result = await dispatchDueNotifications(
+        repo,
+        preferencesRepo,
+        { email, sms },
+        contactLookup,
+        new Date("2026-08-24T01:00:00Z"),
+        authLinkGenerator
+      );
+
+      expect(result).toEqual({ claimed: 1, sent: 1, retried: 0, failedTerminal: 0 });
+      expect(emailState.sentEmails[0].text).toContain(`/my/payments?visit=${visit.id}`);
+    });
+
+    it("never calls the authLinkGenerator for a non-final_total_ready notification, even when one is supplied", async () => {
+      const { repo } = createFakeSchedulingRepository();
+      const visit = await seedVisit(repo);
+      await enqueueNotification(repo, {
+        serviceVisitId: visit.id,
+        customerId: "customer-1",
+        notificationType: "appointment_confirmed",
+        channel: "email",
+        scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+        versionKey: "v1",
+      });
+      const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+      const { sender: email } = createFakeEmailSender();
+      const { sender: sms } = createFakeSmsSender();
+      const { generator: authLinkGenerator, state: authState } = createFakeCustomerAuthLinkGenerator();
+
+      await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"), authLinkGenerator);
+
+      expect(authState.calls).toEqual([]);
+    });
+
+    it("never calls the authLinkGenerator for an sms-channel final_total_ready row, even when one is supplied", async () => {
+      const { repo } = createFakeSchedulingRepository();
+      const visit = await seedVisit(repo);
+      await enqueueNotification(repo, {
+        serviceVisitId: visit.id,
+        customerId: "customer-1",
+        notificationType: "final_total_ready",
+        channel: "sms",
+        scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+        versionKey: "v1",
+      });
+      const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository({ "customer-1": true });
+      const { sender: email } = createFakeEmailSender();
+      const { sender: sms } = createFakeSmsSender();
+      const { generator: authLinkGenerator, state: authState } = createFakeCustomerAuthLinkGenerator();
+
+      await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"), authLinkGenerator);
+
+      expect(authState.calls).toEqual([]);
+    });
   });
 });

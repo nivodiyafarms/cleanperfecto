@@ -28,4 +28,46 @@ describe("buildNotificationContent", () => {
       expect(() => buildNotificationContent({ notificationType: "review_request", customerName: "Jane", visitStartAtUtc: null, timezone: "America/Chicago" })).toThrow();
     });
   });
+
+  describe("final_total_ready", () => {
+    it("deep-links to the plain (login-required) portal path when no authenticated link was generated", () => {
+      const content = buildNotificationContent({
+        notificationType: "final_total_ready",
+        customerName: "Jane",
+        visitStartAtUtc: null,
+        timezone: "America/Chicago",
+        serviceVisitId: "visit-123",
+      });
+      expect(content.text).toContain("/my/payments?visit=visit-123");
+    });
+
+    it("uses the one-click authenticated link verbatim instead of the plain portal path when one was generated", () => {
+      const authenticatedLink = "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink&redirect_to=...";
+      const content = buildNotificationContent({
+        notificationType: "final_total_ready",
+        customerName: "Jane",
+        visitStartAtUtc: null,
+        timezone: "America/Chicago",
+        serviceVisitId: "visit-123",
+        authenticatedLink,
+      });
+      expect(content.text).toContain(authenticatedLink);
+      expect(content.html).toContain(authenticatedLink);
+      expect(content.text).not.toContain("/my/payments?visit=visit-123");
+    });
+
+    it("still uses the customer-friendly 'Confirm Final Total & Pay' label with the authenticated link, never developer/auth wording", () => {
+      const content = buildNotificationContent({
+        notificationType: "final_total_ready",
+        customerName: "Jane",
+        visitStartAtUtc: null,
+        timezone: "America/Chicago",
+        serviceVisitId: "visit-123",
+        authenticatedLink: "https://project.supabase.co/auth/v1/verify?token=abc",
+      });
+      expect(content.text).toContain("Confirm Final Total & Pay");
+      expect(content.text.toLowerCase()).not.toContain("magic link");
+      expect(content.text.toLowerCase()).not.toContain("otp");
+    });
+  });
 });
