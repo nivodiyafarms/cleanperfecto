@@ -320,6 +320,10 @@ async function seedActivePrepaidPackage(remainingVisitCount = 4) {
         effectivePricePerVisit: 150,
         status: "active",
         purchasedAt: new Date("2026-08-01T00:00:00Z"),
+        // Authoritative-zero, not unknown — a legacy (taxAmount null/undefined)
+        // package is rejected by refundPrepaidPackage's fail-closed guard and
+        // has its own dedicated coverage elsewhere.
+        taxAmount: 0,
       },
     ],
   });
@@ -386,6 +390,40 @@ describe("refundPrepaidPackageAction", () => {
 
     const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "second cancel" }));
     expect(result.ok).toBe(false);
+  });
+
+  it("fail-closed: a legacy package with unknown historical tax is surfaced as a clean action error, never a thrown exception, and Stripe is never called", async () => {
+    mockAuthorized();
+    const bookingOrderId = "booking-pkg-1";
+    fake = createFakeSchedulingRepository({
+      prepaidPackages: [
+        {
+          id: "pkg-1",
+          customerId: "customer-1",
+          bookingOrderId,
+          frequency: "weekly",
+          purchasedVisitCount: 6,
+          remainingVisitCount: 4,
+          packageTotalPaid: 900,
+          effectivePricePerVisit: 150,
+          status: "active",
+          purchasedAt: new Date("2026-08-01T00:00:00Z"),
+          taxAmount: null,
+        },
+      ],
+    });
+
+    const result = await refundPrepaidPackageAction(null, formData({ prepaidPackageId: "pkg-1", reason: "attempted on a legacy package" }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected error");
+    expect(result.error).toMatch(/legacy package/i);
+    expect(result.error).toMatch(/historical tax/i);
+
+    const after = await fake.repo.findPrepaidPackageById("pkg-1");
+    expect(after!.status).toBe("active");
+    expect(after!.refundedAmount).toBeUndefined();
+    expect(fake.state.financialAuditLog).toHaveLength(0);
   });
 
   it("financial_audit_log records the package cancellation with owner attribution", async () => {

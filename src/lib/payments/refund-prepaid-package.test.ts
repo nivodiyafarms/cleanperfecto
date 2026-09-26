@@ -3,7 +3,7 @@ import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fa
 import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-booking-repository";
 import { createFakeVisitPaymentGateway } from "./test-support/fake-visit-payment-gateway";
 import { refundPrepaidPackage } from "./refund-prepaid-package";
-import { InvalidVisitStateError } from "@/lib/scheduling/errors";
+import { InvalidVisitStateError, LegacyPackageTaxUnknownError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
 import type { PrepaidPackageRow } from "@/lib/scheduling/domain-types";
 
@@ -19,6 +19,11 @@ function makePackage(overrides: Partial<PrepaidPackageRow> = {}): PrepaidPackage
     effectivePricePerVisit: 150,
     status: "active",
     purchasedAt: new Date("2026-08-01T00:00:00Z"),
+    // Authoritative-zero by default — a modern package with a known (even if
+    // zero) historical tax fact, distinct from the legacy-unknown-tax
+    // fixtures below (which explicitly override this to null/undefined).
+    // Tests in this file that care about tax specifically override it.
+    taxAmount: 0,
     ...overrides,
   };
 }
@@ -249,23 +254,74 @@ describe("refundPrepaidPackage — Phase H.2: proportional tax refund", () => {
     return Math.round(cents) / 100;
   }
 
-  it("legacy package with no recorded taxAmount refunds $0 tax, never invents a figure", async () => {
-    const { repo: schedulingRepo } = createFakeSchedulingRepository({ prepaidPackages: [makePackage({ remainingVisitCount: 4, taxAmount: null })] });
+  it("fail-closed: a legacy package with unknown (null) historical tax is rejected, never silently refunded principal-only", async () => {
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository({ prepaidPackages: [makePackage({ remainingVisitCount: 4, taxAmount: null })] });
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    await seedCompletedPaymentAttempt(bookingRepo, "booking-1");
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
+
+    await expect(
+      refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+        prepaidPackageId: "pkg-1",
+        reason: "legacy package, no tax on file",
+        actorAdminUserId: "owner-1",
+        actorRole: "owner_admin",
+      })
+    ).rejects.toThrow(LegacyPackageTaxUnknownError);
+
+    // No Stripe call of any kind was ever attempted.
+    expect(gatewayState.createRefundCallCount).toBe(0);
+    expect(gatewayState.createTaxReversalCallCount).toBe(0);
+    // The package itself is left entirely untouched — status/credits unchanged.
+    const untouched = state.prepaidPackagesById.get("pkg-1")!;
+    expect(untouched.status).toBe("active");
+    expect(untouched.remainingVisitCount).toBe(4);
+    expect(untouched.refundedAmount).toBeUndefined();
+    // No financial_audit_log row falsely records a refund that never happened.
+    expect(state.financialAuditLog).toHaveLength(0);
+  });
+
+  it("fail-closed: same rejection when taxAmount is undefined (a fixture/legacy row that never set the field at all)", async () => {
+    const legacyRow = makePackage({ remainingVisitCount: 4 });
+    delete (legacyRow as { taxAmount?: number | null }).taxAmount;
+    const { repo: schedulingRepo, state } = createFakeSchedulingRepository({ prepaidPackages: [legacyRow] });
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
+
+    await expect(
+      refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
+        prepaidPackageId: "pkg-1",
+        reason: "legacy package, taxAmount field never set",
+        actorAdminUserId: "owner-1",
+        actorRole: "owner_admin",
+      })
+    ).rejects.toThrow(LegacyPackageTaxUnknownError);
+
+    expect(gatewayState.createRefundCallCount).toBe(0);
+    expect(state.financialAuditLog).toHaveLength(0);
+    expect(state.prepaidPackagesById.get("pkg-1")!.status).toBe("active");
+  });
+
+  it("a modern package with authoritative $0 tax (Stripe positively reported no tax) remains refundable — null is NOT the same as 0", async () => {
+    const { repo: schedulingRepo } = createFakeSchedulingRepository({
+      prepaidPackages: [makePackage({ remainingVisitCount: 4, taxAmount: 0, totalAmountPaid: 900 })],
+    });
     const { repo: bookingRepo } = createFakeBookingRepository();
     await seedCompletedPaymentAttempt(bookingRepo, "booking-1");
     const { gateway, state: gatewayState } = createFakeVisitPaymentGateway();
 
     const result = await refundPrepaidPackage(schedulingRepo, bookingRepo, gateway, {
       prepaidPackageId: "pkg-1",
-      reason: "legacy package, no tax on file",
+      reason: "modern package, authoritatively zero tax",
       actorAdminUserId: "owner-1",
       actorRole: "owner_admin",
     });
 
     expect(result.refundAmount).toBe(600);
     expect(result.refundTaxAmount).toBe(0);
+    expect(result.package.status).toBe("cancelled");
     const [refund] = gatewayState.refunds.values();
-    expect(refund.amountCents).toBe(toStripeCents(600)); // principal only — no phantom tax cents added
+    expect(refund.amountCents).toBe(toStripeCents(600));
   });
 
   it("never combines principal and tax by float addition before converting to Stripe cents (642.19 + 52.98 !== 695.17 in IEEE-754)", async () => {

@@ -18,6 +18,7 @@ import { formatCadenceLabel, formatMoney, formatTimeOfDay } from "@/lib/admin/fo
 import { hasCapability } from "@/lib/admin/rbac/capabilities";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { computePrepaidPackageRefund } from "@/lib/payments/compute-prepaid-package-refund";
+import { hasUnknownHistoricalTax } from "@/lib/payments/prepaid-package-tax-guard";
 
 const CADENCE_OPTIONS = [
   { value: "weekly", label: "Weekly" },
@@ -65,8 +66,15 @@ export default async function AdminPackageDetailPage({ params }: PackageDetailPa
   const admin = await requireAdmin();
   const canRefundPackage = hasCapability(admin.role, "issue_refund");
   const consumedVisitCount = pkg.purchasedVisitCount - pkg.remainingVisitCount;
+  // Fail-closed: a legacy package with unknown (not authoritatively zero)
+  // historical tax never gets a computed refund preview or a working
+  // cancellation form — see prepaid-package-tax-guard.ts and
+  // refundPrepaidPackage()'s own guard, which this UI state mirrors so the
+  // owner can never be shown (and therefore never act on) a refund total
+  // that silently assumed the missing tax was $0.
+  const isLegacyUnknownTaxPackage = pkg.status === "active" && hasUnknownHistoricalTax(pkg);
   const refundPreview =
-    pkg.status === "active" && pkg.packageTotalPaid != null
+    pkg.status === "active" && pkg.packageTotalPaid != null && !isLegacyUnknownTaxPackage
       ? computePrepaidPackageRefund({
           packageTotalPaid: pkg.packageTotalPaid,
           taxAmount: pkg.taxAmount,
@@ -131,6 +139,24 @@ export default async function AdminPackageDetailPage({ params }: PackageDetailPa
           ) : (
             <p className="mt-3 text-xs text-muted">Cancellation/refund requires owner access.</p>
           )}
+        </div>
+      )}
+
+      {isLegacyUnknownTaxPackage && (
+        <div className="mt-6 rounded-2xl border border-amber-300 bg-amber-50/50 p-5">
+          <h2 className="text-sm font-semibold text-amber-800">Legacy package — refund requires manual tax review</h2>
+          <p className="mt-2 text-sm text-amber-800">
+            This package was purchased before complete historical tax information was recorded. Automated cancellation/refund is
+            disabled — review the original Stripe transaction before issuing a refund.
+          </p>
+          <dl className="mt-3 space-y-1 text-sm text-muted">
+            <div>Package: {pkg.purchasedVisitCount} Cleanings</div>
+            <div>Original package principal: {formatMoney(pkg.packageTotalPaid!)}</div>
+            <div>
+              Completed/consumed visits: {consumedVisitCount} of {pkg.purchasedVisitCount}
+            </div>
+            <div>Remaining credits: {pkg.remainingVisitCount}</div>
+          </dl>
         </div>
       )}
 

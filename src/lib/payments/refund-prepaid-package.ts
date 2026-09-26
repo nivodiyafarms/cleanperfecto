@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { BookingRepository } from "@/lib/booking/repository";
 import type { PrepaidPackageRow } from "@/lib/scheduling/domain-types";
-import { InvalidVisitStateError } from "@/lib/scheduling/errors";
+import { InvalidVisitStateError, LegacyPackageTaxUnknownError } from "@/lib/scheduling/errors";
 import { roundToCents } from "@/lib/pricing/money";
 import { toStripeCents } from "@/lib/booking/stripe/money";
 import { computePrepaidPackageRefund } from "./compute-prepaid-package-refund";
+import { hasUnknownHistoricalTax } from "./prepaid-package-tax-guard";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundPrepaidPackageInput {
@@ -99,6 +100,16 @@ export async function refundPrepaidPackage(
   }
   if (pkg.packageTotalPaid === undefined) {
     throw new InvalidVisitStateError(`prepaid_packages ${pkg.id} has no recorded packageTotalPaid — cannot compute a refund.`);
+  }
+  // Fail-closed: a legacy package with unknown (not authoritatively zero)
+  // historical tax must never be auto-refunded — see
+  // prepaid-package-tax-guard.ts. Checked before any computation, any
+  // Stripe call, or any RPC — the package is left entirely untouched
+  // (status, credits, and audit trail all unchanged) so a later
+  // owner-controlled reconciliation can inspect the original Stripe
+  // transaction first.
+  if (hasUnknownHistoricalTax(pkg)) {
+    throw new LegacyPackageTaxUnknownError();
   }
 
   const { refundAmount, refundTaxAmount } = computePrepaidPackageRefund({

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { assertCapability } from "@/lib/admin/rbac/capabilities";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
-import { InvalidVisitStateError } from "@/lib/scheduling/errors";
+import { InvalidVisitStateError, LegacyPackageTaxUnknownError } from "@/lib/scheduling/errors";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { recordExternalPayment } from "@/lib/payments/record-external-payment";
 import { collectServiceFeeExternally } from "@/lib/payments/collect-service-fee";
@@ -167,7 +167,7 @@ export async function refundPrepaidPackageAction(_prevState: ActionResult | null
         : "Package cancelled. No unused credits remained to refund."
     );
   } catch (error) {
-    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    if (error instanceof InvalidVisitStateError || error instanceof LegacyPackageTaxUnknownError) return actionError(error.message);
     throw error;
   }
 }

@@ -20,3 +20,22 @@ export class InvalidVisitStateError extends Error {
     this.name = "InvalidVisitStateError";
   }
 }
+
+/**
+ * Raised by refundPrepaidPackage() when a prepaid package's historical Tax
+ * facts are unknown (taxAmount === null — a legacy package purchased before
+ * tax accounting existed) rather than authoritatively zero (taxAmount ===
+ * 0). Fail-closed: automated cancellation/refund must never guess, assume
+ * $0, or recompute historical tax from today's rate — see
+ * src/lib/payments/prepaid-package-tax-guard.ts. The message is owner-safe
+ * (shown directly to admins) and never exposes internal implementation
+ * details.
+ */
+export class LegacyPackageTaxUnknownError extends Error {
+  constructor(
+    message = "This legacy package does not contain complete historical tax information. Review the original Stripe transaction before issuing a refund."
+  ) {
+    super(message);
+    this.name = "LegacyPackageTaxUnknownError";
+  }
+}
