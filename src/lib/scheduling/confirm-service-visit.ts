@@ -4,7 +4,8 @@ import { scheduleConsentReminderIfUnsigned } from "@/lib/consent/schedule-consen
 import { DEFAULT_TURNAROUND_BUFFER_MINUTES } from "./config";
 import type { DurationEstimateInput } from "./duration-engine";
 import { estimateDuration } from "./duration-engine";
-import { InvalidVisitStateError } from "./errors";
+import { InvalidVisitStateError, SchedulingConflictError } from "./errors";
+import { findAvailableCleaners } from "./find-available-cleaners";
 import type { SchedulingRepository } from "./repository";
 import { cancelPendingReminder, scheduleVisitReminder } from "./schedule-visit-reminder";
 import { zonedDateTimeToUtc } from "./timezone";
@@ -19,6 +20,24 @@ export interface ConfirmServiceVisitInput {
   actor?: string;
   /** Optional so every existing/new test that doesn't care about consent is unaffected — production call sites always supply it. Omitted entirely means no consent_reminder is scheduled (never a case of silently guessing signed status). */
   consentRepo?: ConsentRepository;
+  /**
+   * Re-validates date/startTime/cleanerIds against the exact same
+   * authoritative availability engine (computeAvailableCleaners, via
+   * findAvailableCleaners) the admin UI already uses to render suggested
+   * AND custom start times — before writing anything. Closes the gap
+   * where an admin-supplied time (suggested or custom) previously bypassed
+   * every check except the DB's pure double-booking-overlap constraint,
+   * which never validates cleaner working-hours, exceptions, or day
+   * overrides.
+   *
+   * Defaults to false so every existing internal caller (recurring/package
+   * auto-scheduling, which passes its own already-derived timing through a
+   * different, already-audited path) is unaffected. The one caller this
+   * milestone turns it on for is confirmVisitAction — the admin request
+   * detail page's "Confirm appointment" action, the exact surface a
+   * crafted or manually-typed custom time could otherwise reach.
+   */
+  requireAvailabilityCheck?: boolean;
 }
 
 /**
@@ -40,6 +59,33 @@ export async function confirmServiceVisit(repo: SchedulingRepository, input: Con
   }
 
   const duration = estimateDuration(input.durationInput);
+
+  if (input.requireAvailabilityCheck) {
+    const availability = await findAvailableCleaners(repo, {
+      date: input.date,
+      startTime: input.startTime,
+      serviceMinutes: duration.estimatedServiceMinutes,
+      timezone: visit.timezone,
+      // A re-confirmation (visit already 'scheduled') must not see its own
+      // current assignment as a conflict against itself.
+      excludeServiceVisitId: input.serviceVisitId,
+    });
+
+    if (availability.closedByOverride) {
+      throw new SchedulingConflictError("CleanPerfecto is closed on this date.");
+    }
+
+    const hasUnavailableSelection = input.cleanerIds.some((cleanerId) => {
+      const entry = availability.cleaners.find((c) => c.cleanerId === cleanerId);
+      return !entry || !entry.available;
+    });
+    if (hasUnavailableSelection) {
+      throw new SchedulingConflictError(
+        "Selected cleaner(s) are not available for this date and time — they may be outside working hours, already have a conflicting appointment, or the required scheduling buffer cannot be satisfied."
+      );
+    }
+  }
+
   const confirmedStartAt = zonedDateTimeToUtc(input.date, input.startTime, visit.timezone);
   const confirmedEndAt = new Date(confirmedStartAt.getTime() + duration.estimatedServiceMinutes * 60_000);
 

@@ -79,8 +79,25 @@ function formData(entries: Record<string, string | string[]>): FormData {
   return fd;
 }
 
+// Every day of week, wide hours — confirmVisitAction now re-validates
+// against the real availability engine (requireAvailabilityCheck: true),
+// so a cleaner with zero declared hours would fail every confirmation
+// regardless of date. A real cleaner always has real hours; this fixture
+// just avoids pinning the test to one specific date's day-of-week.
+const ALL_DAY_AVAILABILITY_RULES = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+  id: `rule-${dayOfWeek}`,
+  cleanerId: "cleaner-1",
+  dayOfWeek,
+  startTime: "00:00",
+  endTime: "23:59",
+  active: true,
+}));
+
 beforeEach(() => {
-  fake = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+  fake = createFakeSchedulingRepository({
+    cleaners: [{ id: "cleaner-1", name: "A", active: true }],
+    availabilityRules: ALL_DAY_AVAILABILITY_RULES,
+  });
   vi.mocked(requireAdmin).mockReset();
 });
 
@@ -114,9 +131,13 @@ describe("confirmVisitAction", () => {
       durationInput: DURATION_INPUT,
     });
 
+    // Now caught by confirmVisitAction's authoritative pre-check (the same
+    // engine that renders availability on the request detail page) rather
+    // than falling through to the DB exclusion constraint — a more
+    // specific, earlier reason for the same correct rejection.
     const result = await confirmVisitAction(null, formData({ visitId: visitB, date: "2026-09-10", startTime: "10:30", cleanerIds: ["cleaner-1"] }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/no longer available/i);
+    if (!result.ok) expect(result.error).toMatch(/not available/i);
   });
 });
 

@@ -56,9 +56,15 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
     <div className="max-w-3xl">
       <h1 className="text-xl font-semibold text-foreground">Request — {visit.customerName}</h1>
       <p className="mt-1 text-sm text-muted">
-        Requested {formatInstant(visit.requestedStartAt)} · {formatCadenceLabel(visit.cleaningType)}
+        {formatCadenceLabel(visit.cleaningType)}
         {visit.visitNumber ? ` · Package visit ${visit.visitNumber}` : ""}
       </p>
+
+      <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+        <span className="text-sm font-semibold text-amber-800">Customer requested:</span>
+        <span className="text-sm text-amber-900">{formatInstant(visit.requestedStartAt)}</span>
+      </div>
+
       {(visit.serviceAddressLine1 || visit.serviceCity) && (
         <p className="text-sm text-muted">
           {[visit.serviceAddressLine1, visit.serviceAddressLine2, visit.serviceCity, visit.serviceState, visit.serviceZip]
@@ -114,6 +120,7 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
           {availableStartTimes && (
             <div className="mt-4">
               <h3 className="text-sm font-semibold text-foreground">2. Choose a start time</h3>
+              <p className="text-xs text-muted">CleanPerfecto recommends these available times for this date.</p>
               {availableStartTimes.closedByOverride ? (
                 <p className="mt-2 text-sm text-red-600">CleanPerfecto is closed on this date.</p>
               ) : availableStartTimes.availableStartTimes.length === 0 ? (
@@ -135,32 +142,78 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
                   ))}
                 </div>
               )}
+
+              <details className="mt-3">
+                <summary className="cursor-pointer text-sm font-medium text-secondary">Choose another time</summary>
+                <form method="GET" className="mt-2 flex flex-wrap items-end gap-3">
+                  <input type="hidden" name="date" value={selectedDate} />
+                  <div>
+                    <label htmlFor="customStartTime" className="block text-xs font-medium text-muted">
+                      Custom start time
+                    </label>
+                    <input
+                      id="customStartTime"
+                      name="startTime"
+                      type="time"
+                      step={1800}
+                      defaultValue={selectedStartTime || undefined}
+                      required
+                      className="mt-1 rounded-lg border border-border px-3 py-1.5 text-sm text-foreground"
+                    />
+                  </div>
+                  <button type="submit" className="rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                    Use this time
+                  </button>
+                </form>
+                <p className="mt-1 text-xs text-muted">
+                  Any time you choose here is still checked against cleaner availability, existing appointments, and the required
+                  scheduling buffer before it can be confirmed.
+                </p>
+              </details>
             </div>
           )}
 
           {availableCleaners && selectedStartTime && (
-            <ActionForm action={confirmVisitAction} className="mt-4">
-              <input type="hidden" name="visitId" value={visitId} />
-              <input type="hidden" name="date" value={selectedDate} />
-              <input type="hidden" name="startTime" value={selectedStartTime} />
-
+            <div className="mt-4">
               <h3 className="text-sm font-semibold text-foreground">3. Assign cleaner(s) and confirm</h3>
-              <p className="text-xs text-muted">Need {duration.recommendedCleanerCount} cleaner(s) for this job.</p>
-              <div className="mt-2 space-y-1">
-                {availableCleaners.cleaners.map((c) => (
-                  <label key={c.cleanerId} className={`flex items-center gap-2 text-sm ${c.available ? "text-foreground" : "text-muted"}`}>
-                    <input type="checkbox" name="cleanerIds" value={c.cleanerId} disabled={!c.available} />
-                    {cleanerNameById.get(c.cleanerId) ?? c.cleanerId}
-                    {!c.available && " (unavailable)"}
-                  </label>
-                ))}
-                {availableCleaners.cleaners.length === 0 && <p className="text-sm text-muted">No active cleaners configured.</p>}
-              </div>
+              <p className="text-xs text-muted">
+                Selected time: <span className="font-medium text-foreground">{formatTimeOfDay(selectedStartTime)}</span>
+                {!availableStartTimes?.availableStartTimes.includes(selectedStartTime) && " (custom time)"}
+              </p>
 
-              <button type="submit" className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
-                Confirm appointment
-              </button>
-            </ActionForm>
+              {availableCleaners.closedByOverride ? (
+                <p className="mt-2 text-sm text-red-600">CleanPerfecto is closed on this date — choose another date.</p>
+              ) : availableCleaners.cleaners.length === 0 ? (
+                <p className="mt-2 text-sm text-muted">No active cleaners configured.</p>
+              ) : (
+                <ActionForm action={confirmVisitAction} className="mt-2">
+                  <input type="hidden" name="visitId" value={visitId} />
+                  <input type="hidden" name="date" value={selectedDate} />
+                  <input type="hidden" name="startTime" value={selectedStartTime} />
+
+                  <p className="text-xs text-muted">Need {duration.recommendedCleanerCount} cleaner(s) for this job.</p>
+                  {availableCleaners.cleaners.every((c) => !c.available) && (
+                    <p className="mt-1 text-sm text-red-600">
+                      No cleaners are available at this date and time — they may be outside working hours, already booked, or the
+                      required scheduling buffer cannot be satisfied. Try another time.
+                    </p>
+                  )}
+                  <div className="mt-2 space-y-1">
+                    {availableCleaners.cleaners.map((c) => (
+                      <label key={c.cleanerId} className={`flex items-center gap-2 text-sm ${c.available ? "text-foreground" : "text-muted"}`}>
+                        <input type="checkbox" name="cleanerIds" value={c.cleanerId} disabled={!c.available} />
+                        {cleanerNameById.get(c.cleanerId) ?? c.cleanerId}
+                        {!c.available && " (unavailable)"}
+                      </label>
+                    ))}
+                  </div>
+
+                  <button type="submit" className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+                    Confirm appointment
+                  </button>
+                </ActionForm>
+              )}
+            </div>
           )}
         </div>
       )}

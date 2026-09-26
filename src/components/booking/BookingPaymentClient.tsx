@@ -395,11 +395,12 @@ export default function BookingPaymentClient({
               type="time"
               min={OPERATING_HOURS_START}
               max={OPERATING_HOURS_END}
+              step={1800}
               value={requestedStartTime}
               onChange={(event) => setRequestedStartTime(event.target.value)}
               className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
             />
-            <p className="mt-1.5 text-xs text-muted">Subject to confirmation, 8:00 AM–6:00 PM.</p>
+            <p className="mt-1.5 text-xs text-muted">Subject to confirmation, 8:00 AM–6:00 PM, in 30-minute increments.</p>
           </div>
         </div>
 

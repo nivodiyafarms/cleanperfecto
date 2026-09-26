@@ -79,10 +79,15 @@ export async function confirmVisitAction(_prevState: ActionResult | null, formDa
       cleanerIds,
       durationInput: loaded.durationInput,
       actor: `admin:${admin.adminUserId}`,
+      // The admin request detail page lets the owner pick either a
+      // suggested time or a manually-typed custom one — both reach this
+      // same action, so both must be re-validated the same way. See
+      // confirm-service-visit.ts's own doc comment on this flag.
+      requireAvailabilityCheck: true,
     });
   } catch (error) {
     if (error instanceof SchedulingConflictError) {
-      return actionError("That slot is no longer available — availability has been refreshed. Please choose another time.");
+      return actionError(error.message);
     }
     if (error instanceof InvalidVisitStateError) {
       return actionError(error.message);
