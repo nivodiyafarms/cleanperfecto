@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { assertCapability } from "@/lib/admin/rbac/capabilities";
 import { findServiceVisitDetail } from "@/lib/admin/queries/service-visits";
@@ -96,7 +97,16 @@ export async function confirmVisitAction(_prevState: ActionResult | null, formDa
   }
 
   revalidateVisitPaths(visitId);
-  return actionOk("Appointment confirmed.");
+  // Redirect rather than re-render this same page: the request-detail
+  // scheduling form re-derives availability from the just-submitted date/
+  // startTime on every render, and the appointment this action just
+  // created now occupies that exact slot — re-evaluating it here would
+  // show a contradictory "no cleaners available" error right next to the
+  // success message for the same confirmation. /admin/visits/[visitId]
+  // already has everything a just-confirmed appointment needs to show
+  // (status, confirmed date/time, assigned cleaner(s)), so this reuses
+  // that page instead of building a second "confirmed" view.
+  redirect(`/admin/visits/${visitId}`);
 }
 
 export async function rescheduleVisitAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {

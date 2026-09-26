@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import ActionForm from "@/components/admin/ActionForm";
 import { listCleaners } from "@/lib/admin/queries/cleaners";
 import { findServiceVisitDetail } from "@/lib/admin/queries/service-visits";
@@ -25,6 +26,15 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
   const durationInput = await resolveDurationInputForVisit(visit);
   const duration = durationInput ? estimateDuration(durationInput) : null;
 
+  // Once a request has been confirmed (by this action or otherwise), it's
+  // no longer schedulable from this page — the scheduling form's own
+  // availability check would now see the appointment it JUST created as a
+  // conflict against itself (the exact bug this guard prevents from ever
+  // recurring, e.g. via browser back/forward after confirmVisitAction's
+  // redirect, or a stale bookmark). /admin/visits/[visitId] is the page
+  // for a confirmed appointment from here on.
+  const isSchedulable = visit.status === "requested";
+
   const selectedDate = query.date || (visit.requestedStartAt ? localDateOf(visit.requestedStartAt) : "");
   const selectedStartTime = query.startTime || (visit.requestedStartAt ? localTimeOf(visit.requestedStartAt) : "");
 
@@ -33,7 +43,7 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
   const cleanerNameById = new Map(cleaners.map((c) => [c.id, c.name]));
 
   const availableStartTimes =
-    duration && selectedDate
+    isSchedulable && duration && selectedDate
       ? await findAvailableStartTimes(repo, {
           date: selectedDate,
           serviceMinutes: duration.estimatedServiceMinutes,
@@ -43,7 +53,7 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
       : null;
 
   const availableCleaners =
-    duration && selectedDate && selectedStartTime
+    isSchedulable && duration && selectedDate && selectedStartTime
       ? await findAvailableCleaners(repo, {
           date: selectedDate,
           startTime: selectedStartTime,
@@ -95,7 +105,18 @@ export default async function AdminRequestDetailPage({ params, searchParams }: R
         )}
       </div>
 
-      {duration && (
+      {duration && !isSchedulable && (
+        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          <p className="text-sm text-muted">
+            This request has already been scheduled.{" "}
+            <Link href={`/admin/visits/${visitId}`} className="text-secondary hover:underline">
+              View the confirmed appointment →
+            </Link>
+          </p>
+        </div>
+      )}
+
+      {duration && isSchedulable && (
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
           <h2 className="text-sm font-semibold text-foreground">1. Choose a date</h2>
           <form method="GET" className="mt-3 flex flex-wrap items-end gap-3">

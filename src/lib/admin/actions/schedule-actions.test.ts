@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
+import { getURLFromRedirectError } from "next/dist/client/components/redirect";
 import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import { confirmServiceVisit } from "@/lib/scheduling/confirm-service-visit";
@@ -101,6 +103,17 @@ beforeEach(() => {
   vi.mocked(requireAdmin).mockReset();
 });
 
+/** A successful confirmVisitAction redirects rather than returning an ActionResult — see its own doc comment for why. */
+async function expectRedirectToVisitPage(action: Promise<unknown>, visitId: string): Promise<void> {
+  try {
+    await action;
+    throw new Error("expected confirmVisitAction to redirect, but it returned normally");
+  } catch (error) {
+    if (!isRedirectError(error)) throw error;
+    expect(getURLFromRedirectError(error)).toBe(`/admin/visits/${visitId}`);
+  }
+}
+
 describe("confirmVisitAction", () => {
   it("rejects when the caller is not an authorized admin", async () => {
     mockUnauthorized();
@@ -111,12 +124,43 @@ describe("confirmVisitAction", () => {
     expect(fake.state.serviceVisitsById.get(visitId)?.status).toBe("requested");
   });
 
-  it("confirms a valid request via the existing domain function", async () => {
+  it("confirms a valid request via the existing domain function and redirects to the confirmed visit page", async () => {
     mockAuthorized();
     const visitId = await seedRequestedVisit();
-    const result = await confirmVisitAction(null, formData({ visitId, date: "2026-09-10", startTime: "10:00", cleanerIds: ["cleaner-1"] }));
-    expect(result.ok).toBe(true);
+
+    await expectRedirectToVisitPage(
+      confirmVisitAction(null, formData({ visitId, date: "2026-09-10", startTime: "10:00", cleanerIds: ["cleaner-1"] })),
+      visitId
+    );
+
     expect(fake.state.serviceVisitsById.get(visitId)?.status).toBe("scheduled");
+  });
+
+  it("confirms a genuinely custom (non-grid) start time and redirects — commit 8aca883's custom-time path still works end to end", async () => {
+    mockAuthorized();
+    const visitId = await seedRequestedVisit();
+
+    await expectRedirectToVisitPage(
+      confirmVisitAction(null, formData({ visitId, date: "2026-09-10", startTime: "16:30", cleanerIds: ["cleaner-1"] })),
+      visitId
+    );
+
+    const visit = fake.state.serviceVisitsById.get(visitId);
+    expect(visit?.status).toBe("scheduled");
+    expect(visit?.confirmedStartAt).not.toBeNull();
+  });
+
+  it("a genuinely invalid custom time (cleaner unavailable) is still rejected with a real error, never a redirect", async () => {
+    mockAuthorized();
+    // Replace the wide-open fixture with a cleaner who has no availability rule at all today.
+    fake = createFakeSchedulingRepository({ cleaners: [{ id: "cleaner-1", name: "A", active: true }] });
+    const visitId = await seedRequestedVisit();
+
+    const result = await confirmVisitAction(null, formData({ visitId, date: "2026-09-10", startTime: "16:30", cleanerIds: ["cleaner-1"] }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/not available/i);
+    expect(fake.state.serviceVisitsById.get(visitId)?.status).toBe("requested");
   });
 
   it("surfaces a double-booking conflict as a clean, non-throwing action error", async () => {
