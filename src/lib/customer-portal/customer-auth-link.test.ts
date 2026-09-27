@@ -68,9 +68,9 @@ describe("createSupabaseCustomerAuthLinkGenerator", () => {
     else process.env.APP_ENV = originalAppEnv;
   });
 
-  it("builds a magiclink redirectTo pointed at /my/auth/callback with the intended destination as ?next=, and returns the action_link Supabase generates", async () => {
+  it("builds a CleanPerfecto-hosted /my/auth/confirm URL from generateLink's hashed_token/verification_type — never Supabase's own action_link/redirect_to", async () => {
     generateLinkMock.mockResolvedValueOnce({
-      data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink&redirect_to=..." } },
+      data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink&redirect_to=...", hashed_token: "hashed-token-abc", verification_type: "magiclink" } },
       error: null,
     });
 
@@ -79,27 +79,37 @@ describe("createSupabaseCustomerAuthLinkGenerator", () => {
 
     expect(result).toEqual({
       ok: true,
-      actionLink: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink&redirect_to=...",
+      actionLink: "http://localhost:3000/my/auth/confirm?token_hash=hashed-token-abc&type=magiclink&next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123",
     });
-    expect(generateLinkMock).toHaveBeenCalledWith({
-      type: "magiclink",
-      email: "customer@example.com",
-      options: { redirectTo: "http://localhost:3000/my/auth/callback?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123" },
-    });
+    // No redirectTo — this flow has no dependency on Supabase's Auth
+    // "Redirect URLs" allowlist at all, unlike the old action_link approach.
+    expect(generateLinkMock).toHaveBeenCalledWith({ type: "magiclink", email: "customer@example.com" });
   });
 
-  it("rejects an out-of-allowlist next path the same way every other portal link does, never building an open redirect", async () => {
+  it("never exposes the customer's email in the generated URL — only the opaque token_hash credential", async () => {
     generateLinkMock.mockResolvedValueOnce({
-      data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink" } },
+      data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink", hashed_token: "hashed-token-abc", verification_type: "magiclink" } },
       error: null,
     });
 
     const generator = createSupabaseCustomerAuthLinkGenerator();
-    await generator.generate("customer@example.com", "https://evil.example.com");
+    const result = await generator.generate("customer@example.com", "/my/payments?visit=visit-123");
 
-    expect(generateLinkMock).toHaveBeenCalledWith(
-      expect.objectContaining({ options: { redirectTo: "http://localhost:3000/my/auth/callback?next=%2Fmy" } })
-    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.actionLink).not.toContain("customer@example.com");
+    expect(result.actionLink).not.toContain("email=");
+  });
+
+  it("rejects an out-of-allowlist next path the same way every other portal link does, never building an open redirect", async () => {
+    generateLinkMock.mockResolvedValueOnce({
+      data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc&type=magiclink", hashed_token: "hashed-token-abc", verification_type: "magiclink" } },
+      error: null,
+    });
+
+    const generator = createSupabaseCustomerAuthLinkGenerator();
+    const result = await generator.generate("customer@example.com", "https://evil.example.com");
+
+    expect(result).toEqual({ ok: true, actionLink: "http://localhost:3000/my/auth/confirm?token_hash=hashed-token-abc&type=magiclink&next=%2Fmy" });
   });
 
   it("returns a failure (never throws) when Supabase's generateLink call itself errors", async () => {
@@ -109,5 +119,14 @@ describe("createSupabaseCustomerAuthLinkGenerator", () => {
     const result = await generator.generate("customer@example.com", "/my/payments?visit=visit-123");
 
     expect(result).toEqual({ ok: false, reason: "rate limited" });
+  });
+
+  it("returns a failure when generateLink succeeds but returns no hashed_token", async () => {
+    generateLinkMock.mockResolvedValueOnce({ data: { properties: { action_link: "https://project.supabase.co/auth/v1/verify?token=abc" } }, error: null });
+
+    const generator = createSupabaseCustomerAuthLinkGenerator();
+    const result = await generator.generate("customer@example.com", "/my/payments?visit=visit-123");
+
+    expect(result).toEqual({ ok: false, reason: "generateLink returned no hashed_token" });
   });
 });

@@ -42,7 +42,7 @@ export interface CustomerAuthLinkGenerator {
   /**
    * A one-click authenticated link for `email`, landing on `path` (a
    * /my/... path — sanitized the same way every other portal deep link is,
-   * see sanitizeNextPath) once Supabase verifies it and /my/auth/callback
+   * see sanitizeNextPath) once /my/auth/confirm verifies it server-side and
    * establishes the session. Handles first-time (no Supabase user yet) and
    * returning customers identically — Supabase's own `magiclink` type
    * creates the user when needed, with no separate signup/confirmation
@@ -57,10 +57,28 @@ export interface CustomerAuthLinkGenerator {
  * The real implementation — server-only (uses the service-role admin
  * client). Deliberately bypasses Supabase's own outbound email/template
  * system entirely: `generateLink` only ever returns the verification URL
- * data, it never sends anything itself. CleanPerfecto's own Resend-sent
- * Final Total email embeds the returned `action_link` directly, so this
- * flow can never be affected by however the project's separate Supabase
- * Auth email templates are configured.
+ * data, it never sends anything itself.
+ *
+ * Returns a CleanPerfecto-hosted /my/auth/confirm URL built from
+ * `hashed_token`/`verification_type` (data.properties) — NOT Supabase's own
+ * `action_link`/`redirect_to`. Root cause of the 2026-09-27 E2E bug:
+ * `action_link` follows Supabase's IMPLICIT verification flow (GET
+ * .../auth/v1/verify?token=...&redirect_to=...), which redirects back to
+ * CleanPerfecto with the session in the URL FRAGMENT
+ * (#access_token=...&refresh_token=...) — a server-side route (like
+ * /my/auth/callback) can never read a fragment, since fragments never reach
+ * the server in an HTTP request. That callback route expects a `code`
+ * query param (the PKCE flow used by the browser-side "Email me a sign-in
+ * link" form, CustomerLoginForm.tsx's signInWithOtp) — a `code` that this
+ * admin-generated implicit link never produces, so the customer always
+ * fell through to /my/login. The token_hash + /my/auth/confirm +
+ * verifyOtp({token_hash, type}) pattern below is Supabase's documented SSR
+ * alternative — it never touches Supabase's own /verify endpoint or its
+ * fragment-based redirect at all, so the CleanPerfecto server can read and
+ * verify the credential itself. No `redirectTo` is passed to generateLink()
+ * — only hashed_token/verification_type are used, so this has no
+ * dependency on Supabase's Auth "Redirect URLs" allowlist at all (unlike
+ * the old action_link approach).
  */
 export function createSupabaseCustomerAuthLinkGenerator(): CustomerAuthLinkGenerator {
   return {
@@ -72,19 +90,19 @@ export function createSupabaseCustomerAuthLinkGenerator(): CustomerAuthLinkGener
         return { ok: false, reason: err instanceof Error ? err.message : "could not resolve auth redirect origin" };
       }
 
-      const redirectTo = `${origin}/my/auth/callback?next=${encodeURIComponent(sanitizeNextPath(path))}`;
       const supabase = createSupabaseAdminClient();
-      const { data, error } = await supabase.auth.admin.generateLink({
-        type: "magiclink",
-        email,
-        options: { redirectTo },
-      });
+      const { data, error } = await supabase.auth.admin.generateLink({ type: "magiclink", email });
 
-      if (error || !data?.properties?.action_link) {
-        return { ok: false, reason: error?.message ?? "generateLink returned no action_link" };
+      if (error || !data?.properties?.hashed_token || !data?.properties?.verification_type) {
+        return { ok: false, reason: error?.message ?? "generateLink returned no hashed_token" };
       }
 
-      return { ok: true, actionLink: data.properties.action_link };
+      const confirmUrl = new URL(`${origin}/my/auth/confirm`);
+      confirmUrl.searchParams.set("token_hash", data.properties.hashed_token);
+      confirmUrl.searchParams.set("type", data.properties.verification_type);
+      confirmUrl.searchParams.set("next", sanitizeNextPath(path));
+
+      return { ok: true, actionLink: confirmUrl.toString() };
     },
   };
 }
