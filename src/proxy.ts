@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isPublicAdminPath } from "@/lib/admin/auth/is-public-admin-path";
+import { isPublicCustomerPath } from "@/lib/customer-portal/is-public-customer-path";
 import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
@@ -40,11 +41,9 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Same reasoning for the customer portal: /my/login must never redirect
-  // to itself, and /my/auth/callback is the magic-link exchange route
-  // itself (unauthenticated by definition until it runs) — neither can be
-  // gated by the same check they're meant to satisfy.
-  if (pathname === "/my/login" || pathname.startsWith("/my/login/") || pathname.startsWith("/my/auth/callback")) {
+  // Same reasoning for the customer portal — see is-public-customer-path.ts
+  // for the exact allowlist and why each entry is there.
+  if (isPublicCustomerPath(pathname)) {
     return NextResponse.next();
   }
 
