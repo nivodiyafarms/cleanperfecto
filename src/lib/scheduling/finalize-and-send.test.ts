@@ -215,6 +215,32 @@ describe("finalizeAndSend", () => {
     expect(notices.length).toBe(1);
   });
 
+  it("queues exactly ONE customer email notification (final_total_ready) — never also a 'completed' email for the same event", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const allNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.channel === "email");
+    expect(allNotices.length).toBe(1);
+    expect(allNotices[0].notificationType).toBe("final_total_ready");
+    expect(allNotices.some((n) => n.notificationType === "completed")).toBe(false);
+  });
+
+  it("repeated/idempotent Finalize & Send calls never create a duplicate final_total_ready row", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const notices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.notificationType === "final_total_ready");
+    expect(notices.length).toBe(1);
+  });
+
   it("only ever enqueues final_total_ready — never a pricing_approval_required notification, even on a genuine price increase", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();

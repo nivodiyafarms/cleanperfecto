@@ -56,7 +56,7 @@ describe("buildNotificationContent", () => {
       expect(content.text).not.toContain("/my/payments?visit=visit-123");
     });
 
-    it("still uses the customer-friendly 'Confirm Final Total & Pay' label with the authenticated link, never developer/auth wording", () => {
+    it("still uses the customer-friendly 'Review Final Total' label with the authenticated link, never developer/auth wording", () => {
       const content = buildNotificationContent({
         notificationType: "final_total_ready",
         customerName: "Jane",
@@ -65,9 +65,21 @@ describe("buildNotificationContent", () => {
         serviceVisitId: "visit-123",
         authenticatedLink: "https://project.supabase.co/auth/v1/verify?token=abc",
       });
-      expect(content.text).toContain("Confirm Final Total & Pay");
+      expect(content.text).toContain("Review Final Total");
       expect(content.text.toLowerCase()).not.toContain("magic link");
       expect(content.text.toLowerCase()).not.toContain("otp");
+    });
+
+    it("uses the approved subject/body copy: 'Cleaning complete — review your Final Total'", () => {
+      const content = buildNotificationContent({
+        notificationType: "final_total_ready",
+        customerName: "Jane",
+        visitStartAtUtc: null,
+        timezone: "America/Chicago",
+        serviceVisitId: "visit-123",
+      });
+      expect(content.subject).toBe("Cleaning complete — review your Final Total");
+      expect(content.text).toContain("Your CleanPerfecto cleaning is complete.");
     });
   });
 });

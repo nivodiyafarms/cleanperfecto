@@ -44,7 +44,11 @@ export interface FinalizeAndSendResult {
  *   4. cross the existing work_finished -> completed boundary via
  *      completeServiceVisit, unconditionally, right after pricing is frozen
  *      in step 3 — every genuine Finalize & Send now completes the visit in
- *      one shot.
+ *      one shot. Its own generic 'completed' customer email is
+ *      deliberately SKIPPED here (skipCompletedNotification: true) — the
+ *      'final_total_ready' notification below already covers "your
+ *      cleaning is complete" AND gives the one-click Final Total link, so
+ *      the customer gets exactly one post-cleaning email, not two.
  *   5+7. log a 'final_total_sent' event and enqueue the 'final_total_ready'
  *      notification with a versionKey of the final total, so a retried
  *      Finalize & Send at the SAME amount is a safe no-op (the notification
@@ -52,8 +56,9 @@ export interface FinalizeAndSendResult {
  *      a genuinely different amount (a later admin scope edit before this
  *      ran, or an actual retry after a scope change) naturally mints a new
  *      notification rather than being silently swallowed. No
- *      'pricing_approval_required' notification is ever sent — only this
- *      one, single 'final_total_ready' notification.
+ *      'pricing_approval_required' notification and no 'completed'
+ *      notification is ever sent for this action — only this one, single
+ *      'final_total_ready' notification.
  *
  * Idempotency: a repeated click after the visit is already 'completed'
  * short-circuits to alreadySent=true before touching estimateVisitPricing
@@ -93,7 +98,12 @@ export async function finalizeAndSend(
   const priorApprovedAmount = pricing.previouslyApprovedAmount;
 
   pricing = await confirmVisitPricing(repo, { serviceVisitId: input.serviceVisitId, confirmedBy: input.actor });
-  await completeServiceVisit(repo, input.serviceVisitId, input.actor);
+  // Skip the generic 'completed' email here — the 'final_total_ready'
+  // notification enqueued below already tells the customer their cleaning
+  // is complete AND gives them the one-click Final Total link, so sending
+  // both would be two emails for the same event. See
+  // CompleteServiceVisitOptions's own doc comment.
+  await completeServiceVisit(repo, input.serviceVisitId, input.actor, { skipCompletedNotification: true });
   const completedVisit = await repo.findServiceVisitById(input.serviceVisitId);
   if (!completedVisit) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} disappeared during Finalize & Send`);

@@ -247,6 +247,23 @@ describe("completeVisitAction", () => {
     // No prepaid_package_id on this visit, so no credit ledger touched either.
     expect(fake.state.packageVisitUsages.size).toBe(0);
   });
+
+  it("still sends the 'completed' customer email — this direct 'Mark completed' path never runs Finalize & Send, so it's the only post-cleaning email this flow ever sends", async () => {
+    mockAuthorized();
+    const visitId = await seedRequestedVisit();
+    await confirmServiceVisit(fake.repo, {
+      serviceVisitId: visitId,
+      date: "2026-09-10",
+      startTime: "10:00",
+      cleanerIds: ["cleaner-1"],
+      durationInput: DURATION_INPUT,
+    });
+
+    await completeVisitAction(null, formData({ visitId }));
+
+    const notices = [...fake.state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "completed");
+    expect(notices.length).toBe(1);
+  });
 });
 
 describe("waiveFeeAction", () => {

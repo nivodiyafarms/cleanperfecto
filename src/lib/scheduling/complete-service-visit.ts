@@ -4,6 +4,24 @@ import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans"
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 import type { SchedulingRepository } from "./repository";
 
+export interface CompleteServiceVisitOptions {
+  /**
+   * Skip enqueuing the 'completed' customer notification for this
+   * transition — used ONLY by finalize-and-send.ts, whose Finalize & Send
+   * call already enqueues 'final_total_ready' immediately after this
+   * function returns. Without this, a Pay Per Cleaning customer received
+   * TWO post-cleaning emails ('completed' AND 'final_total_ready') for the
+   * exact same event (owner-reported E2E issue, 2026-09-27). Every OTHER
+   * caller (completeVisitAction's direct "Mark completed" admin button,
+   * confirmFinalTotalAndPay's work_finished->completed crossing) leaves
+   * this false/omitted and keeps sending 'completed' unchanged — for
+   * completeVisitAction specifically, 'completed' is the ONLY post-cleaning
+   * email that flow ever sends (it never runs Finalize & Send at all), so
+   * removing it there would leave the customer with no notice at all.
+   */
+  skipCompletedNotification?: boolean;
+}
+
 /**
  * Completes a visit via the atomic complete_service_visit() Postgres
  * function (see supabase-scheduling-repository.ts / the migration) — the
@@ -17,7 +35,12 @@ import type { SchedulingRepository } from "./repository";
  * that performed the real transition" convention (see
  * updateBookingOrderStatus's `changed` boolean in the booking module).
  */
-export async function completeServiceVisit(repo: SchedulingRepository, serviceVisitId: string, actor?: string): Promise<boolean> {
+export async function completeServiceVisit(
+  repo: SchedulingRepository,
+  serviceVisitId: string,
+  actor?: string,
+  options: CompleteServiceVisitOptions = {}
+): Promise<boolean> {
   const before = await repo.findServiceVisitById(serviceVisitId);
   await repo.completeServiceVisitRpc(serviceVisitId);
   const after = await repo.findServiceVisitById(serviceVisitId);
@@ -47,14 +70,16 @@ export async function completeServiceVisit(repo: SchedulingRepository, serviceVi
       await repo.updateServiceVisitPricingPaymentStatus(serviceVisitId, "awaiting_payment");
     }
 
-    await enqueueNotification(repo, {
-      serviceVisitId,
-      customerId: before.customerId,
-      notificationType: "completed",
-      channel: "email",
-      scheduledSendAt: new Date(),
-      versionKey: "v1",
-    });
+    if (!options.skipCompletedNotification) {
+      await enqueueNotification(repo, {
+        serviceVisitId,
+        customerId: before.customerId,
+        notificationType: "completed",
+        channel: "email",
+        scheduledSendAt: new Date(),
+        versionKey: "v1",
+      });
+    }
 
     // Review automation: only after this GENUINE completion (this whole
     // block only runs on the transition that actually completed), never

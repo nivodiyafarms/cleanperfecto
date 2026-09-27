@@ -53,6 +53,32 @@ describe("dispatchDueNotifications", () => {
     expect(emailState.sentEmails[0].to).toBe(CONTACT.email);
   });
 
+  it("dispatching a due final_total_ready email never triggers any payment/charge — sending is purely a content+delivery step, with no payment gateway involved", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const visit = await seedVisit(repo);
+    await enqueueNotification(repo, {
+      serviceVisitId: visit.id,
+      customerId: "customer-1",
+      notificationType: "final_total_ready",
+      channel: "email",
+      scheduledSendAt: new Date("2026-08-24T00:00:00Z"),
+      versionKey: "158.72",
+    });
+    const { repo: preferencesRepo } = createFakeCustomerNotificationPreferencesRepository();
+    const { sender: email, state: emailState } = createFakeEmailSender();
+    const { sender: sms } = createFakeSmsSender();
+
+    const result = await dispatchDueNotifications(repo, preferencesRepo, { email, sms }, contactLookup, new Date("2026-08-24T01:00:00Z"));
+
+    expect(result).toEqual({ claimed: 1, sent: 1, retried: 0, failedTerminal: 0 });
+    expect(emailState.sentEmails.length).toBe(1);
+    // Dispatch only ever touches service_visit_notifications and sends
+    // content — no service_visit_payments row is created and no PaymentIntent
+    // is ever created merely by an email being sent.
+    const payment = await repo.findServiceVisitPaymentByVisitId(visit.id);
+    expect(payment).toBeNull();
+  });
+
   // NOTE: claim due-ness is evaluated by claimDueServiceVisitNotifications
   // itself (the fake mirrors the real Postgres RPC's use of `now()`) against
   // the REAL wall clock — never against the `now` parameter passed to

@@ -91,8 +91,13 @@ const COPY_BY_TYPE: Record<ServiceVisitNotificationType, { subject: string; line
     line: () => "Your bank requires additional verification to complete this payment. Please finish the secure authentication step.",
   },
   final_total_ready: {
-    subject: "Your Final Total is ready",
-    line: (when) => `Your cleaning on ${when} is finished and reviewed. Your Final Total is ready — review and pay when you're ready.`,
+    subject: "Cleaning complete — review your Final Total",
+    // The ONE post-cleaning email a Pay Per Cleaning customer receives from
+    // Finalize & Send (see finalize-and-send.ts's own doc comment) — never
+    // paired with a separate 'completed' email for the same event, so this
+    // copy covers both "your cleaning is done" and "here's what to do next"
+    // in one message.
+    line: () => "Your CleanPerfecto cleaning is complete. Review your final service details, choose a tip if you'd like, and complete payment securely.",
   },
 };
 
@@ -149,7 +154,7 @@ export function buildNotificationContent(input: NotificationContentInput): Notif
     payment_succeeded: "View payment",
     payment_failed: "Review & Pay",
     payment_action_required: "Review & Pay",
-    final_total_ready: "Confirm Final Total & Pay",
+    final_total_ready: "Review Final Total",
   };
   const linkLabel = LINK_LABEL_BY_TYPE[input.notificationType] ?? "View details";
 

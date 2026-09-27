@@ -253,6 +253,29 @@ describe("completeServiceVisit", () => {
     expect(completedNotices[0].state).toBe("pending");
   });
 
+  it("skipCompletedNotification: true suppresses the 'completed' email — used by finalize-and-send.ts, which sends its own 'final_total_ready' instead", async () => {
+    const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+
+    await completeServiceVisit(repo, visitId, "admin:1", { skipCompletedNotification: true });
+
+    const completedNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "completed");
+    expect(completedNotices.length).toBe(0);
+    // Every other side effect of a genuine completion still runs — this
+    // option ONLY suppresses the one notification.
+    expect(state.serviceVisitsById.get(visitId)?.status).toBe("completed");
+    const completedEvents = state.events.filter((e) => e.serviceVisitId === visitId && e.eventType === "completed");
+    expect(completedEvents.length).toBe(1);
+  });
+
+  it("skipCompletedNotification defaults to false — omitting it (every other caller) still sends 'completed' unchanged", async () => {
+    const { repo, state, visitId } = await seedScheduledPackageVisit("pkg-1");
+
+    await completeServiceVisit(repo, visitId);
+
+    const completedNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "completed");
+    expect(completedNotices.length).toBe(1);
+  });
+
   describe("review_request", () => {
     beforeEach(() => {
       process.env.GOOGLE_REVIEW_URL = "https://example.com/leave-a-review";
