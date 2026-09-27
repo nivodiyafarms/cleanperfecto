@@ -130,57 +130,41 @@ export async function getVisitPaymentStatusAction(serviceVisitId: string): Promi
   };
 }
 
-export interface VisitPricingApprovalState {
-  /** null means no service_visit_pricing row exists yet for this visit — nothing to review or approve. */
-  priceStatus: "estimated" | "pending_customer_approval" | "confirmed" | null;
-  requiresCustomerApproval: boolean;
-  previouslyApprovedAmount: number | null;
+export interface VisitPricingState {
+  /** null means no service_visit_pricing row exists yet for this visit — nothing to show. */
   totalAmount: number | null;
-  /** Whether the visit itself has completed. */
-  visitCompleted: boolean;
   /**
-   * Whether the physical cleaning is already done (Finalize & Send flow —
-   * see finalize-and-send.ts) even though the visit hasn't crossed into
-   * 'completed' yet because this exact pricing still needs the customer's
-   * approval. When true, a pending increase is chargeable RIGHT NOW in the
-   * customer's one confirmFinalTotalAndPay click (tax/tip included) rather
-   * than the legacy "approve now, pay once we complete it" flow used for a
-   * price increase proposed ahead of a recurring visit that hasn't
-   * happened yet.
+   * True once the visit has completed AND its pricing is confirmed — i.e.
+   * ready for the customer's Final Total review/tip/payment
+   * (getVisitPaymentReviewAction is safe to call). Pay Per Cleaning has no
+   * separate price-change approval step (owner-approved product decision,
+   * 2026-09-26): the customer's own explicit Pay action on Final Total is
+   * the sole authorization point, so this is a plain readiness check, never
+   * an approval gate.
    */
-  visitWorkFinished: boolean;
+  readyForPayment: boolean;
 }
 
 /**
  * Read-only pre-check the customer-facing payment screen calls BEFORE
- * attempting a full payment review, so a pending price-increase approval
- * renders as its own clear card (old vs. new amount) on the SAME screen
- * instead of surfacing prepareVisitPaymentReview's generic
- * InvalidVisitStateError ("pricing is not confirmed").
+ * attempting a full payment review, so a not-yet-ready visit (cleaning not
+ * done yet) renders a clear "not ready yet" message instead of surfacing
+ * prepareVisitPaymentReview's generic InvalidVisitStateError.
  */
-export async function getVisitPricingStateAction(serviceVisitId: string): Promise<PaymentActionResult<VisitPricingApprovalState>> {
+export async function getVisitPricingStateAction(serviceVisitId: string): Promise<PaymentActionResult<VisitPricingState>> {
   const session = await requireCustomer();
   const repo = createSupabaseSchedulingRepository();
   const visit = await assertVisitBelongsToCustomer(repo, serviceVisitId, session.customerId);
 
   const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
-  const visitCompleted = visit.status === "completed";
-  const visitWorkFinished = visit.status === "work_finished";
   if (!pricing) {
-    return {
-      ok: true,
-      data: { priceStatus: null, requiresCustomerApproval: false, previouslyApprovedAmount: null, totalAmount: null, visitCompleted, visitWorkFinished },
-    };
+    return { ok: true, data: { totalAmount: null, readyForPayment: false } };
   }
   return {
     ok: true,
     data: {
-      priceStatus: pricing.priceStatus,
-      requiresCustomerApproval: pricing.requiresCustomerApproval,
-      previouslyApprovedAmount: pricing.previouslyApprovedAmount,
       totalAmount: pricing.totalAmount,
-      visitCompleted,
-      visitWorkFinished,
+      readyForPayment: visit.status === "completed" && pricing.priceStatus === "confirmed",
     },
   };
 }
@@ -194,14 +178,15 @@ export interface PreviewFinalTotalTipResult {
 
 /**
  * Read-only, never-persisted preview of tax+tip for a visit whose pricing
- * still requires customer approval (price_status='pending_customer_approval')
- * — prepareVisitPaymentReview/selectVisitTip both hard-gate on 'confirmed'
- * pricing and would persist a service_visit_payments row keyed to an amount
- * that could still change if admin revises scope again before the customer
- * actually confirms, so this deliberately duplicates their tax-preview math
- * (resolveTipBasisAmount + resolveTipAmount + a throwaway Stripe Tax
- * Calculation) without ever writing anything. The customer's actual
- * confirmFinalTotalAndPayAction call is what persists the real numbers.
+ * is not yet 'confirmed' — prepareVisitPaymentReview/selectVisitTip both
+ * hard-gate on 'confirmed' pricing and would persist a service_visit_payments
+ * row keyed to an amount that could still change before it is, so this
+ * deliberately duplicates their tax-preview math (resolveTipBasisAmount +
+ * resolveTipAmount + a throwaway Stripe Tax Calculation) without ever
+ * writing anything. Not currently called by any client screen — Pay Per
+ * Cleaning's Final Total flow only ever reaches the customer once pricing
+ * is already confirmed (see finalize-and-send.ts) — but kept as a safe,
+ * correct preview utility for any other not-yet-confirmed row.
  */
 export async function previewFinalTotalTipAction(
   serviceVisitId: string,
@@ -249,10 +234,13 @@ export async function previewFinalTotalTipAction(
 
 /**
  * The customer's ONE "Confirm Final Total & Pay" click — see
- * confirm-final-total-and-pay.ts for the full behavior. Handles both a
- * normal/lower confirmed total and a pending price increase (capturing
- * approval evidence itself, no separate admin-mediated round trip) in the
- * same call.
+ * confirm-final-total-and-pay.ts for the full behavior, including the
+ * narrow edge case (pricing confirmed ahead of the cleaning) it still
+ * handles. Not currently called by VisitPaymentFlow.tsx, which uses the
+ * plain selectVisitTipAction + confirmVisitPaymentAction two-step pattern
+ * instead (pricing is already confirmed by the time the customer's Final
+ * Total screen appears — see finalize-and-send.ts) — kept for that edge
+ * case and any future caller that needs the combined one-click behavior.
  */
 export async function confirmFinalTotalAndPayAction(
   serviceVisitId: string,

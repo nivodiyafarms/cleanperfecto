@@ -342,7 +342,7 @@ describe("addCustomPricingAdjustment", () => {
     expect(pricing.totalAmount).toBe(roundToCents(baseAmount + 30 + 10));
   });
 
-  it("requires customer approval when a custom charge pushes the total above the previously approved amount", async () => {
+  it("never requires customer approval, even when a custom charge pushes the total above the previously approved amount — Pay Per Cleaning has no separate approval gate", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
@@ -356,8 +356,8 @@ describe("addCustomPricingAdjustment", () => {
       actorRole: "operations",
     });
 
-    expect(pricing.requiresCustomerApproval).toBe(true);
-    expect(pricing.priceStatus).toBe("pending_customer_approval");
+    expect(pricing.requiresCustomerApproval).toBe(false);
+    expect(pricing.priceStatus).toBe("estimated");
   });
 
   it("does not require customer approval for a discount alone, since the total only decreases", async () => {

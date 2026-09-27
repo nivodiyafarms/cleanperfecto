@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import ActionForm from "@/components/admin/ActionForm";
 import { formatMoney } from "@/lib/admin/format";
-import { approveVisitPricingIncreaseAction } from "@/lib/customer-portal/actions/scope-actions";
 import { getPaymentsSummary } from "@/lib/customer-portal/queries";
 import { assertVisitBelongsToCustomer, CustomerOwnershipError } from "@/lib/customer-portal/ownership";
 import { requireCustomer } from "@/lib/customer-portal/require-customer";
@@ -59,14 +57,11 @@ export default async function MyPaymentsPage({ searchParams }: MyPaymentsPagePro
     const pricing = await repo.findServiceVisitPricingByVisitId(visit.id);
     if (!pricing) continue;
     // "confirmed" on a completed visit -> the normal final-total/tip/pay
-    // screen. A pending price-increase approval is ALSO routed through the
-    // same VisitPaymentFlow card (not the generic list below) — whether or
-    // not the visit has completed yet — so approving it is always the
-    // customer's own one-click action, never a wait for a separate
-    // admin-mediated round trip. Payment itself still only becomes
-    // available once the visit is actually completed (see
-    // confirm-final-total-and-pay.ts).
-    if ((pricing.priceStatus === "confirmed" && visit.status === "completed") || pricing.requiresCustomerApproval) {
+    // screen, via VisitPaymentFlow. Pay Per Cleaning has no separate
+    // price-change approval step (owner-approved product decision,
+    // 2026-09-26) — Finalize & Send always confirms pricing and completes
+    // the visit together, so this is a plain readiness check.
+    if (pricing.priceStatus === "confirmed" && visit.status === "completed") {
       visitsNeedingPayment.push(visit.id);
     }
   }
@@ -95,14 +90,6 @@ export default async function MyPaymentsPage({ searchParams }: MyPaymentsPagePro
                 <div>
                   {formatMoney(p.amountDueFromCustomer)} — {p.priceStatus} / {p.paymentStatus}
                 </div>
-                {p.priceStatus === "pending_customer_approval" && !visitsNeedingPayment.includes(p.serviceVisitId) && (
-                  <ActionForm action={approveVisitPricingIncreaseAction} className="mt-1">
-                    <input type="hidden" name="serviceVisitId" value={p.serviceVisitId} />
-                    <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
-                      Approve higher amount
-                    </button>
-                  </ActionForm>
-                )}
               </li>
             ))}
           </ul>

@@ -92,6 +92,52 @@ async function seedCompletedConfirmedVisit(customerId = "customer-1") {
   return visit.id;
 }
 
+/** Mirrors the real Finalize & Send outcome for a visit with a custom charge and discount/credit — base $138.72 + charge $30 - discount $10 = $158.72. */
+async function seedCompletedConfirmedVisitWithAdjustments(customerId = "customer-1") {
+  const visit = await fakeScheduling.repo.insertServiceVisit({ ...NEW_VISIT, customerId });
+  await fakeScheduling.repo.upsertServiceVisitPricing({
+    serviceVisitId: visit.id,
+    pricingVersion: "v1",
+    pricingSnapshot: {},
+    baseAmount: 138.72,
+    addOnIds: [],
+    addOnAmount: 0,
+    customAdjustments: [
+      {
+        id: "adj-1",
+        type: "custom_charge",
+        description: "Extra wall cleaning",
+        amount: 30,
+        addedByAdminUserId: "admin:1",
+        addedByRole: "operations",
+        addedAt: new Date(),
+      },
+      {
+        id: "adj-2",
+        type: "custom_discount",
+        description: "Courtesy credit",
+        amount: 10,
+        addedByAdminUserId: "owner:1",
+        addedByRole: "owner_admin",
+        addedAt: new Date(),
+      },
+    ],
+    customChargeAmount: 30,
+    customDiscountAmount: 10,
+    totalAmount: 158.72,
+    amountDueFromCustomer: 158.72,
+    priceStatus: "estimated",
+    requiresCustomerApproval: false,
+    previouslyApprovedAmount: null,
+  });
+  await fakeScheduling.repo.confirmServiceVisitPricing(visit.id, "admin:1");
+  fakeScheduling.state.serviceVisitsById.set(visit.id, {
+    ...(await fakeScheduling.repo.findServiceVisitById(visit.id))!,
+    status: "completed",
+  });
+  return visit.id;
+}
+
 beforeEach(() => {
   fakeScheduling = createFakeSchedulingRepository();
   fakeBooking = createFakeBookingRepository({
@@ -125,6 +171,20 @@ describe("getVisitPaymentReviewAction", () => {
     const result = await getVisitPaymentReviewAction(visitId);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.approvedAmount).toBe(179);
+  });
+
+  it("exposes the original booking price and every adjustment line item — customer sees original vs final price and all line items", async () => {
+    mockSession("customer-1");
+    const visitId = await seedCompletedConfirmedVisitWithAdjustments("customer-1");
+    const result = await getVisitPaymentReviewAction(visitId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.baseAmount).toBe(138.72);
+    expect(result.data.approvedAmount).toBe(158.72);
+    expect(result.data.lineItems).toEqual([
+      { description: "Extra wall cleaning", amount: 30 },
+      { description: "Courtesy credit", amount: -10 },
+    ]);
   });
 });
 
@@ -161,6 +221,23 @@ describe("confirmVisitPaymentAction", () => {
     const result = await confirmVisitPaymentAction(visitId);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.outcome).toBe("ready");
+  });
+
+  it("SAVED PAYMENT METHOD != AUTHORIZATION TO CHARGE: no PaymentIntent exists after review + tip selection alone — only confirmVisitPaymentAction (the customer's explicit Pay click) creates one", async () => {
+    mockSession("customer-1");
+    const visitId = await seedCompletedConfirmedVisit("customer-1");
+    await getVisitPaymentReviewAction(visitId);
+    await selectVisitTipAction(visitId, "percentage_15");
+
+    const beforePay = await fakeScheduling.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(beforePay?.stripePaymentIntentId ?? null).toBeNull();
+    expect(fakeGatewayBundle.state.createPaymentIntentCallCount).toBe(0);
+
+    await confirmVisitPaymentAction(visitId);
+
+    expect(fakeGatewayBundle.state.createPaymentIntentCallCount).toBe(1);
+    const afterPay = await fakeScheduling.repo.findServiceVisitPaymentByVisitId(visitId);
+    expect(afterPay?.stripePaymentIntentId).not.toBeNull();
   });
 });
 
@@ -220,37 +297,20 @@ describe("getVisitPaymentStatusAction", () => {
   });
 });
 
-async function seedWorkFinishedPendingApproval(customerId = "customer-1") {
+async function seedWorkFinishedNotYetConfirmed(customerId = "customer-1") {
   const visit = await fakeScheduling.repo.insertServiceVisit({ ...NEW_VISIT, customerId });
   await fakeScheduling.repo.upsertServiceVisitPricing({
     serviceVisitId: visit.id,
     pricingVersion: "v1",
     pricingSnapshot: {},
     baseAmount: 200,
-    addOnIds: [],
-    addOnAmount: 0,
-    totalAmount: 200,
-    amountDueFromCustomer: 200,
-    priceStatus: "estimated",
-    requiresCustomerApproval: false,
-    previouslyApprovedAmount: null,
-  });
-  await fakeScheduling.repo.confirmServiceVisitPricing(visit.id, "admin:1");
-  await fakeScheduling.repo.upsertServiceVisitPricing({
-    serviceVisitId: visit.id,
-    pricingVersion: "v1",
-    pricingSnapshot: {},
-    // Base is unchanged — the $30 increase comes entirely from adding the
-    // inside_oven add-on (baseAmount + addOnAmount must sum to totalAmount,
-    // since resolveTipBasisAmount now reads them separately).
-    baseAmount: 200,
     addOnIds: ["inside_oven"],
     addOnAmount: 30,
     totalAmount: 230,
     amountDueFromCustomer: 230,
-    priceStatus: "pending_customer_approval",
-    requiresCustomerApproval: true,
-    previouslyApprovedAmount: 200,
+    priceStatus: "estimated",
+    requiresCustomerApproval: false,
+    previouslyApprovedAmount: null,
   });
   fakeScheduling.state.serviceVisitsById.set(visit.id, {
     ...(await fakeScheduling.repo.findServiceVisitById(visit.id))!,
@@ -263,34 +323,41 @@ async function seedWorkFinishedPendingApproval(customerId = "customer-1") {
 describe("getVisitPricingStateAction", () => {
   it("rejects a visit that does not belong to the authenticated customer", async () => {
     mockSession("customer-1");
-    const visitId = await seedWorkFinishedPendingApproval("customer-2");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-2");
     await expect(getVisitPricingStateAction(visitId)).rejects.toThrow(CustomerOwnershipError);
   });
 
-  it("reports visitWorkFinished=true and visitCompleted=false for a Finalize & Send'd visit still awaiting approval", async () => {
+  it("reports readyForPayment=false for a work-finished visit whose pricing hasn't been confirmed/completed yet (Finalize & Send hasn't run)", async () => {
     mockSession("customer-1");
-    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-1");
     const result = await getVisitPricingStateAction(visitId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.requiresCustomerApproval).toBe(true);
-    expect(result.data.visitCompleted).toBe(false);
-    expect(result.data.visitWorkFinished).toBe(true);
-    expect(result.data.previouslyApprovedAmount).toBe(200);
+    expect(result.data.readyForPayment).toBe(false);
     expect(result.data.totalAmount).toBe(230);
+  });
+
+  it("reports readyForPayment=true once Finalize & Send has confirmed pricing and completed the visit", async () => {
+    mockSession("customer-1");
+    const visitId = await seedCompletedConfirmedVisit("customer-1");
+    const result = await getVisitPricingStateAction(visitId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.readyForPayment).toBe(true);
+    expect(result.data.totalAmount).toBe(179);
   });
 });
 
 describe("previewFinalTotalTipAction", () => {
   it("rejects a visit that does not belong to the authenticated customer", async () => {
     mockSession("customer-1");
-    const visitId = await seedWorkFinishedPendingApproval("customer-2");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-2");
     await expect(previewFinalTotalTipAction(visitId, "percentage_15")).rejects.toThrow(CustomerOwnershipError);
   });
 
   it("previews tax/tip without persisting anything — no service_visit_payments row is created", async () => {
     mockSession("customer-1");
-    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-1");
 
     const result = await previewFinalTotalTipAction(visitId, "percentage_20");
 
@@ -301,12 +368,12 @@ describe("previewFinalTotalTipAction", () => {
     const payment = await fakeScheduling.repo.findServiceVisitPaymentByVisitId(visitId);
     expect(payment).toBeNull();
     const pricing = await fakeScheduling.repo.findServiceVisitPricingByVisitId(visitId);
-    expect(pricing?.priceStatus).toBe("pending_customer_approval"); // untouched by the preview
+    expect(pricing?.priceStatus).toBe("estimated"); // untouched by the preview
   });
 
   it("supports a custom $0 tip preview", async () => {
     mockSession("customer-1");
-    const visitId = await seedWorkFinishedPendingApproval("customer-1");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-1");
 
     const result = await previewFinalTotalTipAction(visitId, "custom", 0);
 

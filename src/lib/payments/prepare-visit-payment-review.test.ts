@@ -86,6 +86,86 @@ describe("prepareVisitPaymentReview", () => {
     expect(review2.serviceVisitPaymentId).toBe(review.serviceVisitPaymentId);
   });
 
+  it("exposes baseAmount and an empty lineItems list when nothing was added/adjusted", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await repo.insertServiceVisit(NEW_VISIT);
+    await repo.upsertServiceVisitPricing({
+      serviceVisitId: visit.id,
+      pricingVersion: "v1",
+      pricingSnapshot: {},
+      baseAmount: 138.72,
+      addOnIds: [],
+      addOnAmount: 0,
+      totalAmount: 138.72,
+      amountDueFromCustomer: 138.72,
+      priceStatus: "estimated",
+      requiresCustomerApproval: false,
+      previouslyApprovedAmount: null,
+    });
+    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
+    state.serviceVisitsById.set(visit.id, { ...(await repo.findServiceVisitById(visit.id))!, status: "completed" });
+
+    const { gateway } = createFakeVisitPaymentGateway();
+    const review = await prepareVisitPaymentReview(repo, gateway, visit.id);
+
+    expect(review.baseAmount).toBe(138.72);
+    expect(review.approvedAmount).toBe(138.72);
+    expect(review.lineItems).toEqual([]);
+  });
+
+  it("itemizes predefined add-ons, custom charges (positive), and custom discounts/credits (negative) as separate line items", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const visit = await repo.insertServiceVisit(NEW_VISIT);
+    await repo.upsertServiceVisitPricing({
+      serviceVisitId: visit.id,
+      pricingVersion: "v1",
+      pricingSnapshot: {},
+      baseAmount: 138.72,
+      addOnIds: ["inside_oven"],
+      addOnAmount: 30,
+      customAdjustments: [
+        {
+          id: "adj-1",
+          type: "custom_charge",
+          description: "Extra wall cleaning",
+          amount: 30,
+          addedByAdminUserId: "admin:1",
+          addedByRole: "operations",
+          addedAt: new Date(),
+        },
+        {
+          id: "adj-2",
+          type: "custom_discount",
+          description: "Courtesy credit",
+          amount: 10,
+          addedByAdminUserId: "owner:1",
+          addedByRole: "owner_admin",
+          addedAt: new Date(),
+        },
+      ],
+      customChargeAmount: 30,
+      customDiscountAmount: 10,
+      totalAmount: 188.72,
+      amountDueFromCustomer: 188.72,
+      priceStatus: "estimated",
+      requiresCustomerApproval: false,
+      previouslyApprovedAmount: null,
+    });
+    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
+    state.serviceVisitsById.set(visit.id, { ...(await repo.findServiceVisitById(visit.id))!, status: "completed" });
+
+    const { gateway } = createFakeVisitPaymentGateway();
+    const review = await prepareVisitPaymentReview(repo, gateway, visit.id);
+
+    expect(review.baseAmount).toBe(138.72);
+    expect(review.approvedAmount).toBe(188.72);
+    expect(review.lineItems).toEqual([
+      { description: "Oven Interior", amount: 30 },
+      { description: "Extra wall cleaning", amount: 30 },
+      { description: "Courtesy credit", amount: -10 },
+    ]);
+  });
+
   it("skips the Stripe Tax preview call entirely when nothing is collectible (e.g. prepaid, no extras)", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const visit = await repo.insertServiceVisit(NEW_VISIT);

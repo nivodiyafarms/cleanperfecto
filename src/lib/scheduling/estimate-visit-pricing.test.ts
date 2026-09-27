@@ -207,23 +207,25 @@ describe("estimateVisitPricing", () => {
     await expect(estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] })).rejects.toThrow(InvalidVisitStateError);
   });
 
-  it("sets requiresCustomerApproval only when a later estimate exceeds the previously confirmed amount", async () => {
+  it("requiresCustomerApproval is always false and priceStatus is always 'estimated' — Pay Per Cleaning has no separate approval gate", async () => {
     const { repo } = createFakeSchedulingRepository();
     const { visit } = await seedPpcVisitWithApprovedScope(repo);
 
     const first = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
-    expect(first.requiresCustomerApproval).toBe(false); // nothing previously approved yet
+    expect(first.requiresCustomerApproval).toBe(false);
+    expect(first.priceStatus).toBe("estimated");
 
     await repo.confirmServiceVisitPricing(visit.id, "admin:1");
 
+    // A later re-estimate that increases the total still never sets the
+    // approval gate — the customer's own Pay action on Final Total is the
+    // sole authorization point (see confirm-visit-pricing.ts).
     const second = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
-    expect(second.requiresCustomerApproval).toBe(true);
-
-    const third = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
-    expect(third.requiresCustomerApproval).toBe(false);
+    expect(second.requiresCustomerApproval).toBe(false);
+    expect(second.priceStatus).toBe("estimated");
   });
 
-  it("enqueues a pending pricing_approval_required notice when a re-estimate exceeds the previously confirmed amount", async () => {
+  it("never enqueues a pricing_approval_required notice, even when a re-estimate exceeds the previously confirmed amount", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { visit } = await seedPpcVisitWithApprovedScope(repo);
 
@@ -235,25 +237,19 @@ describe("estimateVisitPricing", () => {
     const notices = [...state.notifications.values()].filter(
       (n) => n.serviceVisitId === visit.id && n.notificationType === "pricing_approval_required"
     );
-    expect(notices.length).toBe(1);
-    expect(notices[0].state).toBe("pending");
+    expect(notices.length).toBe(0);
   });
 
-  it("does not enqueue a pricing_approval_required notice when a re-estimate is the same or lower than the previously confirmed amount", async () => {
-    const { repo, state } = createFakeSchedulingRepository();
+  it("preserves previouslyApprovedAmount as legacy/historical data without letting it gate anything", async () => {
+    const { repo } = createFakeSchedulingRepository();
     const { visit } = await seedPpcVisitWithApprovedScope(repo);
 
-    const first = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
-    await repo.confirmServiceVisitPricing(visit.id, "admin:1");
-    expect(first.requiresCustomerApproval).toBe(false);
-
-    // Re-estimate with no add-ons — total drops back to base only, strictly lower.
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
+    const confirmed = await repo.confirmServiceVisitPricing(visit.id, "admin:1");
 
-    const notices = [...state.notifications.values()].filter(
-      (n) => n.serviceVisitId === visit.id && n.notificationType === "pricing_approval_required"
-    );
-    expect(notices.length).toBe(0);
+    const second = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+    expect(second.previouslyApprovedAmount).toBe(confirmed?.totalAmount);
+    expect(second.requiresCustomerApproval).toBe(false);
   });
 });
 
@@ -366,7 +362,7 @@ describe("estimateVisitPricing — directly-booked one-time visit", () => {
     );
   });
 
-  it("requires customer approval only once a later re-estimate exceeds the confirmed amount, exactly like the recurring path", async () => {
+  it("never requires customer approval, even once a later re-estimate exceeds the confirmed amount — same as the recurring path", async () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { repo, visit } = await seedDirectVisit(bookingRepo);
 
@@ -376,8 +372,8 @@ describe("estimateVisitPricing — directly-booked one-time visit", () => {
     await repo.confirmServiceVisitPricing(visit.id, "admin:1");
 
     const second = await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] }, bookingRepo);
-    expect(second.requiresCustomerApproval).toBe(true);
-    expect(second.priceStatus).toBe("pending_customer_approval");
+    expect(second.requiresCustomerApproval).toBe(false);
+    expect(second.priceStatus).toBe("estimated");
   });
 
   it("refuses to re-estimate a visit that has already completed — pricing is frozen after completion", async () => {

@@ -67,46 +67,45 @@ async function seedConfirmedVisit(
   return visit;
 }
 
-async function seedPendingIncrease(
+/** A visit whose pricing was confirmed AHEAD of the cleaning (e.g. via confirmVisitPricingAction, the recurring pre-cleaning confirm tool) — 'confirmed' but not yet 'completed'. */
+async function seedConfirmedButNotCompletedVisit(
   schedulingRepo: ReturnType<typeof createFakeSchedulingRepository>["repo"],
-  state: ReturnType<typeof createFakeSchedulingRepository>["state"],
-  oldAmount: number,
-  newAmount: number,
-  completed: boolean
+  amount: number
 ) {
   const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);
   await schedulingRepo.upsertServiceVisitPricing({
     serviceVisitId: visit.id,
     pricingVersion: "v1",
     pricingSnapshot: {},
-    baseAmount: oldAmount,
+    baseAmount: amount,
     addOnIds: [],
     addOnAmount: 0,
-    totalAmount: oldAmount,
-    amountDueFromCustomer: oldAmount,
+    totalAmount: amount,
+    amountDueFromCustomer: amount,
     priceStatus: "estimated",
     requiresCustomerApproval: false,
     previouslyApprovedAmount: null,
   });
   await schedulingRepo.confirmServiceVisitPricing(visit.id, "admin:1");
+  return visit;
+}
+
+/** A legacy row still carrying a 'pending_customer_approval' price_status from before the 2026-09-26 product decision retired that gate — never produced by any current code path, but the row shape must still be handled safely (rejected, not silently auto-resolved). */
+async function seedLegacyPendingApprovalRow(schedulingRepo: ReturnType<typeof createFakeSchedulingRepository>["repo"], amount: number) {
+  const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);
   await schedulingRepo.upsertServiceVisitPricing({
     serviceVisitId: visit.id,
     pricingVersion: "v1",
     pricingSnapshot: {},
-    // Base is unchanged — the $30 increase from oldAmount to newAmount comes
-    // entirely from adding the inside_oven add-on (baseAmount + addOnAmount
-    // must sum to newAmount, since resolveTipBasisAmount now reads them
-    // separately rather than trusting the pre-summed totalAmount).
-    baseAmount: oldAmount,
-    addOnIds: ["inside_oven"],
-    addOnAmount: 30,
-    totalAmount: newAmount,
-    amountDueFromCustomer: newAmount,
+    baseAmount: amount,
+    addOnIds: [],
+    addOnAmount: 0,
+    totalAmount: amount,
+    amountDueFromCustomer: amount,
     priceStatus: "pending_customer_approval",
     requiresCustomerApproval: true,
-    previouslyApprovedAmount: oldAmount,
+    previouslyApprovedAmount: amount - 30,
   });
-  if (completed) await markCompleted(state, visit.id);
   return visit;
 }
 
@@ -140,11 +139,11 @@ describe("confirmFinalTotalAndPay", () => {
     ).rejects.toThrow(InvalidVisitStateError);
   });
 
-  it("a pending increase on a NOT-yet-completed visit is approved in one call, with no tip/payment attempted", async () => {
+  it("a visit confirmed ahead of the cleaning (not yet completed) returns approved_awaiting_completion, with no tip/payment attempted", async () => {
     const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
     const { gateway } = createFakeVisitPaymentGateway();
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
+    const visit = await seedConfirmedButNotCompletedVisit(schedulingRepo, 200);
 
     const outcome = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
       serviceVisitId: visit.id,
@@ -153,70 +152,21 @@ describe("confirmFinalTotalAndPay", () => {
 
     expect(outcome).toEqual({ outcome: "approved_awaiting_completion" });
 
-    const pricing = await schedulingRepo.findServiceVisitPricingByVisitId(visit.id);
-    expect(pricing?.priceStatus).toBe("confirmed");
-    expect(pricing?.requiresCustomerApproval).toBe(false);
-    expect(pricing?.previouslyApprovedAmount).toBe(230);
-    expect(pricing?.confirmedBy).toBe("customer:customer-1");
-
     const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
     expect(payment).toBeNull();
+    expect(state.serviceVisitsById.get(visit.id)?.status).not.toBe("completed");
   });
 
-  it("a pending increase on an ALREADY-completed visit is approved and paid in the same call (approve + confirm + tip + charge)", async () => {
+  it("Finalize & Send flow: a work_finished (not yet completed) visit is completed, tipped, and paid in the customer's ONE call", async () => {
     const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
     const { gateway } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, true);
-
-    const outcome = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
-      serviceVisitId: visit.id,
-      customerId: "customer-1",
-      tipSelectionType: "percentage_20",
-    });
-
-    expect(outcome.outcome).toBe("ready");
-    const pricing = await schedulingRepo.findServiceVisitPricingByVisitId(visit.id);
-    expect(pricing?.priceStatus).toBe("confirmed");
-    expect(pricing?.confirmedBy).toBe("customer:customer-1");
-    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
-    expect(payment?.approvedAmount).toBe(230);
-    expect(payment?.tipAmount).toBe(46); // 20% of 230
-    expect(payment?.totalAmount).toBe(276); // 230 + 46, 0% tax
-  });
-
-  it("retrying after the approval step already succeeded does not re-approve or double-charge", async () => {
-    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
-    const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
-    const { gateway, state: gatewayState } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, true);
-
-    const first = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
-      serviceVisitId: visit.id,
-      customerId: "customer-1",
-      tipSelectionType: "percentage_20",
-    });
-    const second = await confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, {
-      serviceVisitId: visit.id,
-      customerId: "customer-1",
-      tipSelectionType: "percentage_20",
-    });
-
-    expect(first.outcome).toBe("ready");
-    expect(second.outcome).toBe("ready");
-    if (first.outcome === "ready" && second.outcome === "ready") {
-      expect(second.clientSecret).toBe(first.clientSecret);
-    }
-    expect(gatewayState.createPaymentIntentCallCount).toBe(1);
-  });
-
-  it("Finalize & Send flow: a pending increase on a work_finished (not yet completed) visit is approved, completed, tipped, and paid in the customer's ONE call", async () => {
-    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
-    const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
-    const { gateway } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
-    // work_finished, not completed — the state Finalize & Send leaves a
-    // still-pending-approval visit in (see finalize-and-send.ts).
+    const visit = await seedConfirmedButNotCompletedVisit(schedulingRepo, 230);
+    // work_finished, not completed — Finalize & Send always confirms pricing
+    // and would normally complete the visit itself; this simulates the
+    // narrow edge case where pricing was confirmed ahead of time (see
+    // seedConfirmedButNotCompletedVisit) and the visit is only now marked
+    // work-finished, so this call is what crosses to 'completed'.
     const current = state.serviceVisitsById.get(visit.id)!;
     state.serviceVisitsById.set(visit.id, { ...current, status: "work_finished", workFinishedAt: new Date() });
 
@@ -228,9 +178,6 @@ describe("confirmFinalTotalAndPay", () => {
 
     expect(outcome.outcome).toBe("ready");
     expect(state.serviceVisitsById.get(visit.id)?.status).toBe("completed");
-    const pricing = await schedulingRepo.findServiceVisitPricingByVisitId(visit.id);
-    expect(pricing?.priceStatus).toBe("confirmed");
-    expect(pricing?.previouslyApprovedAmount).toBe(230);
     const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
     expect(payment?.approvedAmount).toBe(230);
     expect(payment?.tipAmount).toBe(46); // 20% of 230
@@ -241,7 +188,7 @@ describe("confirmFinalTotalAndPay", () => {
     const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
     const { gateway, state: gatewayState } = createFakeVisitPaymentGateway({ taxRateBps: 0 });
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
+    const visit = await seedConfirmedButNotCompletedVisit(schedulingRepo, 230);
     const current = state.serviceVisitsById.get(visit.id)!;
     state.serviceVisitsById.set(visit.id, { ...current, status: "work_finished", workFinishedAt: new Date() });
 
@@ -264,21 +211,17 @@ describe("confirmFinalTotalAndPay", () => {
     expect(gatewayState.createPaymentIntentCallCount).toBe(1);
   });
 
-  it("translates a failure while finalizing the increase into a clear, actionable error instead of a raw exception", async () => {
-    const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+  it("rejects (rather than silently auto-resolving) a legacy row still carrying a pending_customer_approval price_status — that gate is retired, never auto-bypassed", async () => {
+    const { repo: schedulingRepo } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository({ customers: CUSTOMER_WITH_CARD });
     const { gateway } = createFakeVisitPaymentGateway();
-    const visit = await seedPendingIncrease(schedulingRepo, state, 200, 230, false);
-
-    const originalConfirm = schedulingRepo.confirmServiceVisitPricing.bind(schedulingRepo);
-    schedulingRepo.confirmServiceVisitPricing = async () => {
-      throw new Error("service_visit_pricing pricing fields are immutable once the parent service_visit has completed");
-    };
+    const visit = await seedLegacyPendingApprovalRow(schedulingRepo, 230);
 
     await expect(
       confirmFinalTotalAndPay(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visit.id, customerId: "customer-1" })
     ).rejects.toThrow(InvalidVisitStateError);
 
-    schedulingRepo.confirmServiceVisitPricing = originalConfirm;
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+    expect(payment).toBeNull();
   });
 });

@@ -144,7 +144,7 @@ describe("finalizeAndSend", () => {
     expect(result.visit.status).toBe("completed");
   });
 
-  it("final amount higher (structured add-on change): requires customer approval and leaves the visit at work_finished, NOT completed", async () => {
+  it("final amount higher (structured add-on change): confirms and completes directly, with no approval gate", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
@@ -155,17 +155,40 @@ describe("finalizeAndSend", () => {
 
     const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
 
-    expect(result.requiresCustomerApproval).toBe(true);
-    // "Only after final pricing is frozen should the visit cross the
-    // completion/payment boundary" — a genuine increase must NOT complete
-    // the visit here; protect_service_visit_pricing_after_completion would
-    // otherwise permanently freeze the still-pending pricing.
-    expect(result.visit.status).toBe("work_finished");
-    expect(result.pricing?.priceStatus).toBe("pending_customer_approval");
-    expect(result.pricing?.requiresCustomerApproval).toBe(true);
+    expect(result.requiresCustomerApproval).toBe(false);
+    // Pay Per Cleaning no longer has a separate approval step — Finalize &
+    // Send always confirms pricing and completes the visit in one shot,
+    // whether the total stayed the same, decreased, or increased.
+    expect(result.visit.status).toBe("completed");
+    expect(result.pricing?.priceStatus).toBe("confirmed");
+    expect(result.pricing?.requiresCustomerApproval).toBe(false);
   });
 
-  it("higher amount produces durable approval evidence: previouslyApprovedAmount stays at the OLD amount until the customer resolves it", async () => {
+  it("charge + credit net increase still goes directly to Final Total: confirms and completes with no approval friction", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+
+    await repo.addCustomPricingAdjustmentWithAudit(
+      (await repo.findServiceVisitPricingByVisitId(visit.id))!.id,
+      { type: "custom_charge", description: "Extra wall cleaning", amount: 30 },
+      { actorAdminUserId: "admin:1", actorRole: "operations" }
+    );
+    const pricingAfterCharge = await repo.findServiceVisitPricingByVisitId(visit.id);
+    await repo.addCustomPricingAdjustmentWithAudit(
+      pricingAfterCharge!.id,
+      { type: "custom_discount", description: "Courtesy credit", amount: 10 },
+      { actorAdminUserId: "owner:1", actorRole: "owner_admin" }
+    );
+
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    expect(result.requiresCustomerApproval).toBe(false);
+    expect(result.visit.status).toBe("completed");
+    expect(result.pricing?.priceStatus).toBe("confirmed");
+  });
+
+  it("higher amount still preserves previouslyApprovedAmount as legacy/historical data, even though it no longer gates anything", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit, baseAmount } = await seedWorkFinishedVisit(repo, state);
@@ -173,7 +196,9 @@ describe("finalizeAndSend", () => {
 
     const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
 
-    expect(result.pricing?.previouslyApprovedAmount).toBe(baseAmount);
+    // confirmVisitPricing() (run unconditionally now) always overwrites
+    // previously_approved_amount to the NEW total_amount at confirm time.
+    expect(result.pricing?.previouslyApprovedAmount).toBe(baseAmount + 30);
     expect(result.pricing?.totalAmount).toBe(baseAmount + 30);
   });
 
@@ -188,6 +213,49 @@ describe("finalizeAndSend", () => {
     expect(sentEvents.length).toBe(1);
     const notices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(1);
+  });
+
+  it("only ever enqueues final_total_ready — never a pricing_approval_required notification, even on a genuine price increase", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const allNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id);
+    expect(allNotices.some((n) => n.notificationType === "pricing_approval_required")).toBe(false);
+    expect(allNotices.filter((n) => n.notificationType === "final_total_ready").length).toBe(1);
+  });
+
+  it("a custom charge alone (no predefined add-on) goes directly to Final Total with no approval gate", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit, baseAmount } = await seedWorkFinishedVisit(repo, state);
+    await repo.addCustomPricingAdjustmentWithAudit(
+      (await repo.findServiceVisitPricingByVisitId(visit.id))!.id,
+      { type: "custom_charge", description: "Extra wall cleaning", amount: 30 },
+      { actorAdminUserId: "admin:1", actorRole: "operations" }
+    );
+
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    expect(result.requiresCustomerApproval).toBe(false);
+    expect(result.visit.status).toBe("completed");
+    expect(result.pricing?.totalAmount).toBe(baseAmount + 30);
+  });
+
+  it("never creates a service_visit_payments row, PaymentIntent, or any charge — Finalize & Send only prepares pricing/notifications, never touches Stripe", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+    await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+
+    const payment = await repo.findServiceVisitPaymentByVisitId(visit.id);
+    expect(payment).toBeNull();
+    expect(state.financialAuditLog.length).toBe(0);
   });
 
   // Regression: confirmVisitPricing() (run once the customer approves)
@@ -206,7 +274,7 @@ describe("finalizeAndSend", () => {
 
     const [sentEvent] = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
     expect(sentEvent.previousState).toEqual({ previouslyApprovedAmount: baseAmount });
-    expect(sentEvent.newState).toEqual({ totalAmount: baseAmount + 30, requiresCustomerApproval: true });
+    expect(sentEvent.newState).toEqual({ totalAmount: baseAmount + 30, requiresCustomerApproval: false });
   });
 
   it("records no prior-approved-amount on the final_total_sent event when there was never a baseline to increase from", async () => {
@@ -251,7 +319,7 @@ describe("finalizeAndSend", () => {
     expect(notices.length).toBe(1);
   });
 
-  it("notification deduplication: a repeat call while still pending approval at the SAME amount never creates a second final_total_ready row", async () => {
+  it("is idempotent even when the first Finalize & Send involved a genuine price increase: the repeat call short-circuits to alreadySent, never re-notifying", async () => {
     const { repo, state } = createFakeSchedulingRepository();
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
@@ -260,9 +328,10 @@ describe("finalizeAndSend", () => {
     const first = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
     const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
 
-    expect(first.requiresCustomerApproval).toBe(true);
-    expect(second.requiresCustomerApproval).toBe(true);
-    expect(second.visit.status).toBe("work_finished");
+    expect(first.requiresCustomerApproval).toBe(false);
+    expect(first.visit.status).toBe("completed");
+    expect(second.alreadySent).toBe(true);
+    expect(second.visit.status).toBe("completed");
     const notices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(1);
   });

@@ -90,9 +90,9 @@ export async function editRecurringCadenceAction(_prevState: ActionResult | null
 /**
  * Admin confirms the final Pay Per Cleaning amount for a specific visit —
  * (re)computes the estimate against whatever add-ons are currently
- * selected, then confirms it as final. Refuses to confirm an amount that
- * still requires customer approval (see approveVisitPricingIncreaseAction
- * in the customer portal) — never lets admin silently bypass that gate.
+ * selected, then confirms it as final. Pay Per Cleaning has no separate
+ * customer price-change approval step (owner-approved product decision,
+ * 2026-09-26) — this always succeeds, whatever the recomputed amount is.
  */
 export async function confirmVisitPricingAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();

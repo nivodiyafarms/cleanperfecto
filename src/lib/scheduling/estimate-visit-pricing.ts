@@ -1,7 +1,6 @@
 import { PRICING_VERSION } from "@/lib/pricing/config";
 import { roundToCents } from "@/lib/pricing/money";
 import type { AddOnId } from "@/lib/pricing/types";
-import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import type { BookingRepository } from "@/lib/booking/repository";
 import type { ServiceVisitPricingRow } from "./domain-types";
 import { InvalidVisitStateError } from "./errors";
@@ -41,9 +40,18 @@ export interface EstimateVisitPricingInput {
  * amount_due_from_customer is add-ons only; otherwise (Pay Per Cleaning,
  * recurring or one-time), amount_due_from_customer is the full total.
  *
- * requires_customer_approval is set only when the newly computed
- * total_amount EXCEEDS the last customer-approved amount for this specific
- * visit — a same-or-lower re-estimate never blocks.
+ * requires_customer_approval is ALWAYS false and price_status is ALWAYS
+ * "estimated" here (owner-approved product decision, 2026-09-26): Pay Per
+ * Cleaning no longer has a separate "approve this price change" step before
+ * payment. The customer's own explicit Pay action on their Final Total (see
+ * confirm-visit-pricing.ts/finalize-and-send.ts/confirm-final-total-and-pay.ts)
+ * IS the authorization for whatever the final amount turns out to be —
+ * whether unchanged, lower, or higher than any earlier estimate. The two
+ * columns are retained on the row (never removed — no migration, preserves
+ * history on any pre-existing row) but no longer computed as blocking
+ * anything; previouslyApprovedAmount is likewise only ever read/passed
+ * through unchanged below, purely as legacy/historical data, never compared
+ * against totalAmount to gate anything.
  */
 export async function estimateVisitPricing(
   repo: SchedulingRepository,
@@ -109,6 +117,9 @@ export async function estimateVisitPricing(
   const addOnAmount = roundToCents(classified.pricedTotal);
 
   const existing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+  // Legacy/historical field only — read and passed straight through
+  // unchanged (never dropped), but no longer compared against totalAmount
+  // to gate anything. See this function's own doc comment.
   const previouslyApprovedAmount = existing?.previouslyApprovedAmount ?? null;
   // Custom charges/discounts are never an input to this function — they are
   // mutated ONLY by addCustomPricingAdjustment/removeCustomPricingAdjustment
@@ -131,24 +142,6 @@ export async function estimateVisitPricing(
   const amountDueFromCustomer = isPackageVisit
     ? roundToCents(Math.max(0, addOnAmount + customChargeAmount - customDiscountAmount))
     : totalAmount;
-  const requiresCustomerApproval = previouslyApprovedAmount !== null && totalAmount > previouslyApprovedAmount;
-
-  // Only a genuine INCREASE over the last customer-approved amount ever
-  // needs a notice — a same-or-lower re-estimate proceeds automatically
-  // under the existing business rule and must never notify. versionKey is
-  // the new total itself, so re-estimating to the SAME over-threshold
-  // amount again (e.g. an idempotent retry) never duplicates the notice,
-  // while a DIFFERENT (higher) amount correctly mints a fresh one.
-  if (requiresCustomerApproval) {
-    await enqueueNotification(repo, {
-      serviceVisitId: input.serviceVisitId,
-      customerId: visit.customerId,
-      notificationType: "pricing_approval_required",
-      channel: "email",
-      scheduledSendAt: new Date(),
-      versionKey: totalAmount.toFixed(2),
-    });
-  }
 
   return repo.upsertServiceVisitPricing({
     serviceVisitId: input.serviceVisitId,
@@ -162,8 +155,8 @@ export async function estimateVisitPricing(
     customDiscountAmount,
     totalAmount,
     amountDueFromCustomer,
-    priceStatus: requiresCustomerApproval ? "pending_customer_approval" : "estimated",
-    requiresCustomerApproval,
+    priceStatus: "estimated",
+    requiresCustomerApproval: false,
     previouslyApprovedAmount,
   });
 }

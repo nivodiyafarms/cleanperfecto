@@ -51,7 +51,45 @@ async function seedVisitWithSelectedTip(amountDueFromCustomer: number, tipSelect
   return { schedulingRepo, gateway, gatewayState, visitId: visit.id };
 }
 
+async function seedVisitWithoutTip(amountDueFromCustomer: number) {
+  const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+  const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);
+  await schedulingRepo.upsertServiceVisitPricing({
+    serviceVisitId: visit.id,
+    pricingVersion: "v1",
+    pricingSnapshot: {},
+    baseAmount: amountDueFromCustomer,
+    addOnIds: [],
+    addOnAmount: 0,
+    totalAmount: amountDueFromCustomer,
+    amountDueFromCustomer,
+    priceStatus: "estimated",
+    requiresCustomerApproval: false,
+    previouslyApprovedAmount: null,
+  });
+  await schedulingRepo.confirmServiceVisitPricing(visit.id, "admin:1");
+  state.serviceVisitsById.set(visit.id, { ...(await schedulingRepo.findServiceVisitById(visit.id))!, status: "completed" });
+
+  const { gateway } = createFakeVisitPaymentGateway();
+  await prepareVisitPaymentReview(schedulingRepo, gateway, visit.id);
+
+  return { schedulingRepo, gateway, visitId: visit.id };
+}
+
 describe("createVisitPaymentIntent", () => {
+  it("tip selection remains required before payment — refuses to create a PaymentIntent without one, even with a saved card", async () => {
+    const { schedulingRepo, gateway, visitId } = await seedVisitWithoutTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+
+    await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" })).rejects.toThrow(
+      "A tip selection is required before payment."
+    );
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.stripePaymentIntentId).toBeNull();
+  });
+
   it("returns needs_payment_method when the customer has no saved card", async () => {
     const { schedulingRepo, gateway, visitId } = await seedVisitWithSelectedTip(179);
     const { repo: bookingRepo } = createFakeBookingRepository({

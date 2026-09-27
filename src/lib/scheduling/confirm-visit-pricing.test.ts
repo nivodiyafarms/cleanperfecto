@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CalculationInput } from "@/lib/pricing/types";
 import { approveVisitPricingIncrease, confirmVisitPricing } from "./confirm-visit-pricing";
-import { InvalidVisitStateError } from "./errors";
 import { estimateVisitPricing } from "./estimate-visit-pricing";
 import { proposeRecurringScopeChange } from "./propose-recurring-scope-change";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
@@ -75,18 +74,18 @@ describe("confirmVisitPricing", () => {
     expect(confirmed.paymentStatus).toBe("awaiting_completion");
   });
 
-  it("refuses to confirm pricing that still requires customer approval", async () => {
+  it("confirms pricing that increased over the previously confirmed amount — Pay Per Cleaning has no separate approval gate", async () => {
     const { repo } = createFakeSchedulingRepository();
     const visit = await seedEstimatedVisit(repo);
-    await confirmVisitPricing(repo, { serviceVisitId: visit.id, confirmedBy: "admin:1" });
+    const first = await confirmVisitPricing(repo, { serviceVisitId: visit.id, confirmedBy: "admin:1" });
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    await expect(confirmVisitPricing(repo, { serviceVisitId: visit.id, confirmedBy: "admin:1" })).rejects.toThrow(
-      InvalidVisitStateError
-    );
+    const confirmed = await confirmVisitPricing(repo, { serviceVisitId: visit.id, confirmedBy: "admin:1" });
+    expect(confirmed.priceStatus).toBe("confirmed");
+    expect(confirmed.totalAmount).toBe(first.totalAmount + 30);
   });
 
-  it("approveVisitPricingIncrease clears the gate so admin can then confirm", async () => {
+  it("approveVisitPricingIncrease is a legacy no-op — requiresCustomerApproval is never true for a freshly computed estimate", async () => {
     const { repo } = createFakeSchedulingRepository();
     const visit = await seedEstimatedVisit(repo);
     await confirmVisitPricing(repo, { serviceVisitId: visit.id, confirmedBy: "admin:1" });

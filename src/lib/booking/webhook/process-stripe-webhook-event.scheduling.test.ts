@@ -196,4 +196,27 @@ describe("processStripeWebhookEvent — scheduling integration (setup mode)", ()
     expect(schedulingState.serviceVisitsById.size).toBe(1);
     expect(schedulingState.recurringVisitPlansById.size).toBe(6);
   });
+
+  it("SAVED PAYMENT METHOD != AUTHORIZATION TO CHARGE: a successful setup-mode session never creates a service_visit_payments row, a PaymentIntent, or any Stripe charge — only a 'requested' service_visit", async () => {
+    const { repo } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(normalBookingOrderInput());
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
+    const { repo: schedulingRepo, state: schedulingState } = createFakeSchedulingRepository();
+    const stripe = fakeStripe();
+    const createPaymentIntentSpy = vi.fn();
+    (stripe as unknown as { paymentIntents: { create: typeof createPaymentIntentSpy } }).paymentIntents.create = createPaymentIntentSpy;
+
+    await processStripeWebhookEvent(
+      stripe,
+      repo,
+      setupSessionEvent({ id: "cs_setup_9", mode: "setup", setup_intent: "seti_9", metadata: { booking_order_id: bookingOrder.id } }),
+      schedulingRepo
+    );
+
+    const visit = [...schedulingState.serviceVisitsById.values()][0];
+    expect(visit.status).toBe("requested"); // never 'completed' — nothing has been cleaned or charged
+    expect(schedulingState.servicePricingByVisitId.size).toBe(0); // no pricing row, no amount ever computed as chargeable
+    expect(schedulingState.financialAuditLog.length).toBe(0); // no financial event of any kind
+    expect(createPaymentIntentSpy).not.toHaveBeenCalled(); // Stripe was never asked to charge anything
+  });
 });

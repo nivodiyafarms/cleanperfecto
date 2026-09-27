@@ -23,14 +23,14 @@ function revalidateVisitPaths(visitId: string): void {
 
 /**
  * Admin's "Final Scope" step, distinct from confirmVisitPricingAction: this
- * ONLY recomputes the estimate (estimateVisitPricing) and never confirms it,
- * so a scope change that pushes the total over the previously-approved
- * amount is visible (requiresCustomerApproval) without the action itself
- * failing — pricing is deliberately left as-is (estimated or
- * pending_customer_approval) for Finalize & Send to resolve. Only usable
- * once the cleaner has marked the visit work-finished — before that, the
- * existing pre-completion "Confirm final price" section/action remains the
- * right tool.
+ * ONLY recomputes the estimate (estimateVisitPricing) and never confirms it
+ * — that's Finalize & Send's job. Pay Per Cleaning no longer has a separate
+ * customer price-change approval step (owner-approved product decision,
+ * 2026-09-26): a scope change that pushes the total up simply reflects in
+ * the new estimate, with no approval gate to surface. Only usable once the
+ * cleaner has marked the visit work-finished — before that, the existing
+ * pre-completion "Confirm final price" section/action remains the right
+ * tool.
  */
 export async function updateFinalScopeAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
@@ -50,9 +50,9 @@ export async function updateFinalScopeAction(_prevState: ActionResult | null, fo
     const pricing = await estimateVisitPricing(repo, { serviceVisitId, addOnIds }, createSupabaseBookingRepository());
     revalidateVisitPaths(serviceVisitId);
     return actionOk(
-      pricing.requiresCustomerApproval
-        ? `Final scope updated — $${pricing.totalAmount.toFixed(2)}, exceeds the previously approved $${pricing.previouslyApprovedAmount?.toFixed(2) ?? "0.00"}. Customer approval will be required.`
-        : `Final scope updated — $${pricing.totalAmount.toFixed(2)}. No customer approval needed.`
+      pricing.totalAmount !== pricing.baseAmount
+        ? `Final scope updated — $${pricing.totalAmount.toFixed(2)} (originally $${pricing.baseAmount.toFixed(2)}).`
+        : `Final scope updated — $${pricing.totalAmount.toFixed(2)}.`
     );
   } catch (error) {
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
@@ -195,8 +195,8 @@ export async function finalizeAndSendAction(_prevState: ActionResult | null, for
       return actionOk("Final Total was already sent for this visit — use Resend if the customer needs the link again.");
     }
     return actionOk(
-      result.requiresCustomerApproval
-        ? `Sent — final total $${result.pricing?.totalAmount.toFixed(2)} exceeds the previously approved amount, so the customer will approve and pay in one step.`
+      result.pricing && result.pricing.totalAmount !== result.pricing.baseAmount
+        ? `Sent — final total $${result.pricing.totalAmount.toFixed(2)} (originally $${result.pricing.baseAmount.toFixed(2)}).`
         : `Sent — final total $${result.pricing?.totalAmount.toFixed(2)}.`
     );
   } catch (error) {

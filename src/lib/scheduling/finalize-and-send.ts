@@ -29,42 +29,35 @@ export interface FinalizeAndSendResult {
  *   1. validate the visit is genuinely work-finished (or already finalized —
  *      see alreadySent below)
  *   2. revalidate final pricing server-side (estimateVisitPricing, using
- *      whatever add-ons are currently on the visit's pricing row — the
- *      admin's own separate "Final Scope" step, updateFinalScopeAction, is
- *      what actually changes them beforehand)
- *   3. freeze pricing (confirmVisitPricing) ONLY if the recomputed total does
- *      NOT require customer approval — confirmVisitPricing itself refuses a
- *      pending-approval amount
+ *      whatever add-ons/custom charges/discounts are currently on the
+ *      visit's pricing row — the admin's own separate "Final Scope" step,
+ *      updateFinalScopeAction, plus the Custom Charge/Discount actions, are
+ *      what actually change them beforehand)
+ *   3. freeze pricing (confirmVisitPricing) — ALWAYS, regardless of whether
+ *      the final total stayed the same, decreased, or increased. Pay Per
+ *      Cleaning no longer has a separate customer price-change approval
+ *      step (owner-approved product decision, 2026-09-26): the customer's
+ *      own explicit Pay action on their Final Total is the sole remaining
+ *      authorization point (see confirm-final-total-and-pay.ts), so
+ *      Finalize & Send never needs to wait for anything before freezing
+ *      pricing and completing the visit here.
  *   4. cross the existing work_finished -> completed boundary via
- *      completeServiceVisit ONLY once pricing is actually frozen (step 3
- *      ran) — "only after final pricing is frozen should the visit cross
- *      the completion/payment boundary." A genuine increase is deliberately
- *      left at price_status='pending_customer_approval' AND
- *      status='work_finished' (NOT completed) — completing it now would
- *      permanently freeze the pending-approval pricing via
- *      protect_service_visit_pricing_after_completion, making it
- *      impossible for the customer to ever approve. It is resolved later,
- *      in one motion, by the customer's own confirmFinalTotalAndPay call,
- *      which itself completes the visit the instant it confirms pricing
- *      (see that file's own doc comment) — so the customer still never sees
- *      a separate "approve" round trip, only a slightly different starting
- *      state.
+ *      completeServiceVisit, unconditionally, right after pricing is frozen
+ *      in step 3 — every genuine Finalize & Send now completes the visit in
+ *      one shot.
  *   5+7. log a 'final_total_sent' event and enqueue the 'final_total_ready'
  *      notification with a versionKey of the final total, so a retried
  *      Finalize & Send at the SAME amount is a safe no-op (the notification
  *      idempotency-key UNIQUE constraint — see enqueue-notification.ts) and
  *      a genuinely different amount (a later admin scope edit before this
  *      ran, or an actual retry after a scope change) naturally mints a new
- *      notification rather than being silently swallowed
+ *      notification rather than being silently swallowed. No
+ *      'pricing_approval_required' notification is ever sent — only this
+ *      one, single 'final_total_ready' notification.
  *
  * Idempotency: a repeated click after the visit is already 'completed'
  * short-circuits to alreadySent=true before touching estimateVisitPricing
- * (which throws once completed). A repeated click while still
- * 'work_finished' with the SAME pending amount re-logs a 'final_total_sent'
- * event (harmless audit trail of "admin tried again") but never re-sends
- * the notification (idempotency-key collision) and never creates a second
- * pricing snapshot beyond the recompute upsert already inherent to
- * estimateVisitPricing.
+ * (which throws once completed).
  */
 export async function finalizeAndSend(
   repo: SchedulingRepository,
@@ -93,22 +86,19 @@ export async function finalizeAndSend(
   // Captured BEFORE confirmVisitPricing (below) can overwrite it — see that
   // function's own repo method, which always sets
   // previously_approved_amount to the row's OWN total_amount at confirm
-  // time. Without capturing it here first, a genuine price increase's
-  // actual prior baseline would never appear in any durable record once
-  // confirmed: the pricing row would show only the new amount, and (before
-  // this fix) this event recorded nothing about what it increased FROM.
+  // time. Preserved purely as legacy/historical audit data (never used to
+  // gate anything) — without capturing it here first, whatever the row's
+  // prior baseline was would never appear in any durable record once
+  // confirmed overwrites it.
   const priorApprovedAmount = pricing.previouslyApprovedAmount;
 
-  let resultVisit = visit;
-  if (!pricing.requiresCustomerApproval) {
-    pricing = await confirmVisitPricing(repo, { serviceVisitId: input.serviceVisitId, confirmedBy: input.actor });
-    await completeServiceVisit(repo, input.serviceVisitId, input.actor);
-    const completedVisit = await repo.findServiceVisitById(input.serviceVisitId);
-    if (!completedVisit) {
-      throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} disappeared during Finalize & Send`);
-    }
-    resultVisit = completedVisit;
+  pricing = await confirmVisitPricing(repo, { serviceVisitId: input.serviceVisitId, confirmedBy: input.actor });
+  await completeServiceVisit(repo, input.serviceVisitId, input.actor);
+  const completedVisit = await repo.findServiceVisitById(input.serviceVisitId);
+  if (!completedVisit) {
+    throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} disappeared during Finalize & Send`);
   }
+  const resultVisit = completedVisit;
 
   await repo.insertServiceVisitEvent({
     serviceVisitId: input.serviceVisitId,

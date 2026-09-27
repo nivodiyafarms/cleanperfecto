@@ -1,3 +1,4 @@
+import { classifyAddOns } from "@/lib/pricing/add-ons";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
@@ -5,9 +6,28 @@ import { resolveTipBasisAmount } from "./resolve-tip-basis";
 import { resolveTaxLocationAddress } from "./resolve-tax-location";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
+export interface VisitPaymentReviewLineItem {
+  description: string;
+  /** Positive for an add-on/custom charge, negative for a custom discount/credit — never a separately-signaled boolean, matching how these are already stored on service_visit_pricing.custom_adjustments. */
+  amount: number;
+}
+
 export interface VisitPaymentReview {
   serviceVisitPaymentId: string;
   approvedAmount: number;
+  /**
+   * The visit's original, pre-adjustment cleaning price ("Original booking
+   * price" on the customer's Final Total) — service_visit_pricing.base_amount,
+   * already-available data, never newly seeded/migrated for this purpose.
+   * Equal to approvedAmount when nothing was added/adjusted/discounted, in
+   * which case the customer-facing UI should skip the Original/Final/
+   * Difference comparison entirely (see VisitPaymentFlow.tsx). Note this is
+   * the total BEFORE tax — the same authoritative pre-tax amount tax and
+   * amountDueFromCustomer are already derived from, never recomputed here.
+   */
+  baseAmount: number;
+  /** Every predefined add-on, custom charge, and custom discount/credit contributing to approvedAmount, in the order they're stored — "customer sees all adjustment line items" (never collapsed into one aggregate figure). Empty when nothing was added/adjusted. */
+  lineItems: VisitPaymentReviewLineItem[];
   tipBasisAmount: number;
   /** A non-financial, never-linked, never-persisted-as-final Stripe Tax preview — service/extras only, no tip. Display only. */
   previewTaxAmount: number;
@@ -60,9 +80,19 @@ export async function prepareVisitPaymentReview(repo: SchedulingRepository, gate
     previewAmountDueBeforeTip = preview.amountTotalCents / 100;
   }
 
+  const lineItems: VisitPaymentReviewLineItem[] = [
+    ...classifyAddOns(pricing.addOnIds).priced.map((addOn) => ({ description: addOn.label, amount: addOn.amount })),
+    ...pricing.customAdjustments.map((adjustment) => ({
+      description: adjustment.description,
+      amount: adjustment.type === "custom_discount" ? -adjustment.amount : adjustment.amount,
+    })),
+  ];
+
   return {
     serviceVisitPaymentId: record.id,
     approvedAmount: record.approvedAmount,
+    baseAmount: pricing.baseAmount,
+    lineItems,
     tipBasisAmount,
     previewTaxAmount,
     previewAmountDueBeforeTip,
