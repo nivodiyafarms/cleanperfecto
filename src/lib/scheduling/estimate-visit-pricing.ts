@@ -107,11 +107,30 @@ export async function estimateVisitPricing(
 
   const classified = classifyAddOns(input.addOnIds);
   const addOnAmount = roundToCents(classified.pricedTotal);
-  const totalAmount = roundToCents(baseAmount + addOnAmount);
-  const amountDueFromCustomer = isPackageVisit ? addOnAmount : totalAmount;
 
   const existing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const previouslyApprovedAmount = existing?.previouslyApprovedAmount ?? null;
+  // Custom charges/discounts are never an input to this function — they are
+  // mutated ONLY by addCustomPricingAdjustment/removeCustomPricingAdjustment
+  // (each an atomic *_with_audit RPC), and this recompute always preserves
+  // whatever is already persisted on the row, exactly like it preserves
+  // nothing else about `existing` except previouslyApprovedAmount. Reading
+  // them here (rather than requiring every caller — recurring auto-
+  // scheduling, add-on requests, Finalize & Send — to thread them through)
+  // means a custom adjustment can never be silently dropped by an unrelated
+  // recompute that doesn't know about them.
+  const customAdjustments = existing?.customAdjustments ?? [];
+  const customChargeAmount = existing?.customChargeAmount ?? 0;
+  const customDiscountAmount = existing?.customDiscountAmount ?? 0;
+
+  // Never let a discount drive the payable amount below $0 — the
+  // authoritative clamp (add_custom_pricing_adjustment_with_audit's own
+  // guard is only a defensive backstop against the row's then-currently-
+  // persisted amounts, not this freshly-resolved baseAmount).
+  const totalAmount = roundToCents(Math.max(0, baseAmount + addOnAmount + customChargeAmount - customDiscountAmount));
+  const amountDueFromCustomer = isPackageVisit
+    ? roundToCents(Math.max(0, addOnAmount + customChargeAmount - customDiscountAmount))
+    : totalAmount;
   const requiresCustomerApproval = previouslyApprovedAmount !== null && totalAmount > previouslyApprovedAmount;
 
   // Only a genuine INCREASE over the last customer-approved amount ever
@@ -138,6 +157,9 @@ export async function estimateVisitPricing(
     baseAmount,
     addOnIds: classified.priced.map((p) => p.id),
     addOnAmount,
+    customAdjustments,
+    customChargeAmount,
+    customDiscountAmount,
     totalAmount,
     amountDueFromCustomer,
     priceStatus: requiresCustomerApproval ? "pending_customer_approval" : "estimated",

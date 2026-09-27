@@ -5,6 +5,7 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  CustomPricingAdjustment,
   InvoiceRow,
   NewInvoiceInput,
   NewPackageAmendmentRow,
@@ -829,6 +830,9 @@ export function createFakeSchedulingRepository(
         baseAmount: row.baseAmount,
         addOnIds: row.addOnIds,
         addOnAmount: row.addOnAmount,
+        customAdjustments: row.customAdjustments ?? existing?.customAdjustments ?? [],
+        customChargeAmount: row.customChargeAmount ?? existing?.customChargeAmount ?? 0,
+        customDiscountAmount: row.customDiscountAmount ?? existing?.customDiscountAmount ?? 0,
         totalAmount: row.totalAmount,
         amountDueFromCustomer: row.amountDueFromCustomer,
         priceStatus: row.priceStatus,
@@ -839,6 +843,90 @@ export function createFakeSchedulingRepository(
         confirmedBy: existing?.confirmedBy ?? null,
       };
       servicePricingByVisitId.set(row.serviceVisitId, updated);
+      return updated;
+    },
+    async addCustomPricingAdjustmentWithAudit(serviceVisitPricingId, adjustment, audit) {
+      const existing = [...servicePricingByVisitId.values()].find((p) => p.id === serviceVisitPricingId);
+      if (!existing) throw new InvalidVisitStateError(`service_visit_pricing ${serviceVisitPricingId} not found`);
+      if (adjustment.amount <= 0) throw new Error(`add_custom_pricing_adjustment_with_audit: p_amount must be positive, got ${adjustment.amount}`);
+      if (!adjustment.description.trim()) throw new Error("add_custom_pricing_adjustment_with_audit: p_description is required");
+
+      const newChargeAmount = existing.customChargeAmount + (adjustment.type === "custom_charge" ? adjustment.amount : 0);
+      const newDiscountAmount = existing.customDiscountAmount + (adjustment.type === "custom_discount" ? adjustment.amount : 0);
+      if (adjustment.type === "custom_discount") {
+        const hypotheticalTotal = existing.baseAmount + existing.addOnAmount + newChargeAmount - newDiscountAmount;
+        if (hypotheticalTotal < 0) {
+          throw new Error(`add_custom_pricing_adjustment_with_audit: this discount would reduce the payable amount below $0 (would be ${hypotheticalTotal})`);
+        }
+      }
+
+      const newAdjustment: CustomPricingAdjustment = {
+        id: randomUUID(),
+        type: adjustment.type,
+        description: adjustment.description,
+        amount: adjustment.amount,
+        addedByAdminUserId: audit.actorAdminUserId,
+        addedByRole: audit.actorRole,
+        addedAt: new Date(),
+      };
+      const updated: ServiceVisitPricingRow = {
+        ...existing,
+        customAdjustments: [...existing.customAdjustments, newAdjustment],
+        customChargeAmount: newChargeAmount,
+        customDiscountAmount: newDiscountAmount,
+      };
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: adjustment.type === "custom_charge" ? "custom_charge_added" : "custom_discount_added",
+        targetEntityType: "service_visit_pricing",
+        targetEntityId: serviceVisitPricingId,
+        serviceVisitId: existing.serviceVisitId,
+        reason: adjustment.description,
+        metadata: { adjustmentId: newAdjustment.id, type: adjustment.type, description: adjustment.description, amount: adjustment.amount },
+        createdAt: new Date(),
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      servicePricingByVisitId.set(existing.serviceVisitId, updated);
+      financialAuditLog.push(auditRow);
+      return updated;
+    },
+    async removeCustomPricingAdjustmentWithAudit(serviceVisitPricingId, adjustmentId, audit) {
+      const existing = [...servicePricingByVisitId.values()].find((p) => p.id === serviceVisitPricingId);
+      if (!existing) throw new InvalidVisitStateError(`service_visit_pricing ${serviceVisitPricingId} not found`);
+      const target = existing.customAdjustments.find((a) => a.id === adjustmentId);
+      if (!target) throw new Error(`custom adjustment ${adjustmentId} not found on service_visit_pricing ${serviceVisitPricingId}`);
+
+      const updated: ServiceVisitPricingRow = {
+        ...existing,
+        customAdjustments: existing.customAdjustments.filter((a) => a.id !== adjustmentId),
+        customChargeAmount: existing.customChargeAmount - (target.type === "custom_charge" ? target.amount : 0),
+        customDiscountAmount: existing.customDiscountAmount - (target.type === "custom_discount" ? target.amount : 0),
+      };
+      const auditRow: FakeFinancialAuditLogRow = {
+        id: `audit-${financialAuditLog.length + 1}`,
+        actorAdminUserId: audit.actorAdminUserId,
+        actorRole: audit.actorRole,
+        actionType: target.type === "custom_charge" ? "custom_charge_removed" : "custom_discount_removed",
+        targetEntityType: "service_visit_pricing",
+        targetEntityId: serviceVisitPricingId,
+        serviceVisitId: existing.serviceVisitId,
+        reason: target.description,
+        metadata: { adjustmentId: target.id, type: target.type, description: target.description, amount: target.amount },
+        createdAt: new Date(),
+      };
+
+      if (financialAuditControl.simulateFailure) {
+        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+      }
+
+      servicePricingByVisitId.set(existing.serviceVisitId, updated);
+      financialAuditLog.push(auditRow);
       return updated;
     },
     async confirmServiceVisitPricing(serviceVisitId, confirmedBy) {

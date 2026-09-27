@@ -6,9 +6,11 @@ import { assertCapability } from "@/lib/admin/rbac/capabilities";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import type { AddOnId } from "@/lib/pricing/types";
+import { addCustomPricingAdjustment } from "@/lib/scheduling/add-custom-pricing-adjustment";
 import { estimateVisitPricing } from "@/lib/scheduling/estimate-visit-pricing";
 import { InvalidVisitStateError, SchedulingConflictError } from "@/lib/scheduling/errors";
 import { finalizeAndSend } from "@/lib/scheduling/finalize-and-send";
+import { removeCustomPricingAdjustment } from "@/lib/scheduling/remove-custom-pricing-adjustment";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import { actionError, actionOk, type ActionResult } from "./types";
 
@@ -54,6 +56,117 @@ export async function updateFinalScopeAction(_prevState: ActionResult | null, fo
     );
   } catch (error) {
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
+}
+
+/** Positive, finite, at most 2 decimal places — a real currency amount, never NaN/Infinity/negative/zero. Returns null for anything else, so callers never have to separately guard against a garbage string reaching the domain layer. */
+function parsePositiveCurrencyAmount(raw: FormDataEntryValue | null): number | null {
+  const value = Number(String(raw ?? "").trim());
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * Admin "Custom Charge" — same capability as the predefined final-scope
+ * add-on checklist (updateFinalScopeAction): an operations admin may add
+ * one, same as they may already select "Oven Interior" or any other
+ * catalog extra. See add-custom-pricing-adjustment.ts for the full
+ * sequencing.
+ */
+export async function addCustomChargeAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "complete_service_visit");
+  return runAddCustomAdjustment(admin, formData, "custom_charge");
+}
+
+/**
+ * Admin "Custom Discount / Credit" — a financial correction, OWNER-ONLY
+ * (assertCapability("financial_correction")), consistent with every other
+ * owner-only financial-correction rule in this codebase. An operations
+ * admin's request is rejected here regardless of what the submitting form
+ * looked like — the UI hiding/disabling this control for non-owners is a
+ * courtesy, never the actual authorization boundary.
+ */
+export async function addCustomDiscountAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "financial_correction");
+  return runAddCustomAdjustment(admin, formData, "custom_discount");
+}
+
+async function runAddCustomAdjustment(
+  admin: { adminUserId: string; role: string },
+  formData: FormData,
+  type: "custom_charge" | "custom_discount"
+): Promise<ActionResult> {
+  const serviceVisitId = String(formData.get("serviceVisitId") ?? "");
+  const description = String(formData.get("description") ?? "").trim();
+  const amount = parsePositiveCurrencyAmount(formData.get("amount"));
+  if (!serviceVisitId) return actionError("Missing visit id.");
+  if (!description) return actionError("A reason/description is required.");
+  if (amount === null) {
+    return actionError(type === "custom_charge" ? "Enter a valid amount greater than $0." : "Enter a valid discount/credit amount greater than $0.");
+  }
+
+  const repo = createSupabaseSchedulingRepository();
+  try {
+    const pricing = await addCustomPricingAdjustment(repo, createSupabaseBookingRepository(), {
+      serviceVisitId,
+      type,
+      description,
+      amount,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+    revalidateVisitPaths(serviceVisitId);
+    return actionOk(
+      type === "custom_charge"
+        ? `Custom charge added — new estimate $${pricing.totalAmount.toFixed(2)}.`
+        : `Custom discount/credit added — new estimate $${pricing.totalAmount.toFixed(2)}.`
+    );
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    // The RPC's own guards (non-positive amount, blank description, a
+    // discount that would drive the payable amount below $0) surface as a
+    // plain Error — see add_custom_pricing_adjustment_with_audit's own
+    // comment. These are genuine input-rejection outcomes, not bugs.
+    if (error instanceof Error) return actionError(error.message);
+    throw error;
+  }
+}
+
+/** Admin removes a not-yet-sent custom charge — same capability as adding one. */
+export async function removeCustomChargeAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "complete_service_visit");
+  return runRemoveCustomAdjustment(admin, formData);
+}
+
+/** Admin removes a not-yet-sent custom discount/credit — owner-only, same as adding one. */
+export async function removeCustomDiscountAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "financial_correction");
+  return runRemoveCustomAdjustment(admin, formData);
+}
+
+async function runRemoveCustomAdjustment(admin: { adminUserId: string; role: string }, formData: FormData): Promise<ActionResult> {
+  const serviceVisitId = String(formData.get("serviceVisitId") ?? "");
+  const adjustmentId = String(formData.get("adjustmentId") ?? "");
+  if (!serviceVisitId || !adjustmentId) return actionError("Missing visit id or adjustment id.");
+
+  const repo = createSupabaseSchedulingRepository();
+  try {
+    const pricing = await removeCustomPricingAdjustment(repo, createSupabaseBookingRepository(), {
+      serviceVisitId,
+      adjustmentId,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+    revalidateVisitPaths(serviceVisitId);
+    return actionOk(`Removed — new estimate $${pricing.totalAmount.toFixed(2)}.`);
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    if (error instanceof Error) return actionError(error.message);
     throw error;
   }
 }

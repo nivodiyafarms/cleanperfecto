@@ -93,7 +93,11 @@ async function seedPendingIncrease(
     serviceVisitId: visit.id,
     pricingVersion: "v1",
     pricingSnapshot: {},
-    baseAmount: newAmount,
+    // Base is unchanged — the $30 increase from oldAmount to newAmount comes
+    // entirely from adding the inside_oven add-on (baseAmount + addOnAmount
+    // must sum to newAmount, since resolveTipBasisAmount now reads them
+    // separately rather than trusting the pre-summed totalAmount).
+    baseAmount: oldAmount,
     addOnIds: ["inside_oven"],
     addOnAmount: 30,
     totalAmount: newAmount,

@@ -3,6 +3,7 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  CustomPricingAdjustmentType,
   InvoiceRow,
   NewInvoiceInput,
   NewPackageAmendmentRow,
@@ -269,6 +270,39 @@ export interface SchedulingRepository {
   upsertServiceVisitPricing(row: NewServiceVisitPricingRow): Promise<ServiceVisitPricingRow>;
   /** Admin confirms the current estimate as final: priceStatus -> 'confirmed', previouslyApprovedAmount -> totalAmount, paymentStatus -> 'awaiting_completion' if amountDueFromCustomer > 0 else left as 'not_applicable'. */
   confirmServiceVisitPricing(serviceVisitId: string, confirmedBy: string): Promise<ServiceVisitPricingRow | null>;
+  /**
+   * Atomically appends one custom charge/discount to
+   * service_visit_pricing.custom_adjustments (updating the matching
+   * aggregate column) AND records the required financial_audit_log
+   * actor-attribution row, via a single Postgres RPC
+   * (add_custom_pricing_adjustment_with_audit) — either both commit or
+   * neither does. Rejects a non-positive amount, a blank description, or a
+   * discount that would drive the payable amount below $0 against the
+   * row's currently persisted base/add-on amounts (a defensive backstop —
+   * see src/lib/scheduling/add-custom-pricing-adjustment.ts, the sole
+   * caller, which always re-runs estimateVisitPricing() immediately
+   * afterward for the actual authoritative total/approval recompute).
+   */
+  addCustomPricingAdjustmentWithAudit(
+    serviceVisitPricingId: string,
+    adjustment: { type: CustomPricingAdjustmentType; description: string; amount: number },
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceVisitPricingRow>;
+  /**
+   * Atomically removes one custom charge/discount (by its own id) from
+   * service_visit_pricing.custom_adjustments (updating the matching
+   * aggregate column) AND records the required financial_audit_log
+   * actor-attribution row, via a single Postgres RPC
+   * (remove_custom_pricing_adjustment_with_audit). Raises if the
+   * adjustment id does not exist on this row. See
+   * src/lib/scheduling/remove-custom-pricing-adjustment.ts, the sole
+   * caller.
+   */
+  removeCustomPricingAdjustmentWithAudit(
+    serviceVisitPricingId: string,
+    adjustmentId: string,
+    audit: { actorAdminUserId: string; actorRole: string }
+  ): Promise<ServiceVisitPricingRow>;
   updateServiceVisitPricingPaymentStatus(
     serviceVisitId: string,
     paymentStatus: ServiceVisitPricingPaymentStatus

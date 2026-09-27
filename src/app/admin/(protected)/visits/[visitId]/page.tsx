@@ -8,7 +8,15 @@ import { findServiceVisitDetail, listServiceFeeAssessments, listServiceVisitEven
 import { resolveDurationInputForVisit } from "@/lib/admin/queries/visit-scope";
 import { cancelVisitAction, completeVisitAction, markWorkFinishedAction, reassignCleanersAction, rescheduleVisitAction, waiveFeeAction } from "@/lib/admin/actions/schedule-actions";
 import { confirmVisitPricingAction, editRecurringCadenceAction, editRecurringVisitDateAction } from "@/lib/admin/actions/recurring-actions";
-import { finalizeAndSendAction, resendFinalTotalLinkAction, updateFinalScopeAction } from "@/lib/admin/actions/finalize-send-actions";
+import {
+  addCustomChargeAction,
+  addCustomDiscountAction,
+  finalizeAndSendAction,
+  removeCustomChargeAction,
+  removeCustomDiscountAction,
+  resendFinalTotalLinkAction,
+  updateFinalScopeAction,
+} from "@/lib/admin/actions/finalize-send-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
 import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxReversalAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
@@ -121,6 +129,12 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   // automatically), and that page is untouched by this feature.
   const admin = await requireAdmin();
   const canRetryTaxReversal = hasCapability(admin.role, "issue_refund");
+  // Custom Discount/Credit is a financial correction — owner-only, same
+  // rule as voiding an invoice. This gate is a UX courtesy (hide the
+  // control rather than show it disabled) — the actual authorization
+  // boundary is assertCapability("financial_correction") inside
+  // addCustomDiscountAction/removeCustomDiscountAction themselves.
+  const canManageDiscounts = hasCapability(admin.role, "financial_correction");
   const taxReversalReconciliations = visitPayment
     ? await schedulingRepo.listTaxReversalReconciliationsForTarget("service_visit_payment", visitPayment.id)
     : [];
@@ -334,6 +348,8 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
 
           <dl className="space-y-1 text-sm text-foreground">
             <div>Originally approved: {visitPricing?.previouslyApprovedAmount !== null && visitPricing?.previouslyApprovedAmount !== undefined ? formatMoney(visitPricing.previouslyApprovedAmount) : "Not yet approved"}</div>
+            {visitPricing && visitPricing.customChargeAmount > 0 && <div className="text-muted">Custom charges: +{formatMoney(visitPricing.customChargeAmount)}</div>}
+            {visitPricing && visitPricing.customDiscountAmount > 0 && <div className="text-muted">Custom discount/credit: -{formatMoney(visitPricing.customDiscountAmount)}</div>}
             <div>Final (current estimate): {visitPricing ? formatMoney(visitPricing.totalAmount) : "No estimate yet"}</div>
             <div>
               Customer approval required:{" "}
@@ -363,6 +379,116 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
                   </button>
                 </ActionForm>
               </div>
+
+              <div className="rounded-xl border border-border p-3">
+                <p className="text-xs font-medium text-muted">Custom Charges</p>
+                <ActionForm action={addCustomChargeAction} className="mt-2 flex flex-wrap items-end gap-2">
+                  <input type="hidden" name="serviceVisitId" value={visitId} />
+                  <div>
+                    <label className="block text-xs text-muted" htmlFor="customChargeDescription">
+                      Reason / description
+                    </label>
+                    <input
+                      id="customChargeDescription"
+                      name="description"
+                      type="text"
+                      placeholder="e.g. Extra wall cleaning"
+                      required
+                      className="mt-1 rounded-lg border border-border px-2 py-1 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted" htmlFor="customChargeAmount">
+                      Amount
+                    </label>
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-sm text-muted">$</span>
+                      <input id="customChargeAmount" name="amount" type="number" min="0.01" step="0.01" required className="w-24 rounded-lg border border-border px-2 py-1 text-sm" />
+                    </div>
+                  </div>
+                  <button type="submit" className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                    Add charge
+                  </button>
+                </ActionForm>
+
+                {visitPricing && visitPricing.customAdjustments.filter((a) => a.type === "custom_charge").length > 0 && (
+                  <ul className="mt-2 space-y-1 text-sm">
+                    {visitPricing.customAdjustments
+                      .filter((a) => a.type === "custom_charge")
+                      .map((a) => (
+                        <li key={a.id} className="flex items-center justify-between gap-2">
+                          <span className="text-foreground">{a.description}</span>
+                          <span className="flex items-center gap-2">
+                            <span className="font-medium text-foreground">+{formatMoney(a.amount)}</span>
+                            <ActionForm action={removeCustomChargeAction}>
+                              <input type="hidden" name="serviceVisitId" value={visitId} />
+                              <input type="hidden" name="adjustmentId" value={a.id} />
+                              <button type="submit" className="text-xs font-medium text-red-600 hover:underline">
+                                Remove
+                              </button>
+                            </ActionForm>
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+
+              {canManageDiscounts && (
+                <div className="rounded-xl border border-border p-3">
+                  <p className="text-xs font-medium text-muted">Custom Discount / Credit</p>
+                  <ActionForm action={addCustomDiscountAction} className="mt-2 flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="serviceVisitId" value={visitId} />
+                    <div>
+                      <label className="block text-xs text-muted" htmlFor="customDiscountDescription">
+                        Reason / description
+                      </label>
+                      <input
+                        id="customDiscountDescription"
+                        name="description"
+                        type="text"
+                        placeholder="e.g. Service recovery credit"
+                        required
+                        className="mt-1 rounded-lg border border-border px-2 py-1 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-muted" htmlFor="customDiscountAmount">
+                        Amount
+                      </label>
+                      <div className="mt-1 flex items-center gap-1">
+                        <span className="text-sm text-muted">$</span>
+                        <input id="customDiscountAmount" name="amount" type="number" min="0.01" step="0.01" required className="w-24 rounded-lg border border-border px-2 py-1 text-sm" />
+                      </div>
+                    </div>
+                    <button type="submit" className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                      Add discount/credit
+                    </button>
+                  </ActionForm>
+
+                  {visitPricing && visitPricing.customAdjustments.filter((a) => a.type === "custom_discount").length > 0 && (
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {visitPricing.customAdjustments
+                        .filter((a) => a.type === "custom_discount")
+                        .map((a) => (
+                          <li key={a.id} className="flex items-center justify-between gap-2">
+                            <span className="text-foreground">{a.description}</span>
+                            <span className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">-{formatMoney(a.amount)}</span>
+                              <ActionForm action={removeCustomDiscountAction}>
+                                <input type="hidden" name="serviceVisitId" value={visitId} />
+                                <input type="hidden" name="adjustmentId" value={a.id} />
+                                <button type="submit" className="text-xs font-medium text-red-600 hover:underline">
+                                  Remove
+                                </button>
+                              </ActionForm>
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               <ActionForm action={finalizeAndSendAction}>
                 <input type="hidden" name="serviceVisitId" value={visitId} />

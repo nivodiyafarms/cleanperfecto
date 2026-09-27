@@ -1,4 +1,12 @@
-import type { InvoiceAddOnLine, NewInvoiceInput, NewReceiptInput, ServiceVisitPaymentRow, ServiceVisitPricingRow, ServiceVisitRow } from "@/lib/scheduling/domain-types";
+import type {
+  InvoiceAddOnLine,
+  InvoiceCustomAdjustmentLine,
+  NewInvoiceInput,
+  NewReceiptInput,
+  ServiceVisitPaymentRow,
+  ServiceVisitPricingRow,
+  ServiceVisitRow,
+} from "@/lib/scheduling/domain-types";
 import { classifyAddOns } from "@/lib/pricing/add-ons";
 import { resolveTaxLocationAddress } from "@/lib/payments/resolve-tax-location";
 import { SERVICES } from "@/lib/services";
@@ -36,12 +44,20 @@ export function buildServiceVisitInvoiceAndReceipt(params: {
   const baseAmount = pricing?.baseAmount ?? 0;
   const addOnsAmount = pricing?.addOnAmount ?? 0;
   const addOnsDetail: InvoiceAddOnLine[] = pricing ? classifyAddOns(pricing.addOnIds).priced : [];
+  const customChargesAmount = pricing?.customChargeAmount ?? 0;
+  const customChargesDetail: InvoiceCustomAdjustmentLine[] = (pricing?.customAdjustments ?? [])
+    .filter((a) => a.type === "custom_charge")
+    .map((a) => ({ description: a.description, amount: a.amount }));
+  const discountAmount = pricing?.customDiscountAmount ?? 0;
+  const discountDetail: InvoiceCustomAdjustmentLine[] = (pricing?.customAdjustments ?? [])
+    .filter((a) => a.type === "custom_discount")
+    .map((a) => ({ description: a.description, amount: a.amount }));
   const taxAmount = payment.taxAmount ?? 0;
   // No room-adjustment/travel/supplies breakdown exists yet on
   // service_visit_pricing today (admin-entered flow, not yet wired to the
   // line-item pricing engine — see CLAUDE.md's "Approved Instant Quote
   // Calculator" note) — these stay 0 rather than an invented split.
-  const subtotalAmount = baseAmount + addOnsAmount;
+  const subtotalAmount = baseAmount + addOnsAmount + customChargesAmount - discountAmount;
   const totalAmount = subtotalAmount + taxAmount;
 
   const address = resolveAddressSafely(visit);
@@ -70,8 +86,11 @@ export function buildServiceVisitInvoiceAndReceipt(params: {
     addOnsDetail,
     travelAmount: 0,
     suppliesAmount: 0,
-    discountAmount: 0,
+    customChargesAmount,
+    customChargesDetail,
+    discountAmount,
     discountDescription: null,
+    discountDetail,
     cancellationFeeAmount: 0,
     taxAmount,
     subtotalAmount,

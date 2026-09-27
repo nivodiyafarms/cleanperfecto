@@ -44,7 +44,7 @@ export type AdminCapability =
   // Owner-only — privileged financial/administrative actions.
   | "waive_fee" // explicitly listed as a "financial waiver/correction" — owner-only, never operations
   | "issue_refund" // no application-initiated refund action exists yet (refunds are webhook-reconciled only) — reserved for when one is built
-  | "financial_correction" // reserved — no generic financial-correction action exists yet
+  | "financial_correction" // owner-only financial correction — void invoice, and add/remove a custom charge/discount-credit (see finalize-send-actions.ts)
   | "override_tax" // reserved — no tax-override action exists yet; retryExternalTaxSync is NOT this, see the ambiguous-classification note in payment-actions.ts
   | "manage_roles" // reserved — no role-management UI exists yet
   | "manage_payment_configuration"; // reserved — PAYMENT_MODE/TAX_MODE/Stripe keys are env-configured, not admin-UI-configured, in this milestone

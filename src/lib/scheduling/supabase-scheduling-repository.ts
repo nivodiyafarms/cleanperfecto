@@ -6,7 +6,9 @@ import type {
   CleanerAvailabilityExceptionRow,
   CleanerAvailabilityRuleRow,
   CleanerRow,
+  CustomPricingAdjustment,
   InvoiceAddOnLine,
+  InvoiceCustomAdjustmentLine,
   InvoiceRow,
   NewPackageAmendmentRow,
   NewPackageVisitPlanHistoryRow,
@@ -178,6 +180,22 @@ function toRecurringScopeVersionRow(row: Record<string, unknown>): RecurringScop
   };
 }
 
+function toCustomPricingAdjustments(raw: unknown): CustomPricingAdjustment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const e = entry as Record<string, unknown>;
+    return {
+      id: e.id as string,
+      type: e.type as CustomPricingAdjustment["type"],
+      description: e.description as string,
+      amount: Number(e.amount),
+      addedByAdminUserId: e.addedByAdminUserId as string,
+      addedByRole: e.addedByRole as string,
+      addedAt: new Date(e.addedAt as string),
+    };
+  });
+}
+
 function toServiceVisitPricingRow(row: Record<string, unknown>): ServiceVisitPricingRow {
   return {
     id: row.id as string,
@@ -187,6 +205,9 @@ function toServiceVisitPricingRow(row: Record<string, unknown>): ServiceVisitPri
     baseAmount: Number(row.base_amount),
     addOnIds: (row.add_on_ids as ServiceVisitPricingRow["addOnIds"]) ?? [],
     addOnAmount: Number(row.add_on_amount),
+    customAdjustments: toCustomPricingAdjustments(row.custom_adjustments),
+    customChargeAmount: Number(row.custom_charge_amount ?? 0),
+    customDiscountAmount: Number(row.custom_discount_amount ?? 0),
     totalAmount: Number(row.total_amount),
     amountDueFromCustomer: Number(row.amount_due_from_customer),
     priceStatus: row.price_status as ServiceVisitPricingRow["priceStatus"],
@@ -306,8 +327,11 @@ function toInvoiceRow(row: Record<string, unknown>): InvoiceRow {
     addOnsDetail: (row.add_ons_detail as InvoiceAddOnLine[] | null) ?? [],
     travelAmount: Number(row.travel_amount),
     suppliesAmount: Number(row.supplies_amount),
+    customChargesAmount: Number(row.custom_charges_amount ?? 0),
+    customChargesDetail: (row.custom_charges_detail as InvoiceCustomAdjustmentLine[] | null) ?? [],
     discountAmount: Number(row.discount_amount),
     discountDescription: (row.discount_description as string | null) ?? null,
+    discountDetail: (row.discount_detail as InvoiceCustomAdjustmentLine[] | null) ?? [],
     cancellationFeeAmount: Number(row.cancellation_fee_amount),
     taxAmount: Number(row.tax_amount),
     subtotalAmount: Number(row.subtotal_amount),
@@ -1238,6 +1262,9 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
             base_amount: row.baseAmount,
             add_on_ids: row.addOnIds,
             add_on_amount: row.addOnAmount,
+            custom_adjustments: row.customAdjustments,
+            custom_charge_amount: row.customChargeAmount,
+            custom_discount_amount: row.customDiscountAmount,
             total_amount: row.totalAmount,
             amount_due_from_customer: row.amountDueFromCustomer,
             price_status: row.priceStatus,
@@ -1250,6 +1277,30 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .single();
       if (error || !data) throw new Error(`[scheduling] service_visit_pricing upsert failed: ${error?.message ?? "no row returned"}`);
       return toServiceVisitPricingRow(data);
+    },
+
+    async addCustomPricingAdjustmentWithAudit(serviceVisitPricingId, adjustment, audit) {
+      const { data, error } = await supabase.rpc("add_custom_pricing_adjustment_with_audit", {
+        p_service_visit_pricing_id: serviceVisitPricingId,
+        p_type: adjustment.type,
+        p_description: adjustment.description,
+        p_amount: adjustment.amount,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error || !data) throw new Error(`[scheduling] add_custom_pricing_adjustment_with_audit failed: ${error?.message ?? "no row returned"}`);
+      return toServiceVisitPricingRow(data as Record<string, unknown>);
+    },
+
+    async removeCustomPricingAdjustmentWithAudit(serviceVisitPricingId, adjustmentId, audit) {
+      const { data, error } = await supabase.rpc("remove_custom_pricing_adjustment_with_audit", {
+        p_service_visit_pricing_id: serviceVisitPricingId,
+        p_adjustment_id: adjustmentId,
+        p_actor_admin_user_id: audit.actorAdminUserId,
+        p_actor_role: audit.actorRole,
+      });
+      if (error || !data) throw new Error(`[scheduling] remove_custom_pricing_adjustment_with_audit failed: ${error?.message ?? "no row returned"}`);
+      return toServiceVisitPricingRow(data as Record<string, unknown>);
     },
 
     async confirmServiceVisitPricing(serviceVisitId, confirmedBy) {
@@ -1575,8 +1626,11 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         p_add_ons_detail: input.addOnsDetail,
         p_travel_amount: input.travelAmount,
         p_supplies_amount: input.suppliesAmount,
+        p_custom_charges_amount: input.customChargesAmount,
+        p_custom_charges_detail: input.customChargesDetail,
         p_discount_amount: input.discountAmount,
         p_discount_description: input.discountDescription,
+        p_discount_detail: input.discountDetail,
         p_cancellation_fee_amount: input.cancellationFeeAmount,
         p_tax_amount: input.taxAmount,
         p_subtotal_amount: input.subtotalAmount,

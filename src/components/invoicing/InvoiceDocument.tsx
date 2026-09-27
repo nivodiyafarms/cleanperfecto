@@ -21,8 +21,17 @@ export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
   }
   if (invoice.travelAmount > 0) lineItems.push({ label: "Travel", amount: invoice.travelAmount });
   if (invoice.suppliesAmount > 0) lineItems.push({ label: "Supplies & equipment", amount: invoice.suppliesAmount });
+  for (const charge of invoice.customChargesDetail) {
+    lineItems.push({ label: charge.description, amount: charge.amount });
+  }
   if (invoice.cancellationFeeAmount > 0) lineItems.push({ label: "Cancellation fee", amount: invoice.cancellationFeeAmount });
-  if (invoice.discountAmount > 0) lineItems.push({ label: invoice.discountDescription ?? "Discount", amount: -invoice.discountAmount });
+  if (invoice.discountDetail.length > 0) {
+    for (const discount of invoice.discountDetail) {
+      lineItems.push({ label: discount.description, amount: -discount.amount });
+    }
+  } else if (invoice.discountAmount > 0) {
+    lineItems.push({ label: invoice.discountDescription ?? "Discount", amount: -invoice.discountAmount });
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 rounded-2xl border border-border bg-surface p-8 print:border-0 print:p-0">

@@ -240,7 +240,10 @@ async function seedWorkFinishedPendingApproval(customerId = "customer-1") {
     serviceVisitId: visit.id,
     pricingVersion: "v1",
     pricingSnapshot: {},
-    baseAmount: 230,
+    // Base is unchanged — the $30 increase comes entirely from adding the
+    // inside_oven add-on (baseAmount + addOnAmount must sum to totalAmount,
+    // since resolveTipBasisAmount now reads them separately).
+    baseAmount: 200,
     addOnIds: ["inside_oven"],
     addOnAmount: 30,
     totalAmount: 230,

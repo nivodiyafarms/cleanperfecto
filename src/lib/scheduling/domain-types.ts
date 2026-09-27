@@ -291,6 +291,12 @@ export interface InvoiceAddOnLine {
   pricingKind: "fixed" | "starting_at";
 }
 
+/** A single admin-entered custom charge or discount/credit line as it appears on an invoice — see CustomPricingAdjustment, the service_visit_pricing-side shape this is snapshotted from at issuance. */
+export interface InvoiceCustomAdjustmentLine {
+  description: string;
+  amount: number;
+}
+
 /**
  * The approved financial snapshot for a settled service visit or prepaid
  * package purchase — every field below (all but paymentStatus/voidAt/
@@ -326,8 +332,11 @@ export interface InvoiceRow {
   addOnsDetail: InvoiceAddOnLine[];
   travelAmount: number;
   suppliesAmount: number;
+  customChargesAmount: number;
+  customChargesDetail: InvoiceCustomAdjustmentLine[];
   discountAmount: number;
   discountDescription: string | null;
+  discountDetail: InvoiceCustomAdjustmentLine[];
   cancellationFeeAmount: number;
   taxAmount: number;
   subtotalAmount: number;
@@ -537,6 +546,26 @@ export interface NewRecurringScopeVersionRow {
 
 // -- Customer Portal V1: service_visit_pricing ------------------------------
 
+export type CustomPricingAdjustmentType = "custom_charge" | "custom_discount";
+
+/**
+ * One admin-entered custom charge or discount/credit on a visit's Final
+ * Scope — see service_visit_pricing.custom_adjustments and
+ * 20260926100000_add_custom_pricing_adjustments.sql. `amount` is always a
+ * positive magnitude regardless of type; whether it adds to or subtracts
+ * from the total is entirely determined by `type`, never by a signed
+ * number — admins never enter a negative amount for a discount.
+ */
+export interface CustomPricingAdjustment {
+  id: string;
+  type: CustomPricingAdjustmentType;
+  description: string;
+  amount: number;
+  addedByAdminUserId: string;
+  addedByRole: string;
+  addedAt: Date;
+}
+
 export interface NewServiceVisitPricingRow {
   serviceVisitId: string;
   pricingVersion: string;
@@ -544,6 +573,10 @@ export interface NewServiceVisitPricingRow {
   baseAmount: number;
   addOnIds: AddOnId[];
   addOnAmount: number;
+  /** Optional — a caller that doesn't manage custom adjustments (recurring auto-scheduling, add-on requests, and every pre-existing test fixture) omits these and gets the correct "no adjustments" default, exactly its pre-existing behavior. estimateVisitPricing() always passes real values, read from the existing row, so nothing already-persisted is ever dropped by omission elsewhere. */
+  customAdjustments?: CustomPricingAdjustment[];
+  customChargeAmount?: number;
+  customDiscountAmount?: number;
   totalAmount: number;
   amountDueFromCustomer: number;
   priceStatus: ServiceVisitPricingPriceStatus;
@@ -553,6 +586,12 @@ export interface NewServiceVisitPricingRow {
 
 export interface ServiceVisitPricingRow extends NewServiceVisitPricingRow {
   id: string;
+  // Required here (unlike the optional NewServiceVisitPricingRow input) —
+  // every real persisted row always has concrete values, defaulting to
+  // "no adjustments" rather than ever being absent.
+  customAdjustments: CustomPricingAdjustment[];
+  customChargeAmount: number;
+  customDiscountAmount: number;
   paymentStatus: ServiceVisitPricingPaymentStatus;
   confirmedAt: Date | null;
   confirmedBy: string | null;
