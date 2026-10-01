@@ -22,9 +22,12 @@ export interface CreateSetupCheckoutSessionParams {
 
 /**
  * Securely saves a payment method against the Stripe Customer, with no
- * charge. `payment_method_types` is intentionally omitted (never hardcode
- * it) so Stripe's dynamic payment methods apply, managed from the
- * Dashboard rather than this code.
+ * charge. `payment_method_types: ["card"]` is explicit and deliberate: Pay
+ * Per Cleaning's post-cleaning PaymentIntent (see visit-payment-gateway.ts)
+ * is card-only, so this setup step must never let the customer save (and
+ * this become their default) a non-card PaymentMethod like Link — Stripe
+ * would later reject it with "PaymentMethod ... is not allowed for this
+ * PaymentIntent", exactly the real-E2E failure this restriction closes.
  */
 export async function createSetupCheckoutSession(
   stripe: Stripe,
@@ -34,6 +37,7 @@ export async function createSetupCheckoutSession(
     {
       mode: "setup",
       currency: "usd",
+      payment_method_types: ["card"],
       customer: params.stripeCustomerId,
       success_url: params.successUrl,
       cancel_url: params.cancelUrl,

@@ -10,7 +10,7 @@ describe("isWithinOperatingHours", () => {
   it("accepts times inside the window", () => {
     expect(isWithinOperatingHours("09:30")).toBe(true);
     expect(isWithinOperatingHours("12:00")).toBe(true);
-    expect(isWithinOperatingHours("17:59")).toBe(true);
+    expect(isWithinOperatingHours("16:59")).toBe(true);
   });
 
   it("rejects times before the window", () => {
@@ -19,7 +19,7 @@ describe("isWithinOperatingHours", () => {
   });
 
   it("rejects times after the window", () => {
-    expect(isWithinOperatingHours("18:01")).toBe(false);
+    expect(isWithinOperatingHours("17:01")).toBe(false);
     expect(isWithinOperatingHours("23:59")).toBe(false);
   });
 

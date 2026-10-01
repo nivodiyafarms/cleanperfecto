@@ -18,7 +18,7 @@ function fakeStripe(createImpl: (params: unknown, options: unknown) => Promise<u
 }
 
 describe("createSetupCheckoutSession", () => {
-  it("uses server-authoritative USD, never includes payment_method_types, and uses the provided idempotency key", async () => {
+  it("uses server-authoritative USD, restricts to card only, and uses the provided idempotency key", async () => {
     let capturedParams: Record<string, unknown> = {};
     let capturedOptions: Record<string, unknown> = {};
     const stripe = fakeStripe(async (params, options) => {
@@ -35,13 +35,15 @@ describe("createSetupCheckoutSession", () => {
       idempotencyKey: "key-1",
     });
 
-    // Setup mode saves a payment method with no charge — Stripe requires
-    // currency here because payment_method_types is intentionally omitted
-    // for dynamic payment methods. USD is server-authoritative, never
-    // sourced from the customer/request.
+    // Setup mode saves a payment method with no charge. USD is
+    // server-authoritative, never sourced from the customer/request.
+    // payment_method_types is explicitly card-only — Pay Per Cleaning's
+    // post-cleaning PaymentIntent is card-only (visit-payment-gateway.ts),
+    // so this setup step must never let a non-card method (e.g. Link)
+    // become the customer's saved default.
     expect(capturedParams.mode).toBe("setup");
     expect(capturedParams.currency).toBe("usd");
-    expect(capturedParams.payment_method_types).toBeUndefined();
+    expect(capturedParams.payment_method_types).toEqual(["card"]);
     expect(capturedOptions.idempotencyKey).toBe("key-1");
 
     // Setup mode is not a payment: no line items, no amount fields.

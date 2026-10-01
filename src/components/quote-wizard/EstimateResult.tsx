@@ -12,6 +12,19 @@ function formatRange(lower: number, upper: number): string {
   return `$${lower}–$${upper}`;
 }
 
+/**
+ * Owner-approved 2026-09-27: the customer-facing residential booking price
+ * is a single number — the upper bound of the same post-discount range
+ * already computed server-side (displayRangeUpper, sourced from
+ * calculateEstimate()'s own range.upper — see resolveCustomerBookingPrice
+ * in src/lib/pricing/customer-booking-price.ts, the same value the booking
+ * flow later persists as the original booking amount). Never recalculated
+ * here — this only chooses which already-authoritative field to render.
+ */
+function formatCustomerPrice(upper: number): string {
+  return `$${upper}`;
+}
+
 /** "Your One-Time/Weekly/Every 2 Weeks/Every 4 Weeks Cleaning Estimate" — represents the frequency the customer selected, never an internal percentage. */
 function frequencyEstimateLabel(frequency: FrequencyId): string {
   return `Your ${getInstantQuoteFrequencyLabel(frequency)} Cleaning Estimate`;
@@ -47,15 +60,13 @@ function AutomaticEstimatePanel({
           <div className="mt-4 origin-left translate-y-2 animate-[quote-fade-slide-in_400ms_ease-out_450ms_forwards] opacity-0">
             <p className="text-sm font-semibold text-primary">🎉 First Cleaning Special Applied</p>
             <p className="mt-1 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
-              {result.hasStartingAtPricing ? "Starting at " : ""}
-              {formatRange(result.displayRangeLower, result.displayRangeUpper)}
+              {formatCustomerPrice(result.displayRangeUpper)}
             </p>
           </div>
         </div>
       ) : (
         <p className="mt-1 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
-          {result.hasStartingAtPricing ? "Starting at " : ""}
-          {formatRange(result.displayRangeLower, result.displayRangeUpper)}
+          {formatCustomerPrice(result.displayRangeUpper)}
         </p>
       )}
 

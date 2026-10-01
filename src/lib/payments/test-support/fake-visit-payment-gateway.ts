@@ -48,6 +48,8 @@ export interface FakeVisitPaymentGatewayState {
   createTaxTransactionCallCount: number;
   createRefundCallCount: number;
   createTaxReversalCallCount: number;
+  /** The exact input of the most recent createPaymentIntent call — lets tests assert which stripePaymentMethodId/idempotencyKey a retry path actually used, without re-deriving it. */
+  lastCreatePaymentIntentInput: CreatePaymentIntentInput | null;
 }
 
 /**
@@ -77,6 +79,7 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
     createTaxTransactionCallCount: 0,
     createRefundCallCount: 0,
     createTaxReversalCallCount: 0,
+    lastCreatePaymentIntentInput: null,
   };
 
   const gateway: VisitPaymentGateway = {
@@ -94,6 +97,7 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
 
     async createPaymentIntent(input: CreatePaymentIntentInput): Promise<PaymentIntentResult> {
       state.createPaymentIntentCallCount += 1;
+      state.lastCreatePaymentIntentInput = input;
       if (failNextPaymentIntentCreate) {
         failNextPaymentIntentCreate = false;
         throw new Error("[fake-visit-payment-gateway] simulated PaymentIntent creation failure");

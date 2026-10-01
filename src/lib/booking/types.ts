@@ -107,7 +107,7 @@ export interface NormalBookingSelectionInput {
   clientRequestId: string;
   frequency: FrequencyId;
   requestedDate: string;
-  /** "HH:MM" (24-hour), within the approved 08:00-18:00 operating-hours window. Still a request, not a guaranteed slot. Replaces the old Morning/Afternoon/Evening picker. */
+  /** "HH:MM" (24-hour), within the approved 08:00-17:00 operating-hours window. Still a request, not a guaranteed slot. Replaces the old Morning/Afternoon/Evening picker. */
   requestedStartTime: string;
   addOnIds: AddOnId[];
   /** Optional dedicated Game Room / Media-Theater Room selections carried from the quote's post-estimate customization. */
@@ -162,7 +162,7 @@ export interface BookingOrderRow {
   requestedDate: string | null;
   /** Legacy — no longer written by new normal bookings, kept for historical rows only. See requestedStartTime. */
   requestedTimeWindow: TimeWindow | null;
-  /** A specific requested start time, "HH:MM" (24-hour), within the approved 08:00-18:00 operating-hours window. Still a request, not a guaranteed slot. Replaces requestedTimeWindow going forward. */
+  /** A specific requested start time, "HH:MM" (24-hour), within the approved 08:00-17:00 operating-hours window. Still a request, not a guaranteed slot. Replaces requestedTimeWindow going forward. */
   requestedStartTime: string | null;
   /** Which cancellation-policy text version the customer accepted, recorded alongside paymentAuthorizationAcceptedAt. Null for rows created before this policy existed or for a prepaid package (no saved-payment authorization checkbox — see cancellation-policy.ts). */
   cancellationPolicyVersion: string | null;

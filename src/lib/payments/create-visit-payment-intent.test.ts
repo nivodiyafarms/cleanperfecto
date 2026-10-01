@@ -48,7 +48,7 @@ async function seedVisitWithSelectedTip(amountDueFromCustomer: number, tipSelect
   await prepareVisitPaymentReview(schedulingRepo, gateway, visit.id);
   await selectVisitTip(schedulingRepo, gateway, { serviceVisitId: visit.id, tipSelectionType, customAmount });
 
-  return { schedulingRepo, gateway, gatewayState, visitId: visit.id };
+  return { schedulingRepo, gateway, gatewayState, schedulingState: state, visitId: visit.id };
 }
 
 async function seedVisitWithoutTip(amountDueFromCustomer: number) {
@@ -214,5 +214,138 @@ describe("createVisitPaymentIntent", () => {
       DeadPaymentIntentError
     );
     expect(gatewayState.createPaymentIntentCallCount).toBe(1); // still only the original — no duplicate-charge attempt
+  });
+
+  describe("safe retry when financial facts froze but PaymentIntent creation never happened", () => {
+    async function seedFrozenWithNoIntent(amountDueFromCustomer = 185) {
+      const { schedulingRepo, gateway, gatewayState, schedulingState, visitId } = await seedVisitWithSelectedTip(amountDueFromCustomer);
+      const paymentBefore = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+      // Simulates freezeServiceVisitPaymentForStripeCard having succeeded
+      // (real production sequencing) while the subsequent
+      // gateway.createPaymentIntent call itself failed/threw before an
+      // intent id could ever be persisted — e.g. the real E2E failure where
+      // the frozen payment method turned out to be a non-card (Link) type.
+      await schedulingRepo.freezeServiceVisitPaymentForStripeCard(paymentBefore.id, {
+        stripeCustomerId: "cus_1",
+        stripePaymentMethodId: "pm_1",
+        cardBrand: "visa",
+        cardLast4: "4242",
+      });
+      return { schedulingRepo, gateway, gatewayState, schedulingState, visitId, paymentId: paymentBefore.id };
+    }
+
+    it("retries and succeeds using the SAME already-frozen card payment method, amount, and tax calculation — never re-deriving them", async () => {
+      const { schedulingRepo, gateway, gatewayState, visitId } = await seedFrozenWithNoIntent(185);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      const before = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+      expect(before.stripePaymentIntentId).toBeNull();
+      expect(before.tipConfirmedAt).not.toBeNull();
+
+      const outcome = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      expect(outcome.outcome).toBe("ready");
+      expect(gatewayState.createPaymentIntentCallCount).toBe(1);
+
+      const after = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+      expect(after.stripePaymentIntentId).not.toBeNull();
+      expect(after.status).toBe("processing");
+      // Never replaced the frozen payment method with a different one.
+      expect(after.stripePaymentMethodId).toBe(before.stripePaymentMethodId);
+      expect(after.stripeCustomerId).toBe(before.stripeCustomerId);
+    });
+
+    it("does not alter the frozen approvedAmount/tipAmount/taxAmount/totalAmount during the retry", async () => {
+      const { schedulingRepo, gateway, visitId } = await seedFrozenWithNoIntent(185);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      const before = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+      await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      const after = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+
+      expect(after.approvedAmount).toBe(before.approvedAmount);
+      expect(after.tipAmount).toBe(before.tipAmount);
+      expect(after.taxAmount).toBe(before.taxAmount);
+      expect(after.totalAmount).toBe(before.totalAmount);
+    });
+
+    it("reuses the row's own idempotency key on retry — the exact mechanism that prevents a duplicate Stripe-side charge", async () => {
+      const { schedulingRepo, gateway, gatewayState, visitId } = await seedFrozenWithNoIntent(185);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      const before = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+      await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+
+      expect(gatewayState.lastCreatePaymentIntentInput?.idempotencyKey).toBe(before.idempotencyKey);
+    });
+
+    it("a SECOND retry call after the first succeeded reuses the now-existing PaymentIntent, never creating a duplicate", async () => {
+      const { schedulingRepo, gateway, gatewayState, visitId } = await seedFrozenWithNoIntent(185);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      const second = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+
+      expect(gatewayState.createPaymentIntentCallCount).toBe(1);
+      if (first.outcome !== "ready" || second.outcome !== "ready") throw new Error("expected ready both times");
+      expect(second.clientSecret).toBe(first.clientSecret);
+    });
+
+    it.each([
+      ["paid", { status: "paid" as const }],
+      ["refunded", { status: "refunded" as const }],
+      ["partially_refunded", { status: "partially_refunded" as const }],
+      ["payment_failed", { status: "payment_failed" as const }],
+    ])("status=%s (terminal/settled) never enters the retry branch — still throws the existing 'already settled' error", async (_label, override) => {
+      const { schedulingRepo, gateway, schedulingState, visitId } = await seedFrozenWithNoIntent(185);
+      // Directly force the terminal status onto the fake's own backing map —
+      // the same pattern seedVisitWithSelectedTip already uses
+      // (state.serviceVisitsById.set(...)) to reach an otherwise-unreachable-
+      // via-public-API state for this test only.
+      const raw = schedulingState.paymentsByVisitId.get(visitId)!;
+      schedulingState.paymentsByVisitId.set(visitId, { ...raw, ...override });
+
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" })).rejects.toThrow(
+        "This payment has already been settled through another method."
+      );
+    });
+
+    it("a zelle/cash paymentMethodType (external settlement path) never enters the card retry branch", async () => {
+      const { schedulingRepo, gateway, schedulingState, visitId } = await seedFrozenWithNoIntent(185);
+      const raw = schedulingState.paymentsByVisitId.get(visitId)!;
+      schedulingState.paymentsByVisitId.set(visitId, { ...raw, paymentMethodType: "zelle", externalPaymentReference: "manual-note" });
+
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" })).rejects.toThrow(
+        "This payment has already been settled through another method."
+      );
+    });
+
+    it("never passes a non-card payment method into gateway.createPaymentIntent — Link/non-card is never broadened into the post-cleaning charge path", async () => {
+      const { schedulingRepo, gateway, gatewayState, visitId } = await seedFrozenWithNoIntent(185);
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+      // The retry branch only ever reuses payment.stripePaymentMethodId,
+      // which was frozen as "pm_1" (a card PM) in seedFrozenWithNoIntent —
+      // there is no code path here that could substitute a Link/non-card id.
+      expect(gatewayState.lastCreatePaymentIntentInput?.stripePaymentMethodId).toBe("pm_1");
+    });
   });
 });

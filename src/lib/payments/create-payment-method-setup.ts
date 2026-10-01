@@ -39,9 +39,15 @@ export async function createPaymentMethodSetupCheckoutSession(
   );
 
   const siteUrl = getSiteUrl();
+  // payment_method_types: ["card"] — same requirement as the original
+  // booking setup session (createSetupCheckoutSession): Pay Per Cleaning's
+  // post-cleaning PaymentIntent is card-only, so a customer updating their
+  // saved payment method here must not be able to save a non-card
+  // PaymentMethod (e.g. Link) as their new default.
   const session = await stripe.checkout.sessions.create({
     mode: "setup",
     currency: "usd",
+    payment_method_types: ["card"],
     customer: stripeCustomerId,
     success_url: `${siteUrl}/my/payments`,
     cancel_url: `${siteUrl}/my/payments`,

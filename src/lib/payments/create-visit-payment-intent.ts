@@ -81,6 +81,44 @@ export async function createVisitPaymentIntent(
       }
       return { outcome: "ready", clientSecret: intent.clientSecret, totalAmount: payment.totalAmount ?? 0 };
     }
+
+    // Safe-retry: financial facts already froze successfully
+    // (freezeServiceVisitPaymentForStripeCard set tip_confirmed_at), but the
+    // subsequent gateway.createPaymentIntent call itself failed before an
+    // intent id could be persisted (e.g. the frozen payment method was
+    // rejected by Stripe as non-card — the real E2E failure this closes).
+    // This is NOT an external settlement: record_external_visit_payment_
+    // with_audit always sets status='paid' atomically in the same
+    // transaction that sets tip_confirmed_at, so status can never
+    // legitimately stay 'created' after a real external settlement.
+    // Narrowly scoped to exactly this state — never re-freezes, never
+    // recomputes any amount, never accepts a different payment method than
+    // the one already frozen on the row.
+    if (
+      payment.status === "created" &&
+      payment.paymentMethodType === "stripe_card" &&
+      !payment.externalPaymentReference &&
+      payment.stripeCustomerId &&
+      payment.stripePaymentMethodId &&
+      payment.stripeTaxCalculationId
+    ) {
+      assertCanCreateStripeCharge();
+      const retryIntent = await gateway.createPaymentIntent({
+        stripeCustomerId: payment.stripeCustomerId,
+        stripePaymentMethodId: payment.stripePaymentMethodId,
+        amountCents: toStripeCents(payment.totalAmount ?? 0),
+        stripeTaxCalculationId: payment.stripeTaxCalculationId,
+        metadata: {
+          service_visit_id: visit.id,
+          service_visit_payment_id: payment.id,
+          tip_amount: String(payment.tipAmount ?? 0),
+        },
+        idempotencyKey: payment.idempotencyKey,
+      });
+      await repo.setServiceVisitPaymentIntent(payment.id, { stripePaymentIntentId: retryIntent.id, status: "processing" });
+      return { outcome: "ready", clientSecret: retryIntent.clientSecret, totalAmount: payment.totalAmount ?? 0 };
+    }
+
     throw new InvalidVisitStateError("This payment has already been settled through another method.");
   }
 

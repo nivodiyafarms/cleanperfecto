@@ -67,6 +67,16 @@ describe("mapToCustomizationPreviewResult", () => {
     }
   });
 
+  it("regression: the promotional comparison fields and the single upper-bound customer price are always present together", () => {
+    const estimate = calculateEstimateWithComparison(baseInput({ firstCleaningEligible: true }));
+    const safe = mapToCustomizationPreviewResult(estimate);
+    if (safe.estimateType !== "instant_range") throw new Error("expected instant_range");
+    expect(safe.firstCleaningOfferApplied).toBe(true);
+    expect(safe.regularDisplayRangeLower).not.toBeNull();
+    expect(safe.regularDisplayRangeUpper).not.toBeNull();
+    expect(safe.displayRangeUpper).toBe(estimate.result.range!.upper);
+  });
+
   it("maps a manual-review estimate to the generic customer-safe code", () => {
     const estimate = calculateEstimateWithComparison(baseInput({ zip: "00000" }));
     const safe = mapToCustomizationPreviewResult(estimate);

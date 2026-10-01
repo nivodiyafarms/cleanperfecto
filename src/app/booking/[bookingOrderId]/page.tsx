@@ -43,7 +43,7 @@ export default async function BookingStatusPage({ params }: BookingStatusPagePro
       body = `Your payment method has been securely saved. Your card has not been charged. CleanPerfecto will confirm availability for your requested ${NORMAL_FREQUENCY_LABELS[bookingOrder.frequency]} cleaning.`;
     } else {
       heading = "Finalizing your booking…";
-      body = "We're confirming your payment method with Stripe. This usually only takes a moment — you can safely refresh this page.";
+      body = "Please wait about 10 seconds while we finalize your booking. If this page does not update automatically, refresh it once.";
     }
   } else {
     if (bookingOrder.status === "payment_completed") {
@@ -70,7 +70,7 @@ export default async function BookingStatusPage({ params }: BookingStatusPagePro
         } — your bank payment has been submitted. Your package will activate once the payment is confirmed, which can take a few business days. Cleaning dates can be arranged after activation.`;
       } else {
         heading = "Finalizing your payment…";
-        body = "We're confirming your payment with Stripe. This usually only takes a moment — you can safely refresh this page.";
+        body = "Please wait about 10 seconds while we finalize your booking. If this page does not update automatically, refresh it once.";
       }
     }
   }

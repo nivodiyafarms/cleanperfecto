@@ -48,9 +48,11 @@ function okResult(overrides: Partial<OkResult> = {}): OkResult {
 }
 
 describe("buildInstantQuoteCustomerEmail — automatic estimate", () => {
-  it("displays the range", () => {
+  it("displays a single customer price — the range's upper bound, never the full range", () => {
     const { text } = buildInstantQuoteCustomerEmail(buildInstantQuoteEmailDetails(rawInput(), okResult()));
-    expect(text).toContain("$110 – $130");
+    expect(text).toContain("$130");
+    expect(text).not.toContain("$110 – $130");
+    expect(text).not.toContain("$110");
   });
 
   it("includes a customer-friendly service summary", () => {
@@ -157,11 +159,13 @@ describe("buildInstantQuoteCustomerEmail — automatic estimate", () => {
 });
 
 describe("buildInstantQuoteCustomerEmail — starting-at", () => {
-  it("clearly labels the estimate as starting-at rather than final", () => {
+  it("clearly labels the estimate as starting-at via the separate explanatory line, never by prefixing the upper-bound price itself with 'Starting at'", () => {
     const { text } = buildInstantQuoteCustomerEmail(
       buildInstantQuoteEmailDetails(rawInput(), okResult({ hasStartingAtPricing: true }))
     );
-    expect(text).toContain("Starting at $110 – $130");
+    expect(text).toContain("$130");
+    expect(text).not.toContain("Starting at $130");
+    expect(text).not.toContain("$110 – $130");
     expect(text).toContain(
       "Final pricing may be confirmed if the condition or selected starting-at services require additional review."
     );

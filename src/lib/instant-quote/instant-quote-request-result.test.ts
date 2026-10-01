@@ -100,6 +100,24 @@ describe("mapToCustomerSafeResult", () => {
     }
   });
 
+  it("regression: the promotional comparison fields and the single upper-bound customer price are ALWAYS present together — the range-to-single-price change must never suppress the discount badge/crossed-out price, and vice versa", () => {
+    const safe = mapToCustomerSafeResult(
+      okResult({
+        firstCleaningOfferApplied: true,
+        range: { lower: 180, upper: 205 },
+        regularRange: { lower: 240, upper: 275 },
+      })
+    );
+    if (safe.estimateType !== "instant_range") throw new Error("expected instant_range");
+    // The promo-gating fields the UI's showComparison check reads:
+    expect(safe.firstCleaningOfferApplied).toBe(true);
+    expect(safe.regularDisplayRangeLower).toBe(240);
+    expect(safe.regularDisplayRangeUpper).toBe(275);
+    // The single customer-facing price the UI now renders instead of a range:
+    expect(safe.displayRangeUpper).toBe(205);
+    expect(safe.displayRangeLower).toBe(180);
+  });
+
   it("never fabricates a regular comparison range when the offer was not applied, even if regularRange were somehow non-null", () => {
     const safe = mapToCustomerSafeResult(
       okResult({ firstCleaningOfferApplied: false, regularRange: { lower: 999, upper: 1000 } })

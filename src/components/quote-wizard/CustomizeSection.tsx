@@ -776,7 +776,7 @@ function MovePackageCard({
     }
     return (
       <span className="text-2xl font-bold text-foreground">
-        {preview.hasStartingAtPricing ? "Starting at " : ""}${preview.displayRangeLower}–${preview.displayRangeUpper}
+        {preview.hasStartingAtPricing ? "Estimated price " : ""}${preview.displayRangeUpper}
         <span className="ml-1 text-sm font-normal text-muted">+ applicable tax</span>
       </span>
     );
@@ -871,7 +871,7 @@ function PreviewSummary({
         {isMove ? "Updated estimate for the selected package" : "Updated estimate"}
       </p>
       <p className="mt-1 text-2xl font-bold text-foreground">
-        {preview.hasStartingAtPricing ? "Starting at " : ""}${preview.displayRangeLower}–${preview.displayRangeUpper}
+        {preview.hasStartingAtPricing ? "Estimated price " : ""}${preview.displayRangeUpper}
         <span className="ml-1 text-sm font-normal text-muted">+ applicable tax</span>
       </p>
       {selectedNames.length > 0 && (

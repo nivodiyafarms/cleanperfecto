@@ -14,8 +14,15 @@ import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 import { processStripeWebhookEvent } from "./process-stripe-webhook-event";
 
 function fakeStripe(
-  overrides: Partial<{ setupIntentStatus: string; paymentIntentStatus: string; setupIntentPaymentMethod: string | null }> = {}
+  overrides: Partial<{
+    setupIntentStatus: string;
+    paymentIntentStatus: string;
+    setupIntentPaymentMethod: string | null;
+    /** Simulates the SetupIntent's resulting PaymentMethod type — default "card". Set to "link" (or any non-card value) to test the fail-closed capture behavior. */
+    paymentMethodType: string;
+  }> = {}
 ): Stripe {
+  const paymentMethodType = overrides.paymentMethodType ?? "card";
   return {
     setupIntents: {
       retrieve: vi.fn(async () => ({
@@ -28,7 +35,10 @@ function fakeStripe(
       retrieve: vi.fn(async () => ({ status: overrides.paymentIntentStatus ?? "succeeded" })),
     },
     paymentMethods: {
-      retrieve: vi.fn(async () => ({ card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 } })),
+      retrieve: vi.fn(async () => ({
+        type: paymentMethodType,
+        card: paymentMethodType === "card" ? { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 } : null,
+      })),
     },
     customers: {
       update: vi.fn(async () => ({})),
@@ -410,6 +420,33 @@ describe("processStripeWebhookEvent — update payment method (setup, no booking
     expect(customer?.stripeDefaultPaymentMethodId).toBe("pm_new");
     expect(customer?.stripePaymentMethodBrand).toBe("visa");
     expect(customer?.stripePaymentMethodLast4).toBe("4242");
+  });
+
+  it("fails closed for a non-card PaymentMethod (e.g. Link) — never persists it as the customer default, never updates the Stripe Customer invoice default", async () => {
+    const { repo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_old", stripePaymentMethodBrand: "mastercard", stripePaymentMethodLast4: "4444" } },
+    });
+    const stripe = fakeStripe({ setupIntentPaymentMethod: "pm_link_new", paymentMethodType: "link" });
+
+    await processStripeWebhookEvent(
+      stripe,
+      repo,
+      checkoutSessionEvent("checkout.session.completed", {
+        id: "cs_upm_link",
+        mode: "setup",
+        setup_intent: "seti_upm_link",
+        metadata: { purpose: "update_payment_method", customer_id: "customer-1" },
+      })
+    );
+
+    // The customer's existing (card) default is left completely untouched
+    // — a null brand/last4 is never treated as proof the non-card PM is
+    // usable; the whole capture is skipped.
+    const customer = await repo.getCustomerForStripe("customer-1");
+    expect(customer?.stripeDefaultPaymentMethodId).toBe("pm_old");
+    expect(customer?.stripePaymentMethodBrand).toBe("mastercard");
+    expect(customer?.stripePaymentMethodLast4).toBe("4444");
+    expect(stripe.customers.update).not.toHaveBeenCalled();
   });
 
   it("does nothing when the SetupIntent has not succeeded", async () => {

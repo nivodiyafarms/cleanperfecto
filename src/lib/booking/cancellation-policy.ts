@@ -12,36 +12,66 @@
  * policy and the customer's acceptance of it.
  */
 
-export const CANCELLATION_POLICY_VERSION = "2026-08-19b";
+export const CANCELLATION_POLICY_VERSION = "2026-09-27";
 
 export interface CancellationPolicyTier {
   window: string;
   fee: string;
 }
 
+/**
+ * Boundaries are deliberately worded so every hour maps to EXACTLY one
+ * tier — "or more" / "at least ... but less than" / "less than" — never an
+ * ambiguous open range like the pre-2026-09-27 "24–48 hours" wording, which
+ * left the exact 24h and 48h instants themselves unstated.
+ */
 export const CANCELLATION_POLICY_TIERS: CancellationPolicyTier[] = [
-  { window: "48+ hours before your appointment", fee: "Free cancellation or rescheduling" },
-  { window: "24–48 hours before your appointment", fee: "$25 late change/cancellation fee" },
-  { window: "Less than 24 hours / same day", fee: "$50 late cancellation/rescheduling fee" },
-  { window: "Cleaner already dispatched or no access provided", fee: "$75 fee" },
+  { window: "48 hours or more before your scheduled cleaning", fee: "No fee" },
+  { window: "At least 24 hours but less than 48 hours before your scheduled cleaning", fee: "$25 fee" },
+  { window: "Less than 24 hours before your scheduled cleaning, or same-day cancellation/rescheduling", fee: "$50 fee" },
+  { window: "Cleaner dispatched, or CleanPerfecto is unable to access the property at the scheduled time", fee: "$75 fee" },
 ];
+
+/**
+ * Owner-approved 2026-09-27: the $75 dispatched/no-access fee is a
+ * REPLACEMENT for whichever $25/$50 late-cancellation fee would otherwise
+ * apply to that same appointment — never an additional charge stacked on
+ * top of it. Shown alongside CANCELLATION_POLICY_TIERS everywhere they're
+ * shown (TermsConsentDialog, formatCancellationPolicySnapshot) so this is
+ * never buried only inside generic Terms text.
+ */
+export const NO_ACCESS_FEE_REPLACEMENT_NOTE =
+  "The $75 dispatched/no-access fee replaces rather than adds to another cancellation fee for the same appointment.";
 
 export const PREPAID_PACKAGE_CANCELLATION_NOTE =
   "For prepaid packages, a reschedule or cancellation does not use up one of your 6 visits — an applicable late fee is charged separately.";
 
+/**
+ * Pay Per Cleaning payment-authorization copy — owner-approved 2026-09-27
+ * rewrite. Two things are authorized here, kept explicitly distinct so
+ * neither is confused with the other: (1) off-session authorization to
+ * charge the applicable cancellation/rescheduling/no-access fee described
+ * in the Cancellation & Rescheduling Policy above, with no second approval
+ * asked for when that fee is actually assessed; (2) an explicit statement
+ * that this authorization does NOT extend to the regular cleaning charge —
+ * that one is still never automatic and always goes through the existing
+ * Final Total review-and-Pay flow (see confirm-final-total-and-pay.ts) —
+ * see this module's own test coverage for both being explicit.
+ */
 export const SAVED_PAYMENT_AUTHORIZATION_COPY =
-  "I agree to the cancellation/rescheduling policy and authorize CleanPerfecto to securely save my payment method for the approved cleaning charge and applicable late-change fees.";
+  "By agreeing below, I authorize CleanPerfecto to securely keep my payment method on file and charge the applicable cancellation, rescheduling, or no-access fee described in the Cancellation & Rescheduling Policy without requiring additional authorization at the time the fee is assessed. CleanPerfecto will provide notice or a receipt for any such charge.\n\nRegular cleaning charges are not automatically charged after service. After the cleaning, I will receive my Final Total for review and payment.";
 
 /**
- * The single required clickwrap checkbox label covering Service Terms +
- * Cancellation/Rescheduling/No-Access Policy + Payment Authorization as
- * ONE combined electronic acceptance — owner-approved wording, used
- * identically for both Pay Per Cleaning and Prepaid Package (the "View
- * Terms & Consent" content next to it is what differs per payment model,
- * not this label). See BookingPaymentClient's checkbox + TermsConsentDialog.
+ * The single required clickwrap checkbox label covering Terms +
+ * Cancellation/Rescheduling/No-Access Policy + payment-method authorization
+ * as ONE combined electronic acceptance — owner-approved wording
+ * (2026-09-27 revision), used identically for both Pay Per Cleaning and
+ * Prepaid Package (the "View Terms & Consent" content next to it is what
+ * differs per payment model, not this label). See BookingPaymentClient's
+ * checkbox + TermsConsentDialog.
  */
 export const COMBINED_CONSENT_CHECKBOX_COPY =
-  "I agree to CleanPerfecto's Service Terms, Cancellation & Rescheduling Policy, and Payment Authorization.";
+  "I agree to CleanPerfecto's Terms, Cancellation & Rescheduling Policy, and payment-method authorization.";
 
 /**
  * Payment-authorization explanation shown inside the "View Terms &
@@ -68,6 +98,9 @@ export const PREPAID_PAYMENT_AUTHORIZATION_COPY =
  */
 export function formatCancellationPolicySnapshot(forPrepaidPackage: boolean): string {
   const lines = CANCELLATION_POLICY_TIERS.map((tier) => `${tier.window}: ${tier.fee}`);
+  // Applies regardless of payment model — the $75 fee replaces, never
+  // stacks with, a $25/$50 fee for the same appointment either way.
+  lines.push(NO_ACCESS_FEE_REPLACEMENT_NOTE);
   if (forPrepaidPackage) {
     lines.push(PREPAID_PACKAGE_CANCELLATION_NOTE);
   }

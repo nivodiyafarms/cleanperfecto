@@ -44,6 +44,17 @@ async function capturePaymentMethodFromSetupIntent(stripe: Stripe, repo: Booking
   if (!paymentMethodId) return;
 
   const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+  // Fail closed: Pay Per Cleaning's post-cleaning PaymentIntent is
+  // card-only (visit-payment-gateway.ts), so a non-card PaymentMethod must
+  // never become this customer's stored default — a null card brand/last4
+  // is NOT proof of usability, it's simply absent for a non-card type.
+  // The setup Checkout Session is now restricted to payment_method_types:
+  // ["card"] (see createSetupCheckoutSession), so this should not occur
+  // going forward; this check is the defense-in-depth backstop.
+  if (paymentMethod.type !== "card") {
+    console.warn(`[webhook] setup session resulted in a non-card PaymentMethod (type=${paymentMethod.type}) for customer ${customerId} — not persisting as default`);
+    return;
+  }
   await repo.setCustomerDefaultPaymentMethod(customerId, {
     stripePaymentMethodId: paymentMethodId,
     brand: paymentMethod.card?.brand ?? null,

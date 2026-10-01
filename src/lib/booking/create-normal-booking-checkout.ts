@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
 import { calculateEstimate } from "@/lib/pricing/calculate-estimate";
+import { resolveCustomerBookingPrice } from "@/lib/pricing/customer-booking-price";
 import { assertCanCreateStripeSetup } from "@/lib/config/payment-capabilities";
 import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { SITE_CONTACT } from "@/lib/site-contact";
@@ -133,7 +134,15 @@ export async function createNormalBookingCheckout(
       paymentAuthorizationAcceptedAt: asOf.toISOString(),
       pricingVersion: result.pricingVersion,
       pricingSnapshot: { input: calculationInput, result },
-      calculatedTotal: result.calculatedTotal,
+      // The customer-facing residential booking price is the post-discount
+      // range's UPPER bound — the exact number the customer saw on the
+      // quote/booking-review screens — never the raw pre-range
+      // calculatedTotal (owner-approved 2026-09-27). See
+      // resolveCustomerBookingPrice's own doc comment: this is what later
+      // becomes service_visit_pricing.base_amount and, in turn, Final
+      // Total's "Original booking price" — it must be the exact figure the
+      // customer already saw, never re-derived differently downstream.
+      calculatedTotal: resolveCustomerBookingPrice(result),
       displayRangeLower: result.range?.lower ?? null,
       displayRangeUpper: result.range?.upper ?? null,
       prepaidPackageTotal: null,

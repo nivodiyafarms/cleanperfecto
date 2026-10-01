@@ -143,10 +143,16 @@ function buildPackageEmail(details: InstantQuoteEmailDetails) {
 function buildAutomaticEstimateEmail(details: InstantQuoteEmailDetails) {
   const subject = "Your CleanPerfecto Cleaning Estimate";
   const name = firstName(details.name);
+  // Owner-approved 2026-09-27: the customer-facing price is a single
+  // number — the range's upper bound (same authoritative field the quote
+  // UI shows and the booking flow later persists — see
+  // resolveCustomerBookingPrice in src/lib/pricing/customer-booking-price.ts).
+  // Never the full range, never recalculated here. Never prefixed "Starting
+  // at" (2026-09-27 correction) — $range.upper is the upper bound, not a
+  // starting/low price, and STARTING_AT_LINE below already explains the
+  // separate starting-at-add-on caveat when hasStartingAtPricing is true.
   const range = details.range as { lower: number; upper: number };
-  const priceLine = details.hasStartingAtPricing
-    ? `Starting at $${range.lower} – $${range.upper}`
-    : `$${range.lower} – $${range.upper}`;
+  const priceLine = `$${range.upper}`;
 
   const textLines = [
     `Hi ${name},`,

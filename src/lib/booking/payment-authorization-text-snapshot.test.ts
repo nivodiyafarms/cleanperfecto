@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CANCELLATION_POLICY_TIERS,
+  NO_ACCESS_FEE_REPLACEMENT_NOTE,
   PREPAID_PACKAGE_CANCELLATION_NOTE,
   PREPAID_PAYMENT_AUTHORIZATION_COPY,
   SAVED_PAYMENT_AUTHORIZATION_COPY,
@@ -76,6 +77,58 @@ describe("formatCancellationPolicySnapshot", () => {
   it("includes the prepaid-specific note only for a prepaid package (3)", () => {
     const snapshot = formatCancellationPolicySnapshot(true);
     expect(snapshot).toContain(PREPAID_PACKAGE_CANCELLATION_NOTE);
+  });
+
+  it("includes the $75-replaces note for BOTH a normal booking and a prepaid package — it is not payment-model-specific", () => {
+    expect(formatCancellationPolicySnapshot(false)).toContain(NO_ACCESS_FEE_REPLACEMENT_NOTE);
+    expect(formatCancellationPolicySnapshot(true)).toContain(NO_ACCESS_FEE_REPLACEMENT_NOTE);
+  });
+});
+
+describe("historical evidence is never silently rewritten", () => {
+  it("a booking's persisted cancellation_policy_version and cancellation_policy_text_snapshot stay frozen to whatever was true when it was created — a later CANCELLATION_POLICY_VERSION/wording revision never reaches back into an existing row", async () => {
+    const { repo } = createFakeBookingRepository();
+    const bookingOrder = await repo.insertBookingOrder(
+      minimalBookingOrderInput({
+        cancellationPolicyVersion: "2026-08-19b",
+        cancellationPolicyTextSnapshot: "48+ hours before your appointment: Free cancellation or rescheduling",
+      })
+    );
+
+    // The row keeps its OWN frozen text, regardless of what the CURRENT
+    // constants say — application code has no update path for this field at
+    // all (see fake-booking-repository.ts's updateBookingOrderStatus, the
+    // only mutation ever performed on a booking_orders row), mirroring the
+    // real DB's protect_booking_order_consent_evidence trigger.
+    expect(bookingOrder.cancellationPolicyVersion).toBe("2026-08-19b");
+    expect(bookingOrder.cancellationPolicyTextSnapshot).not.toContain(NO_ACCESS_FEE_REPLACEMENT_NOTE);
+
+    await repo.updateBookingOrderStatus(bookingOrder.id, "draft", "awaiting_payment_method");
+    const after = await repo.findBookingOrderById(bookingOrder.id);
+
+    expect(after?.cancellationPolicyVersion).toBe("2026-08-19b");
+    expect(after?.cancellationPolicyTextSnapshot).toBe(bookingOrder.cancellationPolicyTextSnapshot);
+    expect(after?.consentVersionId).toBe(bookingOrder.consentVersionId);
+    expect(after?.paymentAuthorizationTextSnapshot).toBe(bookingOrder.paymentAuthorizationTextSnapshot);
+    expect(after?.paymentAuthorizationAcceptedAt).toBe(bookingOrder.paymentAuthorizationAcceptedAt);
+  });
+
+  it("a NEW booking created after the wording revision correctly captures the updated policy — old and new bookings can coexist with different frozen snapshots", async () => {
+    const { repo } = createFakeBookingRepository();
+    const oldBooking = await repo.insertBookingOrder(
+      minimalBookingOrderInput({ cancellationPolicyVersion: "2026-08-19b", cancellationPolicyTextSnapshot: "an old snapshot" })
+    );
+    const newBooking = await repo.insertBookingOrder(
+      minimalBookingOrderInput({
+        clientRequestId: "new-booking-req",
+        cancellationPolicyVersion: "2026-09-27",
+        cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(false),
+      })
+    );
+
+    expect(oldBooking.cancellationPolicyTextSnapshot).toBe("an old snapshot");
+    expect(newBooking.cancellationPolicyTextSnapshot).toContain(NO_ACCESS_FEE_REPLACEMENT_NOTE);
+    expect(oldBooking.cancellationPolicyTextSnapshot).not.toBe(newBooking.cancellationPolicyTextSnapshot);
   });
 });
 

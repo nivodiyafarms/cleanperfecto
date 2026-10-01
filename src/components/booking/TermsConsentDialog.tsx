@@ -10,6 +10,8 @@ interface TermsConsentDialogProps {
   serviceTermsBody: string;
   isLegallyReviewed: boolean;
   cancellationPolicyTiers: { window: string; fee: string }[];
+  /** "The $75 dispatched/no-access fee replaces rather than adds to..." — always shown, never buried only inside generic Terms text. See NO_ACCESS_FEE_REPLACEMENT_NOTE. */
+  feeReplacementNote: string;
   /** Payment-authorization explanation — worded per payment model (Pay Per Cleaning vs Prepaid Package) by the caller. */
   paymentAuthorizationCopy: string;
   packageCancellationNote?: string;
@@ -31,6 +33,7 @@ export default function TermsConsentDialog({
   serviceTermsBody,
   isLegallyReviewed,
   cancellationPolicyTiers,
+  feeReplacementNote,
   paymentAuthorizationCopy,
   packageCancellationNote,
 }: TermsConsentDialogProps) {
@@ -87,12 +90,13 @@ export default function TermsConsentDialog({
               </li>
             ))}
           </ul>
+          <p className="mt-2 text-xs font-medium text-foreground">{feeReplacementNote}</p>
           {packageCancellationNote && <p className="mt-2 text-xs text-muted">{packageCancellationNote}</p>}
         </section>
 
         <section className="mt-5">
-          <h3 className="text-sm font-semibold text-foreground">Payment Authorization</h3>
-          <p className="mt-2 text-sm text-muted">{paymentAuthorizationCopy}</p>
+          <h3 className="text-sm font-semibold text-foreground">Payment Method Authorization</h3>
+          <p className="mt-2 text-sm whitespace-pre-wrap text-muted">{paymentAuthorizationCopy}</p>
         </section>
 
         <button

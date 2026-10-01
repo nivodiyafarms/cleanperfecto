@@ -20,6 +20,7 @@ import {
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
 import { resendConsentRequestAction, retrySignedConsentDocumentAction, setReviewRequestSuppressedAction } from "@/lib/admin/actions/consent-actions";
 import { collectServiceFeeAction, recordExternalPaymentAction, refundPaymentAction, retryTaxReversalAction, retryTaxSyncAction } from "@/lib/admin/actions/payment-actions";
+import { buildBookingAuthorizationEvidence } from "@/lib/admin/booking-authorization-evidence";
 import { formatCadenceLabel, formatInstant, formatMoney, localDateOf, localTimeOf } from "@/lib/admin/format";
 import { hasCapability } from "@/lib/admin/rbac/capabilities";
 import { requireAdmin } from "@/lib/admin/require-admin";
@@ -27,6 +28,7 @@ import { computeVisitProgressStatus, formatVisitProgressStatusLabel } from "@/li
 import { computeVisitTaxReversalStatus } from "@/lib/admin/visit-tax-reversal-status";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
 import { buildVisitPaymentQrCode } from "@/lib/payments/visit-qr-code";
+import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
 import { findAvailableCleaners } from "@/lib/scheduling/find-available-cleaners";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
@@ -106,6 +108,15 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const consentRepo = createSupabaseConsentRepository();
   const activeConsentVersion = await consentRepo.findActiveVersion();
   const consentRecord = activeConsentVersion ? await consentRepo.findByCustomerAndVersion(visit.customerId, activeConsentVersion.id) : null;
+
+  // Booking Authorization — a SEPARATE evidence group from the
+  // customer-level Service Consent above. Reads booking_orders' own
+  // immutable, booking-level snapshot columns (never the live
+  // CANCELLATION_POLICY_TIERS/SAVED_PAYMENT_AUTHORIZATION_COPY constants),
+  // so a historical booking keeps showing exactly what it accepted at
+  // booking time. See buildBookingAuthorizationEvidence's own doc comment.
+  const bookingOrder = visit.bookingOrderId ? await createSupabaseBookingRepository().findBookingOrderById(visit.bookingOrderId) : null;
+  const bookingAuthorization = buildBookingAuthorizationEvidence(bookingOrder);
 
   const visitPayment = visit.status === "completed" ? await schedulingRepo.findServiceVisitPaymentByVisitId(visitId) : null;
   const progressStatus = computeVisitProgressStatus({
@@ -194,33 +205,41 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
             </ActionForm>
           </div>
 
-          <div className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="text-sm font-semibold text-foreground">Mark work finished</h2>
+          <div className="rounded-2xl border border-border bg-surface p-5 sm:col-span-2">
+            <h2 className="text-sm font-semibold text-foreground">Review &amp; Finalize Cleaning</h2>
             <p className="mt-1 text-xs text-muted">
-              Use this when the cleaning is physically done but you still need to review/finalize the scope and price before sending the customer their Final Total. Does not charge or complete the visit yet.
+              Use this once the cleaning is physically done. It opens Final Scope, where you confirm the price (or make adjustments) before sending the customer their Final Total. Does not charge or complete the visit yet.
             </p>
+            {/* Reuses the existing scheduled -> work_finished transition
+                (markServiceVisitWorkFinished) unchanged — this is a UI
+                relabel/consolidation, not a new state-machine step. */}
             <ActionForm action={markWorkFinishedAction} className="mt-3">
               <input type="hidden" name="visitId" value={visitId} />
-              <button type="submit" className="rounded-lg bg-secondary px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90">
-                Mark work finished
+              <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+                Review &amp; Finalize Cleaning
               </button>
             </ActionForm>
-          </div>
 
-          <div className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="text-sm font-semibold text-foreground">Mark completed</h2>
-            <p className="mt-1 text-xs text-muted">
-              {visit.prepaidPackageId
-                ? "This will consume exactly one package credit. The customer is not charged automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."
-                : "This does not charge the customer automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."}
-            </p>
-            <p className="mt-1 text-xs text-muted">For a simple visit needing no scope/price review, this skips straight to completed. Otherwise use &quot;Mark work finished&quot; above.</p>
-            <ActionForm action={completeVisitAction} className="mt-3">
-              <input type="hidden" name="visitId" value={visitId} />
-              <button type="submit" className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90">
-                Mark completed
-              </button>
-            </ActionForm>
+            {/* "Mark completed" (skip Final Scope entirely) is kept for a
+                rare simple visit that genuinely needs no scope/price
+                review, but is deliberately de-emphasized so it never
+                competes with the normal Review & Finalize Cleaning path —
+                the underlying completeServiceVisit transition is unchanged. */}
+            <details className="mt-4 rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-xs font-medium text-muted">Advanced: skip scope review</summary>
+              <p className="mt-2 text-xs text-muted">
+                {visit.prepaidPackageId
+                  ? "This will consume exactly one package credit. The customer is not charged automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."
+                  : "This does not charge the customer automatically — they'll review and pay (including any tip) through their own portal, or you can record a Cash/Zelle payment once received."}
+              </p>
+              <p className="mt-1 text-xs text-muted">Only use this for a simple visit that needs no scope or price review at all. Otherwise use &quot;Review &amp; Finalize Cleaning&quot; above.</p>
+              <ActionForm action={completeVisitAction} className="mt-3">
+                <input type="hidden" name="visitId" value={visitId} />
+                <button type="submit" className="rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-foreground hover:bg-background-alt">
+                  Mark completed (skip Final Scope)
+                </button>
+              </ActionForm>
+            </details>
           </div>
         </div>
       )}
@@ -362,6 +381,22 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
 
           {visit.status === "work_finished" && (
             <>
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <p className="text-sm font-medium text-foreground">A. No changes — use booking price</p>
+                <p className="mt-1 text-xs text-muted">
+                  Nothing below needs to change for this visit. Send the Final Total using the price as booked.
+                </p>
+                <ActionForm action={finalizeAndSendAction} className="mt-2">
+                  <input type="hidden" name="serviceVisitId" value={visitId} />
+                  <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+                    Finalize &amp; Send (no changes)
+                  </button>
+                </ActionForm>
+              </div>
+
+              <details className="rounded-xl border border-border p-3">
+                <summary className="cursor-pointer text-sm font-medium text-foreground">B. Make adjustments</summary>
+                <div className="mt-3 space-y-4">
               <div>
                 <p className="text-xs font-medium text-muted">Final scope — currently selected extras (unchecked items were removed, newly checked items were added):</p>
                 <ActionForm action={updateFinalScopeAction} className="mt-2 space-y-2">
@@ -493,9 +528,11 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               <ActionForm action={finalizeAndSendAction}>
                 <input type="hidden" name="serviceVisitId" value={visitId} />
                 <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
-                  Finalize &amp; Send
+                  Finalize &amp; Send (with adjustments)
                 </button>
               </ActionForm>
+                </div>
+              </details>
             </>
           )}
 
@@ -522,10 +559,17 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
       )}
 
       {isPayPerCleaningVisit && (
-        <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
-          <h2 className="text-sm font-semibold text-foreground">Confirm final price (Pay Per Cleaning)</h2>
+        <details className="mt-6 rounded-2xl border border-border bg-surface p-5">
+          {/* De-emphasized on purpose: this is a PRE-visit add-on/price
+              adjustment (before the cleaning happens), a different concern
+              from the post-visit Final Scope review above. Kept available
+              but collapsed so it never competes with "Review & Finalize
+              Cleaning" as a normal action on a Scheduled visit. */}
+          <summary className="cursor-pointer text-sm font-semibold text-foreground">
+            Advanced: adjust price before the visit (Pay Per Cleaning)
+          </summary>
           {visitPricing && (
-            <p className="mt-1 text-xs text-muted">
+            <p className="mt-2 text-xs text-muted">
               Current estimate: {formatMoney(visitPricing.totalAmount)} — {visitPricing.priceStatus}
               {visitPricing.requiresCustomerApproval ? " (awaiting customer approval on the last increase)" : ""}
             </p>
@@ -544,7 +588,7 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
               Confirm final price
             </button>
           </ActionForm>
-        </div>
+        </details>
       )}
 
       {visitPayment && (
@@ -714,7 +758,8 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
 
       {activeConsentVersion && (
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
-          <h2 className="text-sm font-semibold text-foreground">Consent</h2>
+          <h2 className="text-sm font-semibold text-foreground">A. Service Consent</h2>
+          <p className="mt-1 text-xs text-muted">Customer-level agreement to CleanPerfecto&apos;s Service Terms — separate from this specific booking&apos;s authorization below.</p>
           {consentRecord ? (
             <>
               <p className="mt-2 text-sm text-foreground">
@@ -769,6 +814,41 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
           )}
         </div>
       )}
+
+      <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
+        <h2 className="text-sm font-semibold text-foreground">B. Booking Authorization</h2>
+        <p className="mt-1 text-xs text-muted">
+          What THIS booking specifically accepted — cancellation policy and payment-method authorization, frozen verbatim at booking time. Never rebuilt from today&apos;s policy wording.
+        </p>
+        {bookingAuthorization.hasEvidence ? (
+          <dl className="mt-3 space-y-3 text-sm">
+            <div>
+              <dt className="text-xs font-medium text-muted">Cancellation policy version</dt>
+              <dd className="text-foreground">{bookingAuthorization.cancellationPolicyVersion ?? "Not recorded (legacy booking)"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-muted">Cancellation policy — exact text accepted</dt>
+              <dd className="mt-1 whitespace-pre-wrap rounded-lg bg-background-alt p-3 text-xs text-foreground">
+                {bookingAuthorization.cancellationPolicyTextSnapshot ?? "Not recorded (legacy booking)"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-muted">Payment-method authorization — exact text accepted</dt>
+              <dd className="mt-1 whitespace-pre-wrap rounded-lg bg-background-alt p-3 text-xs text-foreground">
+                {bookingAuthorization.paymentAuthorizationTextSnapshot ?? "Not recorded (legacy booking)"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-muted">Accepted at</dt>
+              <dd className="text-foreground">
+                {bookingAuthorization.paymentAuthorizationAcceptedAt ? formatInstant(bookingAuthorization.paymentAuthorizationAcceptedAt) : "Not recorded (legacy booking)"}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="mt-2 text-sm text-muted">No booking-level authorization evidence available for this visit.</p>
+        )}
+      </div>
 
       <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold text-foreground">Review request</h2>

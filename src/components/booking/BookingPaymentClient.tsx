@@ -6,6 +6,7 @@ import { createPrepaidPackageCheckout } from "@/lib/booking/create-prepaid-packa
 import {
   CANCELLATION_POLICY_TIERS,
   COMBINED_CONSENT_CHECKBOX_COPY,
+  NO_ACCESS_FEE_REPLACEMENT_NOTE,
   PREPAID_PACKAGE_CANCELLATION_NOTE,
   PREPAID_PAYMENT_AUTHORIZATION_COPY,
   SAVED_PAYMENT_AUTHORIZATION_COPY,
@@ -14,6 +15,7 @@ import type { AchPackagePricing } from "@/lib/booking/ach-package-options";
 import { NORMAL_FREQUENCY_LABELS, PREPAID_FREQUENCY_LABELS } from "@/lib/booking/labels";
 import { OPERATING_HOURS_END, OPERATING_HOURS_START } from "@/lib/booking/operating-hours";
 import type { BookingPricingOptions, ConsentVersionSummary, PaymentMethodType, PrepaidFrequency } from "@/lib/booking/types";
+import { resolveCustomerBookingPrice } from "@/lib/pricing/customer-booking-price";
 import type { CalculationResult, FrequencyId } from "@/lib/pricing/types";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import type { AddOnSelection } from "@/components/quote-wizard/map-form-to-raw-input";
@@ -24,10 +26,6 @@ const NORMAL_FREQUENCIES: FrequencyId[] = ["one_time", "weekly", "biweekly", "ev
 const PACKAGE_FREQUENCIES: PrepaidFrequency[] = ["weekly", "biweekly", "every_4_weeks"];
 
 const GENERIC_ERROR_MESSAGE = `Something went wrong. Please try again or contact CleanPerfecto at ${SITE_CONTACT.phoneDisplay}.`;
-
-function formatRange(lower: number, upper: number): string {
-  return `$${lower}–$${upper}`;
-}
 
 function formatMoney(amount: number): string {
   return `$${amount.toFixed(2)}`;
@@ -332,8 +330,8 @@ export default function BookingPaymentClient({
               <p className="text-sm text-muted">Final pricing for this option requires a quick confirmation from our team.</p>
             ) : (
               <p className="text-2xl font-bold text-foreground">
-                {selectedNormalOption.hasStartingAtPricing ? "Starting at " : ""}
-                {formatRange(selectedNormalOption.range.lower, selectedNormalOption.range.upper)}
+                {selectedNormalOption.hasStartingAtPricing ? "Estimated price " : ""}
+                {`$${resolveCustomerBookingPrice(selectedNormalOption)}`}
               </p>
             )}
             {selectedNormalOption.minimumServiceTotalApplied && (
@@ -349,8 +347,8 @@ export default function BookingPaymentClient({
                   <p className="text-sm text-muted">Requires a quick confirmation from our team.</p>
                 ) : (
                   <p className="text-lg font-semibold text-foreground">
-                    {selectedFutureOption.hasStartingAtPricing ? "Starting at " : ""}
-                    {formatRange(selectedFutureOption.range.lower, selectedFutureOption.range.upper)}{" "}
+                    {selectedFutureOption.hasStartingAtPricing ? "Estimated price " : ""}
+                    {`$${resolveCustomerBookingPrice(selectedFutureOption)}`}{" "}
                     <span className="text-sm font-normal text-muted">per visit</span>
                   </p>
                 )}
@@ -400,7 +398,7 @@ export default function BookingPaymentClient({
               onChange={(event) => setRequestedStartTime(event.target.value)}
               className="w-full rounded-xl border border-border bg-white px-4 py-3 text-foreground focus:ring-2 focus:ring-primary/50 focus:outline-none"
             />
-            <p className="mt-1.5 text-xs text-muted">Subject to confirmation, 8:00 AM–6:00 PM, in 30-minute increments.</p>
+            <p className="mt-1.5 text-xs text-muted">Subject to confirmation, 8:00 AM–5:00 PM, in 30-minute increments.</p>
           </div>
         </div>
 
@@ -427,6 +425,7 @@ export default function BookingPaymentClient({
             serviceTermsBody={consentVersion.bodyText}
             isLegallyReviewed={consentVersion.isLegallyReviewed}
             cancellationPolicyTiers={CANCELLATION_POLICY_TIERS}
+            feeReplacementNote={NO_ACCESS_FEE_REPLACEMENT_NOTE}
             paymentAuthorizationCopy={SAVED_PAYMENT_AUTHORIZATION_COPY}
           />
         )}
@@ -486,9 +485,9 @@ export default function BookingPaymentClient({
           {cardBuyable ? (
             <>
               <p className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
-                {formatMoney(displayedTotal)} total
+                {formatMoney(displayedPerVisit)} per cleaning
               </p>
-              <p className="mt-1 text-lg font-semibold text-foreground">{formatMoney(displayedPerVisit)} per cleaning</p>
+              <p className="mt-1 text-lg font-semibold text-foreground">{formatMoney(displayedTotal)} total</p>
               <p className="mt-2 text-xs text-muted">Taxes calculated at checkout.</p>
               <p className="mt-3 text-sm font-medium text-primary">Extra 10% prepaid savings applied</p>
               {showingAch && <p className="mt-1 text-sm font-medium text-primary">Extra 1% bank-payment savings applied</p>}
@@ -557,6 +556,7 @@ export default function BookingPaymentClient({
                 serviceTermsBody={consentVersion.bodyText}
                 isLegallyReviewed={consentVersion.isLegallyReviewed}
                 cancellationPolicyTiers={CANCELLATION_POLICY_TIERS}
+                feeReplacementNote={NO_ACCESS_FEE_REPLACEMENT_NOTE}
                 packageCancellationNote={PREPAID_PACKAGE_CANCELLATION_NOTE}
                 paymentAuthorizationCopy={PREPAID_PAYMENT_AUTHORIZATION_COPY}
               />

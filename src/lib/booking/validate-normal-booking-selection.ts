@@ -18,7 +18,7 @@ export function validateNormalBookingSelection(raw: NormalBookingSelectionInput)
   if (!NORMAL_FREQUENCIES.includes(raw.frequency)) errors.push("Please choose a valid cleaning frequency.");
   if (!DATE_PATTERN.test(raw.requestedDate)) errors.push("Please choose a preferred date.");
   if (!isWithinOperatingHours(raw.requestedStartTime)) {
-    errors.push("Please choose a preferred start time between 8:00 AM and 6:00 PM.");
+    errors.push("Please choose a preferred start time between 8:00 AM and 5:00 PM.");
   }
   if (!raw.paymentMethodSaveAuthorized) {
     errors.push(

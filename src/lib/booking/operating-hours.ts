@@ -5,7 +5,7 @@
  * no scheduling/crew-availability engine exists yet (a future milestone).
  */
 export const OPERATING_HOURS_START = "08:00";
-export const OPERATING_HOURS_END = "18:00";
+export const OPERATING_HOURS_END = "17:00";
 
 const START_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
