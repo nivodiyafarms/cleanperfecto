@@ -626,7 +626,7 @@ describe("processStripeWebhookEvent — mode-mismatch cannot later fulfill after
     const claim1 = await claimWebhookEvent(bookingRepo, liveEvent.id, liveEvent.type, liveEvent as unknown as Record<string, unknown>);
     expect(claim1.shouldProcess).toBe(true);
     await processStripeWebhookEvent(fakeStripe(), bookingRepo, liveEvent, schedulingRepo, undefined, gateway, "stripe_sandbox");
-    await bookingRepo.markWebhookEventProcessed(claim1.eventRowId);
+    await bookingRepo.markWebhookEventProcessed(claim1.eventRowId, claim1.claimToken);
 
     const paymentAfterFirstDelivery = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
     expect(paymentAfterFirstDelivery!.status).not.toBe("paid"); // never fulfilled — mode mismatch

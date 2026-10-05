@@ -1402,6 +1402,26 @@ export function createFakeSchedulingRepository(
       return receipt;
     },
 
+    async issueVisitPaymentDocumentsIdempotent(input) {
+      // Mirrors issue_visit_payment_documents()'s existence check — the
+      // real safety under concurrency comes from the DB's transaction-
+      // scoped advisory lock plus the partial unique index on
+      // receipts.service_visit_payment_id, neither of which a single-
+      // threaded in-memory fake can reproduce; this models the
+      // application-level idempotency logic (check-before-create,
+      // never-reissue-for-the-same-settlement) that sits on top of it.
+      const existingReceipt = [...receiptsById.values()].find((r) => r.serviceVisitPaymentId === input.serviceVisitPaymentId);
+      if (existingReceipt) {
+        const invoice = invoicesById.get(existingReceipt.invoiceId);
+        if (!invoice) throw new Error(`[fake-scheduling] receipt ${existingReceipt.id} references missing invoice ${existingReceipt.invoiceId}`);
+        return { invoice, receipt: existingReceipt, alreadyIssued: true };
+      }
+
+      const invoice = await repo.issueInvoice(input.invoice);
+      const receipt = await repo.issueReceipt({ ...input.receipt, invoiceId: invoice.id });
+      return { invoice, receipt, alreadyIssued: false };
+    },
+
     async findInvoiceById(id) {
       return invoicesById.get(id) ?? null;
     },
