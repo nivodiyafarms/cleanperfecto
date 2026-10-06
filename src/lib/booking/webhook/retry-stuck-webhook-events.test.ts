@@ -134,4 +134,35 @@ describe("retryStuckWebhookEvents", () => {
     expect(second).toEqual({ attempted: 0, processed: 0, skipped: 0, failed: 0 });
     expect(state.webhookEventsByStripeId.get("evt_stuck_twice")?.processingStatus).toBe("processed");
   });
+
+  it("a malformed stuck candidate (e.g. corrupt stored payload) never blocks recovery of other legitimately stuck events in the same sweep", async () => {
+    const { repo: bookingRepo, state } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const { schedulingRepo, gateway, paymentIntentId } = await seedChargedVisit(bookingRepo);
+    const goodEvent = paymentIntentEvent("evt_good_recoverable", paymentIntentId);
+
+    const goodClaim = await claimWebhookEvent(bookingRepo, goodEvent.id, goodEvent.type, goodEvent as unknown as Record<string, unknown>);
+    await bookingRepo.markWebhookEventFailed(goodClaim.eventRowId, "simulated crash", goodClaim.claimToken);
+
+    // A malformed row with an empty payload (missing .id/.type) — mirrors a
+    // corrupt stored payload, received_at ordered before the good one so it
+    // is attempted first.
+    state.webhookEventsByStripeId.set("evt_malformed", {
+      id: "malformed-row-id",
+      stripeEventId: "evt_malformed",
+      eventType: "unknown",
+      processingStatus: "failed",
+      processingClaimedAt: null,
+      claimToken: null,
+      payload: {},
+    });
+
+    const result = await retryStuckWebhookEvents(fakeStripe(), bookingRepo, schedulingRepo, undefined, gateway, new Date(), 20, "stripe_sandbox");
+
+    expect(result.attempted).toBe(2);
+    expect(result.failed).toBeGreaterThanOrEqual(1);
+    expect(result.processed).toBe(1);
+    expect(state.webhookEventsByStripeId.get("evt_good_recoverable")?.processingStatus).toBe("processed");
+  });
 });

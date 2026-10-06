@@ -192,6 +192,12 @@ export function createFakeBookingRepository(
     },
 
     async claimWebhookEvent(stripeEventId: string, eventType: string, payload: unknown): Promise<WebhookClaim> {
+      // Mirrors stripe_webhook_events.stripe_event_id's real NOT NULL
+      // constraint — a malformed/corrupt stored payload (missing .id)
+      // genuinely fails at this exact point in production, not silently.
+      if (!stripeEventId) {
+        throw new Error("[booking] stripe_webhook_events claim failed: null value in column \"stripe_event_id\" violates not-null constraint");
+      }
       let existing = webhookEventsByStripeId.get(stripeEventId);
       if (!existing) {
         existing = { id: randomUUID(), stripeEventId, eventType, processingStatus: "received", processingClaimedAt: null, claimToken: null, payload };

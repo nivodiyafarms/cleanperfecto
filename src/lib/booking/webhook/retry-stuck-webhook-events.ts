@@ -48,11 +48,23 @@ export async function retryStuckWebhookEvents(
   const result: RetryStuckWebhookEventsResult = { attempted: candidates.length, processed: 0, skipped: 0, failed: 0 };
 
   for (const candidate of candidates) {
-    const event = candidate.payload as unknown as Stripe.Event;
-    const outcome = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode);
-    if (outcome.outcome === "processed") result.processed += 1;
-    else if (outcome.outcome === "skipped") result.skipped += 1;
-    else result.failed += 1;
+    try {
+      const event = candidate.payload as unknown as Stripe.Event;
+      const outcome = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode);
+      if (outcome.outcome === "processed") result.processed += 1;
+      else if (outcome.outcome === "skipped") result.skipped += 1;
+      else result.failed += 1;
+    } catch (error) {
+      // A throw here means the claim attempt itself failed (e.g. a
+      // malformed/corrupt stored payload) — distinct from
+      // claimAndProcessStripeWebhookEvent's own "failed" outcome, which
+      // already catches fulfillment errors and marks the ledger row. One
+      // bad candidate must never abort the rest of the batch: every other
+      // genuinely stuck event in this sweep still deserves its chance to
+      // recover, independent of whichever candidate happened to be broken.
+      console.error(`[booking] retryStuckWebhookEvents: candidate ${candidate.stripeEventId} threw during claim/process, skipping:`, error);
+      result.failed += 1;
+    }
   }
 
   return result;
