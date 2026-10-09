@@ -15,6 +15,19 @@ import type {
   WebhookClaim,
 } from "./types";
 
+// Every id column this repository looks up by is a Postgres `uuid`. Passing
+// a non-UUID string to .eq() against a uuid column makes Postgres raise
+// "invalid input syntax for type uuid" — a genuine query error, not a
+// "no rows" result — which a lookup wrapper would otherwise rethrow as an
+// unhandled 500. A malformed id can never match any row regardless, so
+// rejecting the shape before querying is accurate (not a disguised
+// failure): only this early, input-shape check short-circuits to "not
+// found"; any other error from a validly-shaped query still throws.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 function toBookingOrderRow(row: Record<string, unknown>): BookingOrderRow {
   return {
     id: row.id as string,
@@ -237,6 +250,7 @@ export function createSupabaseBookingRepository(): BookingRepository {
     },
 
     async findBookingOrderById(id: string): Promise<BookingOrderRow | null> {
+      if (!isValidUuid(id)) return null;
       const { data, error } = await supabase.from("booking_orders").select().eq("id", id).maybeSingle();
       if (error) {
         throw new Error(`[booking] booking_orders lookup failed: ${error.message}`);
@@ -363,73 +377,59 @@ export function createSupabaseBookingRepository(): BookingRepository {
     },
 
     async claimWebhookEvent(stripeEventId: string, eventType: string, payload: unknown): Promise<WebhookClaim> {
-      const { data: inserted, error: insertError } = await supabase
-        .from("stripe_webhook_events")
-        .upsert(
-          { stripe_event_id: stripeEventId, event_type: eventType, payload, processing_status: "received" },
-          { onConflict: "stripe_event_id", ignoreDuplicates: true }
-        )
-        .select("id,processing_status")
-        .maybeSingle();
-      if (insertError) {
-        throw new Error(`[booking] stripe_webhook_events claim failed: ${insertError.message}`);
+      // A single atomic conditional UPDATE server-side — see
+      // claim_stripe_webhook_event()'s own comment for why the previous
+      // read-then-write here could let two concurrent deliveries both
+      // proceed, and why a lease (not just 'processed') is what prevents a
+      // crashed worker from stranding the event in 'processing' forever.
+      const { data, error } = await supabase
+        .rpc("claim_stripe_webhook_event", {
+          p_stripe_event_id: stripeEventId,
+          p_event_type: eventType,
+          p_payload: payload,
+        })
+        .single();
+      if (error) {
+        throw new Error(`[booking] claim_stripe_webhook_event failed: ${error.message}`);
       }
-
-      let eventRowId: string;
-      let processingStatus: string;
-      if (inserted) {
-        eventRowId = inserted.id;
-        processingStatus = inserted.processing_status;
-      } else {
-        const { data: existing, error: fetchError } = await supabase
-          .from("stripe_webhook_events")
-          .select("id,processing_status")
-          .eq("stripe_event_id", stripeEventId)
-          .single();
-        if (fetchError || !existing) {
-          throw new Error(`[booking] stripe_webhook_events fetch-after-conflict failed: ${fetchError?.message ?? "no row found"}`);
-        }
-        eventRowId = existing.id;
-        processingStatus = existing.processing_status;
-      }
-
-      // 'processed' is the only true, safe no-op. 'received' or 'failed'
-      // (including a row this exact call just created) must be
-      // (re)processed — see the migration comments on why existence alone
-      // is never sufficient.
-      if (processingStatus === "processed") {
-        return { shouldProcess: false, eventRowId };
-      }
-
-      const { error: markProcessingError } = await supabase
-        .from("stripe_webhook_events")
-        .update({ processing_status: "processing" })
-        .eq("id", eventRowId);
-      if (markProcessingError) {
-        throw new Error(`[booking] stripe_webhook_events mark-processing failed: ${markProcessingError.message}`);
-      }
-
-      return { shouldProcess: true, eventRowId };
+      const row = data as { event_row_id: string; should_process: boolean; claim_token: string };
+      return { shouldProcess: row.should_process, eventRowId: row.event_row_id, claimToken: row.claim_token };
     },
 
-    async markWebhookEventProcessed(eventRowId: string): Promise<void> {
+    async markWebhookEventProcessed(eventRowId: string, claimToken: string): Promise<void> {
       const { error } = await supabase
         .from("stripe_webhook_events")
         .update({ processing_status: "processed", processed_at: new Date().toISOString() })
-        .eq("id", eventRowId);
+        .eq("id", eventRowId)
+        .eq("processing_claimed_at", claimToken);
       if (error) {
         throw new Error(`[booking] stripe_webhook_events mark-processed failed: ${error.message}`);
       }
     },
 
-    async markWebhookEventFailed(eventRowId: string, reason: string): Promise<void> {
+    async markWebhookEventFailed(eventRowId: string, reason: string, claimToken: string): Promise<void> {
       const { error } = await supabase
         .from("stripe_webhook_events")
         .update({ processing_status: "failed", failure_reason: reason })
-        .eq("id", eventRowId);
+        .eq("id", eventRowId)
+        .eq("processing_claimed_at", claimToken);
       if (error) {
         throw new Error(`[booking] stripe_webhook_events mark-failed failed: ${error.message}`);
       }
+    },
+
+    async listStuckWebhookEvents(now: Date, leaseSeconds: number, limit: number) {
+      const leaseThreshold = new Date(now.getTime() - leaseSeconds * 1000).toISOString();
+      const { data, error } = await supabase
+        .from("stripe_webhook_events")
+        .select("stripe_event_id,event_type,payload")
+        .or(`processing_status.eq.failed,and(processing_status.eq.processing,processing_claimed_at.lt.${leaseThreshold})`)
+        .order("received_at", { ascending: true })
+        .limit(limit);
+      if (error) {
+        throw new Error(`[booking] stripe_webhook_events stuck-lookup failed: ${error.message}`);
+      }
+      return (data ?? []).map((row) => ({ stripeEventId: row.stripe_event_id as string, eventType: row.event_type as string, payload: row.payload }));
     },
   };
 }

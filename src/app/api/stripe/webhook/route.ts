@@ -1,7 +1,6 @@
 import { getStripeClient } from "@/lib/booking/stripe/client";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
-import { claimWebhookEvent } from "@/lib/booking/webhook/claim-webhook-event";
-import { processStripeWebhookEvent } from "@/lib/booking/webhook/process-stripe-webhook-event";
+import { claimAndProcessStripeWebhookEvent } from "@/lib/booking/webhook/claim-and-process-stripe-webhook-event";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
@@ -12,12 +11,17 @@ export const runtime = "nodejs";
 /**
  * Stripe webhook endpoint. Verifies the signature against the raw request
  * body (Next.js Route Handlers need no special body-parser configuration
- * for this — see request.text() below), then claims the event through the
- * received/processing/processed/failed state machine before running any
- * fulfillment. Returns a 5xx on genuine processing failure so Stripe's own
- * retry schedule redelivers the event — the ledger row stays 'failed'
- * (not 'processed'), so the retry actually reprocesses rather than being
- * skipped. See src/lib/booking/webhook/ for the fulfillment logic itself.
+ * for this — see request.text() below), then delegates the claim/process/
+ * mark sequence to claimAndProcessStripeWebhookEvent (shared with the
+ * stuck-event retry sweep — see src/app/api/cron/retry-stuck-webhook-events).
+ * Returns a 5xx on genuine processing failure so Stripe's own retry
+ * schedule redelivers the event — the ledger row stays 'failed' (not
+ * 'processed'), so the retry actually reprocesses rather than being
+ * skipped. A "skipped" outcome (already processed, OR another delivery
+ * currently holds an unexpired processing lease) still returns 200 — the
+ * retry sweep is what guarantees a lease that's never released eventually
+ * gets revisited, not a 5xx here. See src/lib/booking/webhook/ for the
+ * fulfillment logic itself.
  */
 export async function POST(request: Request): Promise<Response> {
   const signature = request.headers.get("stripe-signature");
@@ -42,21 +46,10 @@ export async function POST(request: Request): Promise<Response> {
   const schedulingRepo = createSupabaseSchedulingRepository();
   const consentRepo = createSupabaseConsentRepository();
   const paymentGateway = createStripeVisitPaymentGateway();
-  const claim = await claimWebhookEvent(repo, event.id, event.type, event as unknown as Record<string, unknown>);
 
-  if (!claim.shouldProcess) {
-    // A prior delivery of this exact event id already reached
-    // 'processed' — safe, permanent no-op.
-    return new Response("ok", { status: 200 });
-  }
-
-  try {
-    await processStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway);
-    await repo.markWebhookEventProcessed(claim.eventRowId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown processing error";
-    await repo.markWebhookEventFailed(claim.eventRowId, message);
-    return new Response(`Webhook processing failed: ${message}`, { status: 500 });
+  const result = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway);
+  if (result.outcome === "failed") {
+    return new Response(`Webhook processing failed: ${result.error}`, { status: 500 });
   }
 
   return new Response("ok", { status: 200 });

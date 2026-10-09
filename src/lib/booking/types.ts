@@ -258,7 +258,9 @@ export interface NewPrepaidPackageRow {
 }
 
 export interface WebhookClaim {
-  /** false when a 'processed' row already exists for this event id — a true, safe no-op; caller must not reprocess. */
+  /** false when a 'processed' row already exists for this event id, OR another delivery currently holds an unexpired processing lease — either way a safe no-op; caller must not reprocess. */
   shouldProcess: boolean;
   eventRowId: string;
+  /** Must be presented back to markWebhookEventProcessed/Failed — a conditional-update token so a stale worker that outlives its lease (superseded by a later reclaim) can never clobber someone else's outcome. */
+  claimToken: string;
 }

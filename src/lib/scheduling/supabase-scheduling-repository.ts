@@ -1662,6 +1662,61 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return toReceiptRow(data);
     },
 
+    async issueVisitPaymentDocumentsIdempotent(input) {
+      const { invoice, receipt } = input;
+      const { data, error } = await supabase
+        .rpc("issue_visit_payment_documents", {
+          p_service_visit_payment_id: input.serviceVisitPaymentId,
+          p_source_type: invoice.sourceType,
+          p_service_visit_id: invoice.serviceVisitId,
+          p_prepaid_package_id: invoice.prepaidPackageId,
+          p_service_visit_pricing_id: invoice.serviceVisitPricingId,
+          p_service_fee_assessment_id: invoice.serviceFeeAssessmentId,
+          p_customer_id: invoice.customerId,
+          p_customer_display_name: invoice.customerDisplayName,
+          p_description: invoice.description,
+          p_service_address_line1: invoice.serviceAddressLine1,
+          p_service_address_line2: invoice.serviceAddressLine2,
+          p_service_city: invoice.serviceCity,
+          p_service_state: invoice.serviceState,
+          p_service_zip: invoice.serviceZip,
+          p_service_date: invoice.serviceDate,
+          p_cleaning_type: invoice.cleaningType,
+          p_currency: invoice.currency,
+          p_base_amount: invoice.baseAmount,
+          p_room_adjustments_amount: invoice.roomAdjustmentsAmount,
+          p_add_ons_amount: invoice.addOnsAmount,
+          p_add_ons_detail: invoice.addOnsDetail,
+          p_travel_amount: invoice.travelAmount,
+          p_supplies_amount: invoice.suppliesAmount,
+          p_custom_charges_amount: invoice.customChargesAmount,
+          p_custom_charges_detail: invoice.customChargesDetail,
+          p_discount_amount: invoice.discountAmount,
+          p_discount_description: invoice.discountDescription,
+          p_discount_detail: invoice.discountDetail,
+          p_cancellation_fee_amount: invoice.cancellationFeeAmount,
+          p_tax_amount: invoice.taxAmount,
+          p_subtotal_amount: invoice.subtotalAmount,
+          p_total_amount: invoice.totalAmount,
+          p_pricing_snapshot: invoice.pricingSnapshot,
+          p_payment_timestamp: receipt.paymentTimestamp.toISOString(),
+          p_amount_paid: receipt.amountPaid,
+          p_tax_paid: receipt.taxPaid,
+          p_tip_paid: receipt.tipPaid,
+          p_payment_method_display: receipt.paymentMethodDisplay,
+          p_stripe_payment_intent_id: receipt.stripePaymentIntentId,
+          p_stripe_charge_id: receipt.stripeChargeId,
+        })
+        .single();
+      if (error) throw new Error(`[scheduling] issue_visit_payment_documents failed: ${error.message}`);
+      const row = data as { invoice_json: Record<string, unknown>; receipt_json: Record<string, unknown>; was_already_issued: boolean };
+      return {
+        invoice: toInvoiceRow(row.invoice_json),
+        receipt: toReceiptRow(row.receipt_json),
+        alreadyIssued: row.was_already_issued,
+      };
+    },
+
     async findInvoiceById(id) {
       const { data, error } = await supabase.from("invoices").select("*").eq("id", id).maybeSingle();
       if (error) throw new Error(`[scheduling] findInvoiceById failed: ${error.message}`);

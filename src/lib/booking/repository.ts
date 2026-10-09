@@ -79,8 +79,19 @@ export interface BookingRepository extends CompletedServiceHistoryRepository {
   /** `insert ... on conflict (booking_order_id) do nothing` — inserted:false means a package already exists for this booking order (domain-level idempotency, independent of the webhook ledger). */
   activatePrepaidPackage(row: NewPrepaidPackageRow): Promise<{ inserted: boolean }>;
 
-  /** Claim-or-resume a webhook event per the received/processing/processed/failed state machine — see stripe_webhook_events migration comments. */
+  /** Claim-or-resume a webhook event per the received/processing/processed/failed state machine — see stripe_webhook_events migration comments and claim_stripe_webhook_event(). */
   claimWebhookEvent(stripeEventId: string, eventType: string, payload: unknown): Promise<WebhookClaim>;
-  markWebhookEventProcessed(eventRowId: string): Promise<void>;
-  markWebhookEventFailed(eventRowId: string, reason: string): Promise<void>;
+  /** claimToken must be the exact value returned by the claimWebhookEvent call this resolves — a conditional update, so a worker superseded by a later lease reclaim can never clobber the reclaimer's outcome. */
+  markWebhookEventProcessed(eventRowId: string, claimToken: string): Promise<void>;
+  markWebhookEventFailed(eventRowId: string, reason: string, claimToken: string): Promise<void>;
+  /**
+   * Events needing a recovery attempt right now: 'failed' (a prior
+   * processing attempt threw), or 'processing' with an expired lease (a
+   * worker crashed/was killed without ever reaching processed/failed).
+   * Lease expiry alone doesn't schedule anything — see
+   * retryStuckWebhookEvents, the cron-driven caller that actually revisits
+   * these using the row's own stored payload, independent of whether
+   * Stripe ever redelivers. Oldest-received-first, bounded by limit.
+   */
+  listStuckWebhookEvents(now: Date, leaseSeconds: number, limit: number): Promise<{ stripeEventId: string; eventType: string; payload: unknown }[]>;
 }

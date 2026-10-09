@@ -151,6 +151,27 @@ export interface SchedulingRepository {
   issueInvoice(input: NewInvoiceInput): Promise<InvoiceRow>;
   /** Allocates the next CP-RCT-YYYY-###### number and inserts the row atomically via issue_receipt(). Sole caller: src/lib/invoicing/issue-receipt.ts. */
   issueReceipt(input: NewReceiptInput): Promise<ReceiptRow>;
+  /**
+   * Idempotent, concurrency-safe combined issuance for the visit-payment
+   * settlement rail (stripe_card and zelle/cash both funnel through this —
+   * see src/lib/invoicing/issue-documents-for-visit-payment.ts, the sole
+   * caller). Serializes on serviceVisitPaymentId via
+   * issue_visit_payment_documents()'s transaction-scoped advisory lock, so
+   * two concurrent or duplicate calls for the same settlement (two racing
+   * webhook deliveries, or two distinct Stripe events both resolving to the
+   * same payment) never produce a second invoice/receipt pair —
+   * alreadyIssued:true means the returned pair is the one from a prior
+   * call, not newly created. Deliberately keyed on serviceVisitPaymentId
+   * only, never serviceVisitId (a visit can legitimately carry more than
+   * one invoice over its lifetime — e.g. a separate cancellation-fee
+   * invoice, or a voided-then-reissued correction — so uniqueness can't
+   * live there).
+   */
+  issueVisitPaymentDocumentsIdempotent(input: {
+    serviceVisitPaymentId: string;
+    invoice: NewInvoiceInput;
+    receipt: Omit<NewReceiptInput, "invoiceId">;
+  }): Promise<{ invoice: InvoiceRow; receipt: ReceiptRow; alreadyIssued: boolean }>;
   findInvoiceById(id: string): Promise<InvoiceRow | null>;
   findReceiptById(id: string): Promise<ReceiptRow | null>;
   /** Newest first (issueDate desc) — the customer's own billing history. */
