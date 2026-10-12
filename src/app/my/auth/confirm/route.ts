@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { sanitizeNextPath } from "@/lib/customer-portal/next-path";
 import { resolveCustomerAuthConfirmRedirectPath } from "@/lib/customer-portal/resolve-customer-auth-confirm-redirect";
+import { sanitizeAuthConfirmErrorCode, sanitizeAuthConfirmErrorStatus } from "@/lib/customer-portal/sanitize-auth-confirm-error";
 import { getSupabasePublicConfig } from "@/lib/supabase/env";
 
 /**
@@ -47,7 +48,13 @@ export async function GET(request: NextRequest) {
   const next = sanitizeNextPath(searchParams.get("next"));
 
   if (!tokenHash || !type || !SUPPORTED_VERIFY_TYPES.has(type)) {
-    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "missing_token" })}`));
+    // Fixed, non-interpolated message — a malformed/incomplete link is a
+    // distinct, lower-signal event from a genuine verifyOtp rejection below,
+    // and carries no server-reviewed error object worth extracting a code
+    // from. next itself is never logged here (it's customer-controlled,
+    // sanitized-for-redirect but not reviewed for logging).
+    console.warn("[customer-auth] /my/auth/confirm: missing or unsupported token_hash/type");
+    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next })}`));
   }
 
   const response = withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "success", next })}`));
@@ -69,7 +76,17 @@ export async function GET(request: NextRequest) {
 
   const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as EmailOtpType });
   if (error) {
-    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed" })}`));
+    // Sanitized signal only — error.code is Supabase Auth's own closed,
+    // documented enum (see sanitize-auth-confirm-error.ts); error.message
+    // (free text) and the token_hash/request URL are never logged. This is
+    // what lets a FUTURE occurrence actually be diagnosed — whether it's
+    // a routine expired/already-used link (otp_expired) or something else
+    // (e.g. a clock-skew-driven rejection, still only a hypothesis until a
+    // real code/status is captured here) is not asserted by this log line.
+    console.warn(
+      `[customer-auth] /my/auth/confirm: verifyOtp rejected (code=${sanitizeAuthConfirmErrorCode(error)} status=${sanitizeAuthConfirmErrorStatus(error)})`
+    );
+    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next })}`));
   }
 
   return response;
