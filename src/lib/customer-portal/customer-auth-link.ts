@@ -44,11 +44,19 @@ export interface CustomerAuthLinkGenerator {
    * /my/... path — sanitized the same way every other portal deep link is,
    * see sanitizeNextPath) once /my/auth/confirm verifies it server-side and
    * establishes the session. Handles first-time (no Supabase user yet) and
-   * returning customers identically — Supabase's own `magiclink` type
-   * creates the user when needed, with no separate signup/confirmation
-   * step. Never throws: a failure is returned so callers can always
-   * gracefully fall back to a plain (login-required) portal link rather
-   * than losing the notification entirely.
+   * returning customers with no separate signup/confirmation step on THIS
+   * side — Supabase's own `magiclink` request creates the user when needed
+   * — but NOT identically end-to-end: GoTrue's response
+   * `verification_type` for a first-time email comes back "signup", not
+   * "magiclink" (see GenerateLinkType in @supabase/auth-js). This function
+   * embeds whatever value Supabase actually returns (never hardcodes
+   * "magiclink" below), so /my/auth/confirm's own type allowlist must stay
+   * in sync with every value this can legitimately produce — see that
+   * route's SUPPORTED_VERIFY_TYPES comment, which drifted out of sync with
+   * this until a first-time-customer incident surfaced it. Never throws: a
+   * failure is returned so callers can always gracefully fall back to a
+   * plain (login-required) portal link rather than losing the notification
+   * entirely.
    */
   generate(email: string, path: string): Promise<CustomerAuthLinkOutcome>;
 }

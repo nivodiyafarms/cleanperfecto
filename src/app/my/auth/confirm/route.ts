@@ -20,12 +20,34 @@ import { getSupabasePublicConfig } from "@/lib/supabase/env";
  * server-side (resolved from the verified Supabase user only, inside
  * /my/activate).
  *
- * type is restricted to the two values CleanPerfecto's own link generator
- * (customer-auth-link.ts) ever requests — never passed through unchecked to
- * verifyOtp, even though a malformed/forged `type` would otherwise just
- * fail verification harmlessly.
+ * type is restricted to the values CleanPerfecto's own link generator
+ * (customer-auth-link.ts) can legitimately produce — never passed through
+ * unchecked to verifyOtp, even though a malformed/forged `type` would
+ * otherwise just fail verification harmlessly.
+ *
+ * "signup" is included alongside "magiclink"/"email" because Supabase's
+ * admin.generateLink({type:"magiclink"}) does NOT always return
+ * verification_type: "magiclink" — per @supabase/auth-js's own
+ * GenerateLinkType union, whenever the target email has no existing
+ * auth.users row yet, GoTrue creates the user as a side effect and
+ * classifies the link as "signup" instead. customer-auth-link.ts's
+ * generate() always embeds whatever verification_type Supabase actually
+ * returned (see its own code — it never hardcodes "magiclink"), so every
+ * FIRST-TIME customer's one-click link legitimately carries type=signup.
+ * Omitting it here rejected every first-ever login through this link with
+ * "unsupported type" before verifyOtp was ever called — confirmed via a
+ * real incident (service_visit 0a4ef785-4704-4eee-9643-c69c0f773c45):
+ * auth.users.created_at for that customer exactly matched the
+ * generateLink timestamp, and confirmed_at/last_sign_in_at stayed null.
+ * "signup" is itself a documented EmailOtpType verifyOtp accepts natively
+ * — this was never a token/verification problem, only an incomplete
+ * allowlist. "invite"/"recovery"/"email_change_*" remain excluded: our
+ * generator's request type is always "magiclink", and Supabase only ever
+ * returns "invite" as verification_type for an actual invite-link request,
+ * never for ours — those other types belong to different Auth flows this
+ * customer-portal-only route has no business accepting.
  */
-const SUPPORTED_VERIFY_TYPES: ReadonlySet<string> = new Set(["magiclink", "email"]);
+const SUPPORTED_VERIFY_TYPES: ReadonlySet<string> = new Set(["magiclink", "email", "signup"]);
 
 /**
  * Every response from this route either just established an authenticated
@@ -47,13 +69,29 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get("type");
   const next = sanitizeNextPath(searchParams.get("next"));
 
-  if (!tokenHash || !type || !SUPPORTED_VERIFY_TYPES.has(type)) {
-    // Fixed, non-interpolated message — a malformed/incomplete link is a
-    // distinct, lower-signal event from a genuine verifyOtp rejection below,
-    // and carries no server-reviewed error object worth extracting a code
-    // from. next itself is never logged here (it's customer-controlled,
-    // sanitized-for-redirect but not reviewed for logging).
-    console.warn("[customer-auth] /my/auth/confirm: missing or unsupported token_hash/type");
+  // Three distinct, separately-logged conditions — deliberately not
+  // collapsed into one OR check. "no token at all" and "a token with a
+  // type our allowlist doesn't recognize" are different failure classes
+  // with different likely causes (a genuinely incomplete link vs. a type
+  // this route hasn't been taught to accept yet, see the "signup" case
+  // above) — distinguishing them in the log is what made the "signup" gap
+  // diagnosable in the first place. next itself is never logged (it's
+  // customer-controlled and not reviewed for logging); the query string as
+  // a whole is never logged either.
+  if (!tokenHash) {
+    console.warn("[customer-auth] /my/auth/confirm: missing token_hash");
+    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next })}`));
+  }
+  if (!type) {
+    console.warn("[customer-auth] /my/auth/confirm: missing type");
+    return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next })}`));
+  }
+  if (!SUPPORTED_VERIFY_TYPES.has(type)) {
+    // Fixed, non-interpolated label — the actual type value is never
+    // logged, even sanitized. It arrives as a customer-controlled query
+    // param, and a fixed "unsupported" signal is enough to distinguish this
+    // branch from the other two without taking on any echo-the-input risk.
+    console.warn("[customer-auth] /my/auth/confirm: unsupported type");
     return withAuthHeaders(NextResponse.redirect(`${origin}${resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next })}`));
   }
 

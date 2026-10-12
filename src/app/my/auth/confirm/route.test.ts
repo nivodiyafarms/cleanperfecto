@@ -1,9 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const verifyOtpMock = vi.fn();
 const createServerClientMock = vi.fn();
 let capturedSetAll: ((cookies: { name: string; value: string; options: Record<string, unknown> }[]) => void) | null = null;
+
+// Call history must not leak across tests — several tests below assert
+// verifyOtpMock/console.warn were (or weren't) called a specific number of
+// times, which is only meaningful per-test, not cumulative across the file.
+beforeEach(() => {
+  verifyOtpMock.mockClear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: (...args: unknown[]) => {
@@ -100,16 +111,65 @@ describe("GET /my/auth/confirm", () => {
     warnSpy.mockRestore();
   });
 
-  it("logs a fixed, non-interpolated message for a missing/unsupported token_hash — never echoes the raw query string", async () => {
+  it("logs a fixed, non-interpolated message for a missing token_hash — distinct from the missing-type and unsupported-type cases below, never echoes the raw query string", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await GET(new NextRequest(confirmUrl({ type: "magiclink", next: "/my/payments?visit=visit-123" })));
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const loggedText = warnSpy.mock.calls[0].join(" ");
-    expect(loggedText).toContain("missing or unsupported token_hash/type");
+    expect(loggedText).toContain("missing token_hash");
     expect(loggedText).not.toContain("visit-123");
     warnSpy.mockRestore();
+  });
+
+  it("logs a fixed, non-interpolated message for a missing type — distinct from a missing token_hash", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const response = await GET(new NextRequest(confirmUrl({ token_hash: "abc123", next: "/my/payments?visit=visit-123" })));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const loggedText = warnSpy.mock.calls[0].join(" ");
+    expect(loggedText).toContain("missing type");
+    expect(loggedText).not.toContain("missing token_hash");
+    expect(verifyOtpMock).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("logs only a fixed 'unsupported type' label — never the actual type value, even sanitized — for an unsupported-but-real type", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await GET(new NextRequest(confirmUrl({ token_hash: "abc123", type: "recovery", next: "/my/payments?visit=visit-123" })));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const loggedText = warnSpy.mock.calls[0].join(" ");
+    expect(loggedText).toContain("unsupported type");
+    expect(loggedText).not.toContain("recovery");
+    expect(loggedText).not.toContain("visit-123");
+    expect(verifyOtpMock).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("logs the same fixed 'unsupported type' label for a malicious/malformed type value — never echoes it verbatim", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await GET(new NextRequest(confirmUrl({ token_hash: "abc123", type: "<script>alert(1)</script>", next: "/my/payments?visit=visit-123" })));
+
+    const loggedText = warnSpy.mock.calls[0].join(" ");
+    expect(loggedText).toContain("unsupported type");
+    expect(loggedText).not.toContain("<script>");
+    warnSpy.mockRestore();
+  });
+
+  it("accepts type=signup — the real-world gap found via service_visit 0a4ef785-4704-4eee-9643-c69c0f773c45: a first-time customer's generateLink({type:'magiclink'}) call legitimately returns verification_type 'signup', and this route must call verifyOtp with it rather than rejecting it as unsupported", async () => {
+    verifyOtpMock.mockResolvedValueOnce({ data: {}, error: null });
+
+    const response = await GET(new NextRequest(confirmUrl({ token_hash: "hashed-token-abc", type: "signup", next: "/my/payments?visit=visit-123" })));
+
+    expect(verifyOtpMock).toHaveBeenCalledWith({ token_hash: "hashed-token-abc", type: "signup" });
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/activate?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
   });
 
   it("falls back to a safe 'unknown_error_code' label when verifyOtp's error carries no recognizable code — the failure is still logged, just without a fabricated reason", async () => {
