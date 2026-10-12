@@ -31,20 +31,26 @@ function confirmUrl(params: Record<string, string>): string {
 }
 
 describe("GET /my/auth/confirm", () => {
-  it("redirects to /my/login when token_hash is missing — never calls verifyOtp", async () => {
+  it("redirects to /my/login WITH the intended next destination preserved when token_hash is missing — never calls verifyOtp, never strands the customer on a context-free sign-in page", async () => {
     const response = await GET(new NextRequest(confirmUrl({ type: "magiclink", next: "/my/payments?visit=visit-123" })));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login");
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
     expect(verifyOtpMock).not.toHaveBeenCalled();
   });
 
-  it("redirects to /my/login when type is missing/unsupported — never calls verifyOtp with an unchecked type", async () => {
+  it("redirects to /my/login WITH the intended next destination preserved when type is missing/unsupported — never calls verifyOtp with an unchecked type", async () => {
     const response = await GET(new NextRequest(confirmUrl({ token_hash: "abc123", type: "recovery", next: "/my/payments?visit=visit-123" })));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login");
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
     expect(verifyOtpMock).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a malicious external next down to /my on the missing-token path too — the failure redirect is just as much an open-redirect surface as the success one", async () => {
+    const response = await GET(new NextRequest(confirmUrl({ type: "magiclink", next: "https://evil.example.com/phish" })));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy");
   });
 
   it("calls verifyOtp with the exact token_hash/type from the URL, and redirects to /my/activate with the exact requested next on success", async () => {
@@ -57,13 +63,66 @@ describe("GET /my/auth/confirm", () => {
     expect(response.headers.get("location")).toBe("http://localhost:3000/my/activate?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
   });
 
-  it("redirects to /my/login when verifyOtp fails (expired/already-used token) — never leaves a broken/half-authenticated state", async () => {
-    verifyOtpMock.mockResolvedValueOnce({ data: null, error: { message: "Token has expired or is invalid" } });
+  it("redirects to /my/login WITH the intended next destination preserved when verifyOtp fails (expired/already-used token) — never leaves a broken/half-authenticated state, and never strands the customer short of their Final Total", async () => {
+    verifyOtpMock.mockResolvedValueOnce({ data: null, error: { message: "Token has expired or is invalid", code: "otp_expired", status: 403 } });
 
     const response = await GET(new NextRequest(confirmUrl({ token_hash: "stale-token", type: "magiclink", next: "/my/payments?visit=visit-123" })));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login");
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy%2Fpayments%3Fvisit%3Dvisit-123");
+  });
+
+  it("sanitizes a malicious external next down to /my when verifyOtp fails too", async () => {
+    verifyOtpMock.mockResolvedValueOnce({ data: null, error: { message: "Token has expired or is invalid", code: "otp_expired", status: 403 } });
+
+    const response = await GET(new NextRequest(confirmUrl({ token_hash: "stale-token", type: "magiclink", next: "https://evil.example.com/phish" })));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/my/login?next=%2Fmy");
+  });
+
+  it("logs only a sanitized code/status on a verifyOtp failure — never the raw error.message, the token_hash, or the request URL", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    verifyOtpMock.mockResolvedValueOnce({
+      data: null,
+      error: { message: "Token has expired or is invalid for token_hash=super-secret-token-value", code: "otp_expired", status: 403 },
+    });
+
+    await GET(new NextRequest(confirmUrl({ token_hash: "super-secret-token-value", type: "magiclink", next: "/my/payments?visit=visit-123" })));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const loggedArgs = warnSpy.mock.calls[0];
+    const loggedText = loggedArgs.join(" ");
+    expect(loggedText).toContain("otp_expired");
+    expect(loggedText).toContain("403");
+    expect(loggedText).not.toContain("super-secret-token-value");
+    expect(loggedText).not.toContain("Token has expired or is invalid");
+    expect(loggedText).not.toContain("http://localhost:3000/my/auth/confirm");
+    warnSpy.mockRestore();
+  });
+
+  it("logs a fixed, non-interpolated message for a missing/unsupported token_hash — never echoes the raw query string", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await GET(new NextRequest(confirmUrl({ type: "magiclink", next: "/my/payments?visit=visit-123" })));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const loggedText = warnSpy.mock.calls[0].join(" ");
+    expect(loggedText).toContain("missing or unsupported token_hash/type");
+    expect(loggedText).not.toContain("visit-123");
+    warnSpy.mockRestore();
+  });
+
+  it("falls back to a safe 'unknown_error_code' label when verifyOtp's error carries no recognizable code — the failure is still logged, just without a fabricated reason", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    verifyOtpMock.mockResolvedValueOnce({ data: null, error: { message: "some unexpected shape" } });
+
+    await GET(new NextRequest(confirmUrl({ token_hash: "stale-token", type: "magiclink", next: "/my/payments?visit=visit-123" })));
+
+    const loggedText = warnSpy.mock.calls[0].join(" ");
+    expect(loggedText).toContain("unknown_error_code");
+    expect(loggedText).toContain("unknown"); // status
+    expect(loggedText).not.toContain("some unexpected shape");
+    warnSpy.mockRestore();
   });
 
   it("sanitizes a malicious external next URL down to /my before redirecting — never an open redirect", async () => {
