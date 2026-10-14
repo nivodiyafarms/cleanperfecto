@@ -779,11 +779,18 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     },
 
     async markServiceVisitNotificationSent(id, providerMessageId) {
+      // Reachable from two legitimate prior states: 'sending' (the cron's
+      // own claim → send → mark-sent flow) and 'pending' (requestFreshPaymentLink's
+      // direct, synchronous send — it inserts, sends, and resolves the row
+      // itself within one call, never going through claimDueServiceVisitNotifications
+      // at all, so the row is still 'pending' at this point, by design, not
+      // by accident). Guarding on EITHER keeps this update inert for any
+      // other row state (already 'sent'/'failed') — idempotent either way.
       const { error } = await supabase
         .from("service_visit_notifications")
         .update({ state: "sent", sent_at: new Date().toISOString(), provider_message_id: providerMessageId, claimed_at: null })
         .eq("id", id)
-        .eq("state", "sending");
+        .in("state", ["sending", "pending"]);
       if (error) throw new Error(`[scheduling] marking service_visit_notification sent failed: ${error.message}`);
     },
 
@@ -815,11 +822,16 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .eq("id", id)
         .single();
       if (fetchError || !current) throw new Error(`[scheduling] service_visit_notifications lookup before terminal failure failed: ${fetchError?.message}`);
+      // See markServiceVisitNotificationSent's own comment — 'pending' is the
+      // legitimate prior state for requestFreshPaymentLink's direct,
+      // synchronous send path (it never claims via
+      // claimDueServiceVisitNotifications, so the row never reaches
+      // 'sending' at all), alongside the cron's own 'sending' flow.
       const { error } = await supabase
         .from("service_visit_notifications")
         .update({ state: "failed", retry_count: (current.retry_count as number) + 1, failure_reason: failureReason, claimed_at: null })
         .eq("id", id)
-        .eq("state", "sending");
+        .in("state", ["sending", "pending"]);
       if (error) throw new Error(`[scheduling] marking service_visit_notification failed (terminal) failed: ${error.message}`);
     },
 

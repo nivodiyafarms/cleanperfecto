@@ -49,7 +49,12 @@ async function seedCompletedConfirmedVisit(fakeScheduling: ReturnType<typeof cre
 
 const CONTACT: NotificationRecipientContact = { name: "Jordan", email: "jordan@example.com", phone: null };
 
-function buildDeps(fakeScheduling: ReturnType<typeof createFakeSchedulingRepository>, overrides?: Partial<{ contact: NotificationRecipientContact | null }>) {
+const NO_WAIT = async () => {};
+
+function buildDeps(
+  fakeScheduling: ReturnType<typeof createFakeSchedulingRepository>,
+  overrides?: Partial<{ contact: NotificationRecipientContact | null; now: () => Date }>
+) {
   const email = createFakeEmailSender();
   const authLink = createFakeCustomerAuthLinkGenerator();
   return {
@@ -57,6 +62,8 @@ function buildDeps(fakeScheduling: ReturnType<typeof createFakeSchedulingReposit
     contactLookup: async () => overrides?.contact ?? CONTACT,
     authLinkGenerator: authLink.generator,
     emailSender: email.sender,
+    now: overrides?.now,
+    sleep: NO_WAIT,
     emailState: email.state,
     authLinkState: authLink.state,
   };
@@ -76,15 +83,87 @@ describe("requestFreshPaymentLink", () => {
     expect(deps.emailState.sentEmails[0].to).toBe("jordan@example.com");
   });
 
-  it("is NOT routed through the notification ledger — two resend requests in a row both send, never deduped by (visit, amount)", async () => {
+  it("is not deduped by (visit, amount) the way the old enqueue-the-cron path was — a genuinely later, well-spaced resend still sends", async () => {
     const fakeScheduling = createFakeSchedulingRepository();
     const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
+    let clock = Date.parse("2026-10-14T00:00:00Z");
+    const deps = buildDeps(fakeScheduling, { now: () => new Date(clock) });
+
+    await requestFreshPaymentLink(deps, visitId);
+    clock += 60_000; // past the 30s duplicate-cooldown, nowhere near the 1h rate limit
+    const second = await requestFreshPaymentLink(deps, visitId);
+
+    expect(second).toEqual({ ok: true });
+    expect(deps.emailState.sentEmails).toHaveLength(2);
+  });
+
+  it("duplicate protection: a second request within the cooldown window is rejected, and never sends a second email", async () => {
+    const fakeScheduling = createFakeSchedulingRepository();
+    const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
+    const fixedNow = () => new Date("2026-10-14T00:00:00Z");
+    const deps = buildDeps(fakeScheduling, { now: fixedNow });
+
+    const first = await requestFreshPaymentLink(deps, visitId);
+    const second = await requestFreshPaymentLink(deps, visitId);
+
+    expect(first).toEqual({ ok: true });
+    expect(second).toEqual({ ok: false, reason: "duplicate_request" });
+    expect(deps.emailState.sentEmails).toHaveLength(1);
+  });
+
+  it("rate limiting: more than 3 resend attempts within an hour are blocked, even when each is individually past the duplicate-cooldown", async () => {
+    const fakeScheduling = createFakeSchedulingRepository();
+    const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
+    let clock = Date.parse("2026-10-14T00:00:00Z");
+    const deps = buildDeps(fakeScheduling, { now: () => new Date(clock) });
+
+    const results: boolean[] = [];
+    for (let i = 0; i < 4; i++) {
+      const result = await requestFreshPaymentLink(deps, visitId);
+      results.push(result.ok);
+      clock += 60_000;
+    }
+
+    expect(results).toEqual([true, true, true, false]);
+    expect(deps.emailState.sentEmails).toHaveLength(3);
+  });
+
+  it("rate limiting does not count the original automated Finalize & Send toward the limit — only this function's own prior attempts", async () => {
+    const fakeScheduling = createFakeSchedulingRepository();
+    const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
+    // Simulate the original automated send's ledger row — a DIFFERENT
+    // idempotency key shape (no ":resend:" marker), exactly what
+    // finalize-and-send.ts's enqueueNotification produces.
+    await fakeScheduling.repo.insertServiceVisitNotification({
+      serviceVisitId: visitId,
+      customerId: "customer-1",
+      notificationType: "final_total_ready",
+      channel: "email",
+      scheduledSendAt: new Date("2026-10-14T00:00:00Z"),
+      idempotencyKey: "customer-1:" + visitId + ":final_total_ready:email:179.00",
+    });
+    const deps = buildDeps(fakeScheduling, { now: () => new Date("2026-10-14T00:05:00Z") });
+
+    const result = await requestFreshPaymentLink(deps, visitId);
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("retry handling: a transient failure followed by success still reports ok — the ledger row ends up marked sent, not failed", async () => {
+    const fakeScheduling = createFakeSchedulingRepository();
+    const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
+    const flakyEmail = createFakeEmailSender({
+      behavior: (_input, callNumber) => (callNumber < 2 ? { sent: false, failureReason: "transient" } : undefined),
+    });
     const deps = buildDeps(fakeScheduling);
 
-    await requestFreshPaymentLink(deps, visitId);
-    await requestFreshPaymentLink(deps, visitId);
+    const result = await requestFreshPaymentLink({ ...deps, emailSender: flakyEmail.sender }, visitId);
 
-    expect(deps.emailState.sentEmails).toHaveLength(2);
+    expect(result).toEqual({ ok: true });
+    expect(flakyEmail.state.sentEmails).toHaveLength(2);
+    const notifications = await fakeScheduling.repo.listServiceVisitNotifications(visitId);
+    const resendRow = notifications.find((n) => n.idempotencyKey.includes(":resend:"));
+    expect(resendRow?.state).toBe("sent");
   });
 
   it("returns visit_not_found for a nonexistent visit, without ever calling the contact lookup or sending anything", async () => {
@@ -161,7 +240,7 @@ describe("requestFreshPaymentLink", () => {
     expect(fakeEmail.state.sentEmails).toHaveLength(0);
   });
 
-  it("returns send_failed when the email provider fails, after a real link was generated", async () => {
+  it("returns send_failed after exhausting retries, and marks the ledger row failed with the real reason — never left 'pending' for a cron that will never come", async () => {
     const fakeScheduling = createFakeSchedulingRepository();
     const visitId = await seedCompletedConfirmedVisit(fakeScheduling);
     const deps = buildDeps(fakeScheduling);
@@ -170,5 +249,11 @@ describe("requestFreshPaymentLink", () => {
     const result = await requestFreshPaymentLink({ ...deps, emailSender: failingEmail.sender }, visitId);
 
     expect(result).toEqual({ ok: false, reason: "send_failed" });
+    // One initial attempt plus two retries — never retried forever.
+    expect(failingEmail.state.sentEmails).toHaveLength(3);
+    const notifications = await fakeScheduling.repo.listServiceVisitNotifications(visitId);
+    const resendRow = notifications.find((n) => n.idempotencyKey.includes(":resend:"));
+    expect(resendRow?.state).toBe("failed");
+    expect(resendRow?.failureReason).toBe("simulated provider failure");
   });
 });

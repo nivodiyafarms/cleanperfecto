@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { assertCapability } from "@/lib/admin/rbac/capabilities";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
-import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import { createSupabaseCustomerAuthLinkGenerator } from "@/lib/customer-portal/customer-auth-link";
+import { requestFreshPaymentLink } from "@/lib/customer-portal/request-fresh-payment-link";
+import { getNotificationRecipientContact } from "@/lib/notifications/customer-contact-lookup";
+import { createResendNotificationEmailSender } from "@/lib/notifications/resend-notification-email-sender";
 import type { AddOnId } from "@/lib/pricing/types";
 import { addCustomPricingAdjustment } from "@/lib/scheduling/add-custom-pricing-adjustment";
 import { estimateVisitPricing } from "@/lib/scheduling/estimate-visit-pricing";
@@ -208,12 +211,16 @@ export async function finalizeAndSendAction(_prevState: ActionResult | null, for
 }
 
 /**
- * Reuses the exact same visit/payment destination and notification type as
- * the original Finalize & Send — never creates a new pricing record,
- * PaymentIntent, or service_visit_payments row. Uses a fresh, timestamped
- * versionKey specifically so its idempotency key never collides with the
- * original send's (which is keyed on the final total) — an admin resend is
- * an intentional, auditable action, not a silently-deduplicated retry.
+ * Sends immediately — via requestFreshPaymentLink, the SAME shared secure
+ * resend logic the unauthenticated customer /my/payment-link-expired page
+ * uses — rather than enqueueing for the next 5-minute dispatch-notifications
+ * cron sweep. Traced against real production timestamps before this change:
+ * an admin resend through the old enqueue-and-wait path took anywhere from
+ * well under a minute to just under 5 minutes to actually leave, purely as
+ * a function of when the click happened to land relative to the cron's
+ * fixed schedule — not a bug, just unnecessary queueing for an action that
+ * has no reason to wait. Duplicate protection and rate limiting are
+ * enforced inside the shared function, not duplicated here.
  */
 export async function resendFinalTotalLinkAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const admin = await requireAdmin();
@@ -222,8 +229,6 @@ export async function resendFinalTotalLinkAction(_prevState: ActionResult | null
   if (!serviceVisitId) return actionError("Missing visit id.");
 
   const repo = createSupabaseSchedulingRepository();
-  const visit = await repo.findServiceVisitById(serviceVisitId);
-  if (!visit) return actionError("Visit not found.");
 
   // "Already sent" is defined by a prior final_total_ready notification
   // existing — not by visit.status, since a visit awaiting the customer's
@@ -235,24 +240,42 @@ export async function resendFinalTotalLinkAction(_prevState: ActionResult | null
     return actionError("Final Total has not been sent yet for this visit — use Finalize & Send first.");
   }
 
+  const result = await requestFreshPaymentLink(
+    {
+      repo,
+      contactLookup: getNotificationRecipientContact,
+      authLinkGenerator: createSupabaseCustomerAuthLinkGenerator(),
+      emailSender: createResendNotificationEmailSender(),
+    },
+    serviceVisitId
+  );
+
   await repo.insertServiceVisitEvent({
     serviceVisitId,
     eventType: "final_total_sent",
     actor: `admin:${admin.adminUserId}`,
     previousState: null,
-    newState: { resend: true },
+    newState: { resend: true, outcome: result.ok ? "sent" : result.reason },
     notes: "Resend Final Total Link",
   });
 
-  await enqueueNotification(repo, {
-    serviceVisitId,
-    customerId: visit.customerId,
-    notificationType: "final_total_ready",
-    channel: "email",
-    scheduledSendAt: new Date(),
-    versionKey: `resend:${Date.now()}`,
-  });
-
   revalidateVisitPaths(serviceVisitId);
-  return actionOk("Final Total link resent.");
+
+  if (result.ok) {
+    return actionOk("Sent — the customer's Final Total link went out just now.");
+  }
+
+  // The admin is already authenticated/authorized — unlike the
+  // unauthenticated customer-facing caller of this same function, showing
+  // the real reason here isn't an information-disclosure concern.
+  const ADMIN_FAILURE_MESSAGE: Record<Exclude<typeof result.reason, undefined>, string> = {
+    visit_not_found: "Visit not found.",
+    not_payable: "This visit isn't in a payable state right now (not completed, pricing not confirmed, or already paid).",
+    no_email_on_file: "This customer has no email on file — add one before resending.",
+    link_generation_failed: "Couldn't generate a secure link just now. Please try again shortly.",
+    send_failed: "The email failed to send after retrying. Please try again shortly.",
+    duplicate_request: "A resend was already sent moments ago — please wait before trying again.",
+    rate_limited: "This visit has reached the resend limit for the past hour — please wait before trying again.",
+  };
+  return actionError(ADMIN_FAILURE_MESSAGE[result.reason]);
 }

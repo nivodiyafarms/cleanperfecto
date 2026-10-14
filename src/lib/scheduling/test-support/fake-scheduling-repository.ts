@@ -491,8 +491,11 @@ export function createFakeSchedulingRepository(
       return claimable;
     },
     async markServiceVisitNotificationSent(id, providerMessageId) {
+      // 'sending' (cron's claim flow) or 'pending' (requestFreshPaymentLink's
+      // direct, synchronous send — never claimed) — see the real repo's
+      // identical widening for the full rationale.
       for (const n of notifications.values()) {
-        if (n.id === id && n.state === "sending") {
+        if (n.id === id && (n.state === "sending" || n.state === "pending")) {
           n.state = "sent";
           n.sentAt = new Date();
           n.providerMessageId = providerMessageId;
@@ -513,7 +516,7 @@ export function createFakeSchedulingRepository(
     },
     async markServiceVisitNotificationFailedTerminal(id, failureReason) {
       for (const n of notifications.values()) {
-        if (n.id === id && n.state === "sending") {
+        if (n.id === id && (n.state === "sending" || n.state === "pending")) {
           n.state = "failed";
           n.retryCount += 1;
           n.failureReason = failureReason;

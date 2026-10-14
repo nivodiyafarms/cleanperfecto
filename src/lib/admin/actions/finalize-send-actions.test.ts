@@ -1,12 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeSchedulingRepository } from "@/lib/scheduling/test-support/fake-scheduling-repository";
 import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-booking-repository";
+import { createFakeCustomerAuthLinkGenerator } from "@/lib/customer-portal/test-support/fake-customer-auth-link-generator";
+import { createFakeEmailSender } from "@/lib/notifications/test-support/fake-email-sender";
 import { proposeRecurringScopeChange } from "@/lib/scheduling/propose-recurring-scope-change";
 import { estimateVisitPricing } from "@/lib/scheduling/estimate-visit-pricing";
 import type { CalculationInput } from "@/lib/pricing/types";
 import { AdminUnauthorizedError } from "@/lib/admin/require-admin";
 import { AdminForbiddenError } from "@/lib/admin/rbac/capabilities";
 import { roundToCents } from "@/lib/pricing/money";
+
+let fakeAuthLink: ReturnType<typeof createFakeCustomerAuthLinkGenerator>;
+let fakeEmail: ReturnType<typeof createFakeEmailSender>;
+let contactEmail: string | null = "customer@example.com";
+
+vi.mock("@/lib/customer-portal/customer-auth-link", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/customer-portal/customer-auth-link")>();
+  return { ...actual, createSupabaseCustomerAuthLinkGenerator: () => fakeAuthLink.generator };
+});
+
+vi.mock("@/lib/notifications/customer-contact-lookup", () => ({
+  getNotificationRecipientContact: async () => (contactEmail ? { name: "Customer", email: contactEmail, phone: null } : null),
+}));
+
+vi.mock("@/lib/notifications/resend-notification-email-sender", () => ({
+  createResendNotificationEmailSender: () => fakeEmail.sender,
+}));
 
 const BASE_INPUT: CalculationInput = {
   propertyKind: "home",
@@ -117,6 +136,9 @@ async function seedWorkFinishedVisit() {
 beforeEach(() => {
   fake = createFakeSchedulingRepository();
   fakeBooking = createFakeBookingRepository();
+  fakeAuthLink = createFakeCustomerAuthLinkGenerator();
+  fakeEmail = createFakeEmailSender();
+  contactEmail = "customer@example.com";
   vi.mocked(requireAdmin).mockReset();
 });
 
@@ -380,7 +402,7 @@ describe("resendFinalTotalLinkAction", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("resends using a fresh versionKey, creating a second distinct notification row without touching pricing", async () => {
+  it("sends immediately — via the shared requestFreshPaymentLink logic, not the 5-minute dispatch cron — creating a second distinct, already-'sent' notification row without touching pricing", async () => {
     mockRole("operations");
     const visitId = await seedWorkFinishedVisit();
     await finalizeAndSendAction(null, formData({ serviceVisitId: visitId }));
@@ -389,9 +411,52 @@ describe("resendFinalTotalLinkAction", () => {
     const result = await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId }));
 
     expect(result.ok).toBe(true);
+    if (result.ok) expect(result.message).toMatch(/sent/i);
     const notices = [...fake.state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(2);
+    const resendNotice = notices.find((n) => n.idempotencyKey.includes(":resend:"));
+    // Sent synchronously within this call — never left 'pending' for a cron sweep.
+    expect(resendNotice?.state).toBe("sent");
+    expect(fakeEmail.state.sentEmails).toHaveLength(1);
     const pricingAfter = await fake.repo.findServiceVisitPricingByVisitId(visitId);
     expect(pricingAfter).toEqual(pricingBefore);
+  });
+
+  it("reports an accurate failure when the customer has no email on file — the real reason, since the admin is already authenticated/authorized", async () => {
+    mockRole("operations");
+    const visitId = await seedWorkFinishedVisit();
+    await finalizeAndSendAction(null, formData({ serviceVisitId: visitId }));
+    contactEmail = null;
+
+    const result = await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/no email on file/i);
+  });
+
+  it("reports duplicate-protection distinctly from a genuine failure when clicked twice in a row", async () => {
+    mockRole("operations");
+    const visitId = await seedWorkFinishedVisit();
+    await finalizeAndSendAction(null, formData({ serviceVisitId: visitId }));
+
+    const first = await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId }));
+    const second = await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId }));
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error).toMatch(/already sent moments ago/i);
+    expect(fakeEmail.state.sentEmails).toHaveLength(1);
+  });
+
+  it("logs the resend attempt's real outcome to the visit's event history, including a blocked (not just sent) outcome", async () => {
+    mockRole("operations");
+    const visitId = await seedWorkFinishedVisit();
+    await finalizeAndSendAction(null, formData({ serviceVisitId: visitId }));
+
+    await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId }));
+    await resendFinalTotalLinkAction(null, formData({ serviceVisitId: visitId })); // blocked — duplicate_request
+
+    const events = fake.state.events.filter((e) => e.serviceVisitId === visitId && e.notes === "Resend Final Total Link");
+    expect(events.map((e) => (e.newState as { outcome: string }).outcome)).toEqual(["sent", "duplicate_request"]);
   });
 });
