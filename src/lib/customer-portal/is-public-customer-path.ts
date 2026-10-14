@@ -18,8 +18,15 @@
  * /my/auth/confirm is listed as an EXACT path only (no subpath form) — it
  * takes no sub-routes, and deliberately does not exempt any other/future
  * /my/auth/* route that hasn't been individually reviewed. Every other /my
- * path, including /my/activate, /my/payments, and the rest of the customer
- * portal, stays behind Proxy's normal authenticated-session check.
+ * path, including /my/activate and the rest of the customer portal, stays
+ * behind Proxy's normal authenticated-session check.
+ *
+ * /my/payment-link-expired is the landing page /my/auth/confirm redirects
+ * to when a one-click payment link fails to verify (see
+ * resolveCustomerAuthConfirmRedirectPath) — unauthenticated by definition,
+ * same reasoning as the two auth routes above. It never calls
+ * requireCustomer() and never renders visit-specific data, only a generic
+ * "request a new link" form — see that page's own doc comment.
  */
 export function isPublicCustomerPath(pathname: string): boolean {
   return (
@@ -27,6 +34,7 @@ export function isPublicCustomerPath(pathname: string): boolean {
     pathname.startsWith("/my/login/") ||
     pathname === "/my/auth/callback" ||
     pathname.startsWith("/my/auth/callback/") ||
-    pathname === "/my/auth/confirm"
+    pathname === "/my/auth/confirm" ||
+    pathname === "/my/payment-link-expired"
   );
 }

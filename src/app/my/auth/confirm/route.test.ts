@@ -58,6 +58,23 @@ describe("GET /my/auth/confirm", () => {
     expect(verifyOtpMock).not.toHaveBeenCalled();
   });
 
+  it("redirects a missing-token failure for a real payment-visit destination to the branded expired-link page, not the dead-end /my/login", async () => {
+    const visitId = "01684d00-6ba3-4978-9660-518defd828c4";
+    const response = await GET(new NextRequest(confirmUrl({ type: "magiclink", next: `/my/payments?visit=${visitId}` })));
+
+    expect(response.headers.get("location")).toBe(`http://localhost:3000/my/payment-link-expired?visit=${visitId}`);
+    expect(verifyOtpMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects a verifyOtp failure for a real payment-visit destination to the branded expired-link page too", async () => {
+    const visitId = "01684d00-6ba3-4978-9660-518defd828c4";
+    verifyOtpMock.mockResolvedValueOnce({ data: null, error: { message: "Token has expired or is invalid", code: "otp_expired", status: 403 } });
+
+    const response = await GET(new NextRequest(confirmUrl({ token_hash: "stale-token", type: "magiclink", next: `/my/payments?visit=${visitId}` })));
+
+    expect(response.headers.get("location")).toBe(`http://localhost:3000/my/payment-link-expired?visit=${visitId}`);
+  });
+
   it("sanitizes a malicious external next down to /my on the missing-token path too — the failure redirect is just as much an open-redirect surface as the success one", async () => {
     const response = await GET(new NextRequest(confirmUrl({ type: "magiclink", next: "https://evil.example.com/phish" })));
 

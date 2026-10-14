@@ -32,6 +32,15 @@ describe("isPublicCustomerPath", () => {
     expect(isPublicCustomerPath("/my/activate")).toBe(false);
   });
 
+  it("allows the branded expired-payment-link landing page — unauthenticated by definition, same as the auth routes", () => {
+    expect(isPublicCustomerPath("/my/payment-link-expired")).toBe(true);
+  });
+
+  it("does NOT allow a payment-link-expired lookalike with a sub-path — exact match only", () => {
+    expect(isPublicCustomerPath("/my/payment-link-expired/anything")).toBe(false);
+    expect(isPublicCustomerPath("/my/payment-link-expired-fake")).toBe(false);
+  });
+
   it("keeps the real protected customer portal behind the normal check", () => {
     expect(isPublicCustomerPath("/my")).toBe(false);
     expect(isPublicCustomerPath("/my/payments")).toBe(false);

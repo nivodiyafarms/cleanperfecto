@@ -41,4 +41,37 @@ describe("resolveCustomerAuthConfirmRedirectPath", () => {
     expect(path.startsWith("/my/login?next=")).toBe(true);
     expect(path).not.toContain("://evil.example.com");
   });
+
+  const REAL_VISIT_ID = "01684d00-6ba3-4978-9660-518defd828c4";
+
+  it("redirects a FAILED verification whose destination is a real visit's payment review to the branded expired-link page, not the dead-end /my/login — a customer with no session has no way to 'just sign in' there", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: `/my/payments?visit=${REAL_VISIT_ID}` })).toBe(
+      `/my/payment-link-expired?visit=${REAL_VISIT_ID}`
+    );
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next: `/my/payments?visit=${REAL_VISIT_ID}` })).toBe(
+      `/my/payment-link-expired?visit=${REAL_VISIT_ID}`
+    );
+  });
+
+  it("does NOT redirect to the expired-link page for a non-payment destination, even on failure — /my/login remains correct there", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: "/my/cleanings" })).toBe("/my/login?next=%2Fmy%2Fcleanings");
+  });
+
+  it("does NOT redirect to the expired-link page when the visit value isn't actually UUID-shaped — never trusts an arbitrary query value as a real visit id", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: "/my/payments?visit=not-a-real-id" })).toBe(
+      "/my/login?next=%2Fmy%2Fpayments%3Fvisit%3Dnot-a-real-id"
+    );
+  });
+
+  it("does NOT redirect to the expired-link page for a path that merely resembles /my/payments — exact pathname match only", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: `/my/payments-other?visit=${REAL_VISIT_ID}` })).toBe(
+      `/my/login?next=%2Fmy%2Fpayments-other%3Fvisit%3D${REAL_VISIT_ID}`
+    );
+  });
+
+  it("still succeeds to /my/activate on the success path even when next targets a payment visit — the expired-link branch only ever applies to a FAILURE", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "success", next: `/my/payments?visit=${REAL_VISIT_ID}` })).toBe(
+      `/my/activate?next=%2Fmy%2Fpayments%3Fvisit%3D${REAL_VISIT_ID}`
+    );
+  });
 });
