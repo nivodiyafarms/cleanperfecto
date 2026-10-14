@@ -7,23 +7,48 @@
  * before being passed in here — this function only decides the outcome
  * shape, it never re-validates the redirect target itself.
  *
- * `next` is carried through on EVERY outcome, not just "success" — a
- * customer whose one-click link fails to verify (expired, already used, or
- * any other rejection) or arrives malformed (missing/unsupported
- * token_hash/type) still gets routed to /my/login with their intended
- * destination preserved as ?next=, exactly like proxy.ts already does for
- * an expired session. Without this, a failed verification silently dropped
- * the customer onto a context-free sign-in page with no way back to, e.g.,
- * their Final Total review short of re-finding the original email.
+ * `next` is carried through on EVERY outcome, not just "success".
+ *
+ * A failure whose intended destination was a specific visit's payment
+ * review (/my/payments?visit=<id>) is NOT sent to the generic /my/login —
+ * that would be a dead end: a customer with no password and no existing
+ * session has no way to "just sign in again" there, and bouncing them to a
+ * sign-in page is not a successful outcome for a payment-link click, it's
+ * the same failure with extra steps. Instead it redirects to
+ * /my/payment-link-expired?visit=<id>, a branded, unauthenticated page that
+ * preserves the visit and offers to send a fresh link. Any OTHER
+ * destination (e.g. /my/cleanings from a plain reminder link) still falls
+ * back to /my/login?next=..., exactly like proxy.ts already does for an
+ * expired session — that generic page remains the right answer when there
+ * isn't a more specific one.
  */
 export type CustomerAuthConfirmOutcome =
   | { status: "missing_token"; next: string }
   | { status: "verify_failed"; next: string }
   | { status: "success"; next: string };
 
+const PAYMENT_VISIT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Extracts the visit id ONLY when `next` is exactly a /my/payments?visit=<uuid> destination — never a partial/fuzzy match on some other path that merely contains "payments". */
+function extractPaymentVisitId(next: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(next, "http://placeholder.invalid");
+  } catch {
+    return null;
+  }
+  if (url.pathname !== "/my/payments") return null;
+  const visitId = url.searchParams.get("visit");
+  return visitId && PAYMENT_VISIT_ID_PATTERN.test(visitId) ? visitId : null;
+}
+
 export function resolveCustomerAuthConfirmRedirectPath(outcome: CustomerAuthConfirmOutcome): string {
   if (outcome.status === "success") {
     return `/my/activate?next=${encodeURIComponent(outcome.next)}`;
+  }
+  const paymentVisitId = extractPaymentVisitId(outcome.next);
+  if (paymentVisitId) {
+    return `/my/payment-link-expired?visit=${encodeURIComponent(paymentVisitId)}`;
   }
   return `/my/login?next=${encodeURIComponent(outcome.next)}`;
 }
