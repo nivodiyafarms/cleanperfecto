@@ -738,6 +738,28 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return { inserted: Boolean(data) };
     },
 
+    async claimPaymentLinkResend(params) {
+      const { data, error } = await supabase.rpc("claim_payment_link_resend", {
+        p_service_visit_id: params.serviceVisitId,
+        p_customer_id: params.customerId,
+        p_idempotency_key: params.idempotencyKey,
+        p_now: params.now.toISOString(),
+        p_cooldown_seconds: params.cooldownSeconds,
+        p_rate_limit_window_seconds: params.rateLimitWindowSeconds,
+        p_rate_limit_max: params.rateLimitMax,
+      });
+      if (error) {
+        // The function raises a plain 'duplicate_request'/'rate_limited'
+        // exception for the two expected block reasons — matched by
+        // message, same convention as every other business-rule rejection
+        // RPC in this schema. Anything else is a genuine unexpected error.
+        if (error.message.includes("duplicate_request")) return { ok: false, reason: "duplicate_request" };
+        if (error.message.includes("rate_limited")) return { ok: false, reason: "rate_limited" };
+        throw new Error(`[scheduling] claim_payment_link_resend failed: ${error.message}`);
+      }
+      return { ok: true, row: toServiceVisitNotificationRow(data as Record<string, unknown>) };
+    },
+
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
       // Scoped to reminder_24h specifically (matches this function's actual
       // intent, "cancel the stale pending REMINDER") — must never collide
@@ -779,18 +801,11 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     },
 
     async markServiceVisitNotificationSent(id, providerMessageId) {
-      // Reachable from two legitimate prior states: 'sending' (the cron's
-      // own claim → send → mark-sent flow) and 'pending' (requestFreshPaymentLink's
-      // direct, synchronous send — it inserts, sends, and resolves the row
-      // itself within one call, never going through claimDueServiceVisitNotifications
-      // at all, so the row is still 'pending' at this point, by design, not
-      // by accident). Guarding on EITHER keeps this update inert for any
-      // other row state (already 'sent'/'failed') — idempotent either way.
       const { error } = await supabase
         .from("service_visit_notifications")
         .update({ state: "sent", sent_at: new Date().toISOString(), provider_message_id: providerMessageId, claimed_at: null })
         .eq("id", id)
-        .in("state", ["sending", "pending"]);
+        .eq("state", "sending");
       if (error) throw new Error(`[scheduling] marking service_visit_notification sent failed: ${error.message}`);
     },
 
@@ -822,16 +837,11 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .eq("id", id)
         .single();
       if (fetchError || !current) throw new Error(`[scheduling] service_visit_notifications lookup before terminal failure failed: ${fetchError?.message}`);
-      // See markServiceVisitNotificationSent's own comment — 'pending' is the
-      // legitimate prior state for requestFreshPaymentLink's direct,
-      // synchronous send path (it never claims via
-      // claimDueServiceVisitNotifications, so the row never reaches
-      // 'sending' at all), alongside the cron's own 'sending' flow.
       const { error } = await supabase
         .from("service_visit_notifications")
         .update({ state: "failed", retry_count: (current.retry_count as number) + 1, failure_reason: failureReason, claimed_at: null })
         .eq("id", id)
-        .in("state", ["sending", "pending"]);
+        .eq("state", "sending");
       if (error) throw new Error(`[scheduling] marking service_visit_notification failed (terminal) failed: ${error.message}`);
     },
 

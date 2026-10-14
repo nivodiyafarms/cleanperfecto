@@ -186,6 +186,26 @@ export interface SchedulingRepository {
   voidInvoiceWithAudit(id: string, reason: string, audit: { actorAdminUserId: string; actorRole: string }): Promise<InvoiceRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
+  /**
+   * Atomic claim for requestFreshPaymentLink's immediate (non-cron) resend
+   * path — via claim_payment_link_resend() (see the migration). In one
+   * advisory-locked transaction: checks duplicate/rate-limit against PRIOR
+   * RESEND attempts only (idempotency_key containing ":resend:", never the
+   * original automated send) and, if allowed, inserts the row ALREADY in
+   * 'sending' state — never 'pending' — so it is categorically ineligible
+   * for claimDueServiceVisitNotifications to also pick up, not merely
+   * unlikely to race it. Resolves to { ok: true, row } when the row was
+   * created, or { ok: false, reason } when blocked.
+   */
+  claimPaymentLinkResend(params: {
+    serviceVisitId: string;
+    customerId: string;
+    idempotencyKey: string;
+    now: Date;
+    cooldownSeconds: number;
+    rateLimitWindowSeconds: number;
+    rateLimitMax: number;
+  }): Promise<{ ok: true; row: ServiceVisitNotificationRow } | { ok: false; reason: "duplicate_request" | "rate_limited" }>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
   /** Every notification row for a visit, newest scheduled first — admin display only, never consumed by a domain workflow. */
   listServiceVisitNotifications(serviceVisitId: string): Promise<ServiceVisitNotificationRow[]>;
