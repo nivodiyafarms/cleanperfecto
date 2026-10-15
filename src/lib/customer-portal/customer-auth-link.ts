@@ -6,16 +6,20 @@ import { sanitizeNextPath } from "./next-path";
 
 /**
  * Resolves the CleanPerfecto origin a SERVER-SIDE auth link should redirect
- * back to. The browser-side login flow (CustomerLoginForm.tsx) already gets
- * this right for free via `window.location.origin` — whatever host the
- * customer is actually on. A server-side link generator (a cron dispatcher,
- * no browser, no request) has nothing else to go on, so this has to be
- * explicit and environment-aware instead. This is the ONE shared resolver
- * behind every server-side customer auth link — Finalize & Send
- * (sendFinalTotalReadyImmediately), admin resend, and customer resend
- * (requestFreshPaymentLink) all call createSupabaseCustomerAuthLinkGenerator,
- * which calls this — so a fix here fixes all three, and a bug here breaks
- * all three identically.
+ * back to. This is the ONE shared resolver behind every server-side
+ * customer auth link — Finalize & Send (sendFinalTotalReadyImmediately),
+ * admin resend, and customer resend (requestFreshPaymentLink) all call
+ * createSupabaseCustomerAuthLinkGenerator, which calls this, and the
+ * browser-side login flow (request-customer-login-link.ts) now ALSO goes
+ * through this same generator rather than window.location.origin —
+ * generateLink has no dependency on Supabase's Auth "Redirect URLs"
+ * allowlist at all (see createSupabaseCustomerAuthLinkGenerator's own doc
+ * comment below), which is what makes it reliable across every deployment,
+ * including ephemeral Preview URLs an allowlist could never practically
+ * enumerate. So a fix here fixes all four callers, and a bug here breaks
+ * all four identically. A server-side generator (a cron dispatcher, no
+ * browser, no request) has nothing else to go on regardless, so this has to
+ * be explicit and environment-aware either way.
  *
  * development/test with NO Vercel runtime (genuine `next dev` on a laptop)
  * default to localhost — zero-config local dev, matching getSiteUrl()'s

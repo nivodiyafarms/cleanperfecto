@@ -26,8 +26,36 @@ export type PaymentActionResult<T> = { ok: true; data: T } | { ok: false; error:
 const PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE =
   "Online payment is temporarily unavailable. Please contact CleanPerfecto for help completing this payment.";
 
+/** Same generic wording for any InvalidVisitStateError judged internal below — deliberately identical across every cause, so the message itself can never be used to distinguish one internal failure from another. */
+const GENERIC_PAYMENT_ERROR_MESSAGE = "We couldn't process that right now. Please try again, or contact CleanPerfecto if this continues.";
+
+const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+/** Every raw entity-name prefix an internal InvalidVisitStateError message in this domain is known to start with (see prepareVisitPaymentReview, select-visit-tip.ts, create-visit-payment-intent.ts, confirm-final-total-and-pay.ts, resolve-tax-location.ts, resolve-tip-basis.ts) — a second, ID-independent signal for "this is schema/plumbing language, not customer copy," since not every internal message happens to carry a UUID (e.g. one embeds a visit id only, never literally saying "service_visit"). */
+const INTERNAL_MESSAGE_PREFIXES = ["service_visit ", "prepaid_package ", "booking_order ", "quote_request "];
+
+/**
+ * Most InvalidVisitStateError messages in this domain are written for
+ * server-side logs/stack traces, not customers — they routinely embed a
+ * raw service_visit/prepaid_package UUID (e.g. "service_visit <uuid> has
+ * no resolvable service ZIP code..."), and toErrorResult used to forward
+ * that text to the customer verbatim. Rather than hand-curating an
+ * allowlist of every current throw site (fragile — a new one added later
+ * would default to leaking again), this sanitizes by CONTENT: a message
+ * containing a UUID, or starting with a raw internal entity-name prefix,
+ * is replaced with one fixed generic message; anything else (the messages
+ * already written in plain customer language, e.g. "A tip selection is
+ * required before payment.") passes through unchanged. The original
+ * message is never lost — it's still on the thrown error for whatever
+ * server-side logging already captures it.
+ */
+function sanitizeVisitStateMessage(message: string): string {
+  if (UUID_PATTERN.test(message)) return GENERIC_PAYMENT_ERROR_MESSAGE;
+  if (INTERNAL_MESSAGE_PREFIXES.some((prefix) => message.startsWith(prefix))) return GENERIC_PAYMENT_ERROR_MESSAGE;
+  return message;
+}
+
 function toErrorResult(error: unknown): { ok: false; error: string } {
-  if (error instanceof InvalidVisitStateError) return { ok: false, error: error.message };
+  if (error instanceof InvalidVisitStateError) return { ok: false, error: sanitizeVisitStateMessage(error.message) };
   if (error instanceof RuntimeConfigurationError) return { ok: false, error: PAYMENT_TEMPORARILY_UNAVAILABLE_MESSAGE };
   throw error;
 }

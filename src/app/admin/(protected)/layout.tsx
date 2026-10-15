@@ -55,8 +55,10 @@ export default async function AdminProtectedLayout({ children }: { children: Rea
 
   return (
     <div className="flex min-h-screen flex-col bg-background-alt">
-      <EnvironmentBanner />
-      <header className="border-b border-border bg-surface">
+      <div className="print:hidden">
+        <EnvironmentBanner />
+      </div>
+      <header className="border-b border-border bg-surface print:hidden">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-3">
           <div className="flex flex-wrap items-center gap-6">
             <span className="text-sm font-semibold text-foreground">CleanPerfecto Admin</span>
@@ -79,7 +81,7 @@ export default async function AdminProtectedLayout({ children }: { children: Rea
           </form>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 print:max-w-none print:p-0">{children}</main>
     </div>
   );
 }
