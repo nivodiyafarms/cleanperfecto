@@ -6,13 +6,18 @@ import { sanitizeNextPath } from "./next-path";
 
 /**
  * Resolves the CleanPerfecto origin a SERVER-SIDE auth link should redirect
- * back to. The browser-side login flow now ALSO goes through this same
- * server-side generator (see request-customer-login-link.ts) rather than
- * window.location.origin — generateLink has no dependency on Supabase's
- * Auth "Redirect URLs" allowlist at all (see createSupabaseCustomerAuthLinkGenerator's
- * own doc comment below), which is what makes it reliable across every
- * deployment, including ephemeral Preview URLs the allowlist could never
- * practically enumerate. A server-side generator (a cron dispatcher, no
+ * back to. This is the ONE shared resolver behind every server-side
+ * customer auth link — Finalize & Send (sendFinalTotalReadyImmediately),
+ * admin resend, and customer resend (requestFreshPaymentLink) all call
+ * createSupabaseCustomerAuthLinkGenerator, which calls this, and the
+ * browser-side login flow (request-customer-login-link.ts) now ALSO goes
+ * through this same generator rather than window.location.origin —
+ * generateLink has no dependency on Supabase's Auth "Redirect URLs"
+ * allowlist at all (see createSupabaseCustomerAuthLinkGenerator's own doc
+ * comment below), which is what makes it reliable across every deployment,
+ * including ephemeral Preview URLs an allowlist could never practically
+ * enumerate. So a fix here fixes all four callers, and a bug here breaks
+ * all four identically. A server-side generator (a cron dispatcher, no
  * browser, no request) has nothing else to go on regardless, so this has to
  * be explicit and environment-aware either way.
  *

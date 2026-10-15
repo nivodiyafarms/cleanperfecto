@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-booking-repository";
+import { createFakeCustomerAuthLinkGenerator } from "@/lib/customer-portal/test-support/fake-customer-auth-link-generator";
+import { createFakeEmailSender } from "@/lib/notifications/test-support/fake-email-sender";
+import type { NotificationRecipientContact } from "@/lib/notifications/customer-contact-lookup";
 import type { CalculationInput } from "@/lib/pricing/types";
 import { InvalidVisitStateError } from "./errors";
 import { estimateVisitPricing } from "./estimate-visit-pricing";
 import { finalizeAndSend } from "./finalize-and-send";
 import { proposeRecurringScopeChange } from "./propose-recurring-scope-change";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
+
+/** Fresh fakes per call — mirrors the real notification-send deps injected in production (finalize-send-actions.ts), kept local since this suite exercises finalizeAndSend directly rather than through the admin action. */
+function fakeNotificationDeps() {
+  const authLink = createFakeCustomerAuthLinkGenerator();
+  const email = createFakeEmailSender();
+  const contactLookup = async (): Promise<NotificationRecipientContact | null> => ({
+    name: "Customer",
+    email: "customer@example.com",
+    phone: null,
+  });
+  return { contactLookup, authLinkGenerator: authLink.generator, emailSender: email.sender };
+}
 
 const BASE_INPUT: CalculationInput = {
   propertyKind: "home",
@@ -111,7 +126,7 @@ describe("finalizeAndSend", () => {
       serviceAddressIdentity: null,
     });
 
-    await expect(finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" })).rejects.toThrow(InvalidVisitStateError);
+    await expect(finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps())).rejects.toThrow(InvalidVisitStateError);
   });
 
   it("final amount unchanged: confirms pricing and completes the visit in one call", async () => {
@@ -119,7 +134,7 @@ describe("finalizeAndSend", () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(result.alreadySent).toBe(false);
     expect(result.requiresCustomerApproval).toBe(false);
@@ -138,7 +153,7 @@ describe("finalizeAndSend", () => {
     // original approved baseline.
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: [] });
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(result.requiresCustomerApproval).toBe(false);
     expect(result.visit.status).toBe("completed");
@@ -153,7 +168,7 @@ describe("finalizeAndSend", () => {
     // add-on that pushes the total above the previously-approved amount.
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(result.requiresCustomerApproval).toBe(false);
     // Pay Per Cleaning no longer has a separate approval step — Finalize &
@@ -181,7 +196,7 @@ describe("finalizeAndSend", () => {
       { actorAdminUserId: "owner:1", actorRole: "owner_admin" }
     );
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(result.requiresCustomerApproval).toBe(false);
     expect(result.visit.status).toBe("completed");
@@ -194,7 +209,7 @@ describe("finalizeAndSend", () => {
     const { visit, baseAmount } = await seedWorkFinishedVisit(repo, state);
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     // confirmVisitPricing() (run unconditionally now) always overwrites
     // previously_approved_amount to the NEW total_amount at confirm time.
@@ -207,7 +222,7 @@ describe("finalizeAndSend", () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const sentEvents = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
     expect(sentEvents.length).toBe(1);
@@ -220,7 +235,7 @@ describe("finalizeAndSend", () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const allNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.channel === "email");
     expect(allNotices.length).toBe(1);
@@ -233,9 +248,9 @@ describe("finalizeAndSend", () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const notices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(1);
@@ -247,7 +262,7 @@ describe("finalizeAndSend", () => {
     const { visit } = await seedWorkFinishedVisit(repo, state);
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const allNotices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id);
     expect(allNotices.some((n) => n.notificationType === "pricing_approval_required")).toBe(false);
@@ -264,7 +279,7 @@ describe("finalizeAndSend", () => {
       { actorAdminUserId: "admin:1", actorRole: "operations" }
     );
 
-    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const result = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(result.requiresCustomerApproval).toBe(false);
     expect(result.visit.status).toBe("completed");
@@ -277,7 +292,7 @@ describe("finalizeAndSend", () => {
     const { visit } = await seedWorkFinishedVisit(repo, state);
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const payment = await repo.findServiceVisitPaymentByVisitId(visit.id);
     expect(payment).toBeNull();
@@ -296,7 +311,7 @@ describe("finalizeAndSend", () => {
     const { visit, baseAmount } = await seedWorkFinishedVisit(repo, state);
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const [sentEvent] = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
     expect(sentEvent.previousState).toEqual({ previouslyApprovedAmount: baseAmount });
@@ -323,7 +338,7 @@ describe("finalizeAndSend", () => {
       previouslyApprovedAmount: null,
     });
 
-    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     const [sentEvent] = state.events.filter((e) => e.serviceVisitId === visit.id && e.eventType === "final_total_sent");
     expect(sentEvent.previousState).toBeNull();
@@ -334,8 +349,8 @@ describe("finalizeAndSend", () => {
     const { repo: bookingRepo } = createFakeBookingRepository();
     const { visit } = await seedWorkFinishedVisit(repo, state);
 
-    const first = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
-    const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const first = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(first.alreadySent).toBe(false);
     expect(second.alreadySent).toBe(true);
@@ -351,8 +366,8 @@ describe("finalizeAndSend", () => {
     const { visit } = await seedWorkFinishedVisit(repo, state);
     await estimateVisitPricing(repo, { serviceVisitId: visit.id, addOnIds: ["inside_oven"] });
 
-    const first = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
-    const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" });
+    const first = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
 
     expect(first.requiresCustomerApproval).toBe(false);
     expect(first.visit.status).toBe("completed");

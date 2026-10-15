@@ -186,6 +186,43 @@ export interface SchedulingRepository {
   voidInvoiceWithAudit(id: string, reason: string, audit: { actorAdminUserId: string; actorRole: string }): Promise<InvoiceRow>;
   /** Insert-or-no-op via the unique idempotency_key — the one persistence seam every notification enqueue path goes through, see src/lib/notifications/enqueue-notification.ts. */
   insertServiceVisitNotification(row: NewServiceVisitNotificationRow): Promise<{ inserted: boolean }>;
+  /**
+   * Atomic claim for requestFreshPaymentLink's immediate (non-cron) resend
+   * path — via claim_payment_link_resend() (see the migration). In one
+   * advisory-locked transaction: checks duplicate/rate-limit against PRIOR
+   * RESEND attempts only (idempotency_key containing ":resend:", never the
+   * original automated send) and, if allowed, inserts the row ALREADY in
+   * 'sending' state — never 'pending' — so it is categorically ineligible
+   * for claimDueServiceVisitNotifications to also pick up, not merely
+   * unlikely to race it. Resolves to { ok: true, row } when the row was
+   * created, or { ok: false, reason } when blocked.
+   */
+  claimPaymentLinkResend(params: {
+    serviceVisitId: string;
+    customerId: string;
+    idempotencyKey: string;
+    now: Date;
+    cooldownSeconds: number;
+    rateLimitWindowSeconds: number;
+    rateLimitMax: number;
+  }): Promise<{ ok: true; row: ServiceVisitNotificationRow } | { ok: false; reason: "duplicate_request" | "rate_limited" }>;
+  /**
+   * Atomic single-row self-claim for an immediate (non-cron) send: a plain
+   * `UPDATE ... WHERE id = $1 AND state = 'pending' RETURNING *`. Needs no
+   * advisory lock (unlike claimPaymentLinkResend) — a single row keyed by
+   * its own primary key is already fully serialized by Postgres's normal
+   * row-level locking against ANY concurrent claimer, including the cron's
+   * own `FOR UPDATE SKIP LOCKED` batch claim; whichever gets there first
+   * wins. Used by the original Finalize & Send's immediate-send path,
+   * right after insertServiceVisitNotification's own atomic dedup-insert —
+   * that insert's unique idempotency_key already makes a retried Finalize &
+   * Send at the SAME amount a safe no-op, so this only ever needs to claim
+   * a row THIS call itself just created. Returns null if the row wasn't
+   * 'pending' (already claimed by something else, or doesn't exist) —
+   * callers must treat that as "someone else is already handling this",
+   * never retry-insert a second row.
+   */
+  claimSpecificServiceVisitNotification(id: string): Promise<ServiceVisitNotificationRow | null>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
   /** Every notification row for a visit, newest scheduled first — admin display only, never consumed by a domain workflow. */
   listServiceVisitNotifications(serviceVisitId: string): Promise<ServiceVisitNotificationRow[]>;
