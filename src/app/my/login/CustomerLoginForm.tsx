@@ -10,11 +10,16 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
  * authorization boundary is requireCustomer() on the server, re-checked on
  * every subsequent portal page load and every portal server action.
  *
- * `next` (already sanitized by the server page) is forwarded through
- * emailRedirectTo, so /my/auth/callback and /my/activate can land the
- * customer back where they intended — e.g. a plain /my/cleanings
- * notification link that bounced through proxy.ts because the session had
- * expired.
+ * `next` (already sanitized by the server page) is carried through a
+ * short-lived cookie (cleanperfecto_login_next), not a query string on
+ * emailRedirectTo — Supabase Auth's "Redirect URLs" allowlist is matched
+ * against the exact emailRedirectTo value, and a dynamic ?next= query on
+ * it is the most common reason a magic-link redirect silently falls back
+ * to the project's bare Site URL (the public homepage) instead of landing
+ * the customer back where they intended. Keeping emailRedirectTo a fixed,
+ * bare origin+path means the allowlist only ever has to match one value;
+ * /my/auth/callback reads the cookie back (see its own doc comment) and
+ * clears it either way, success or failure.
  */
 export default function CustomerLoginForm({ next }: { next: string }) {
   const [email, setEmail] = useState("");
@@ -24,8 +29,10 @@ export default function CustomerLoginForm({ next }: { next: string }) {
     event.preventDefault();
     setStatus("submitting");
 
+    document.cookie = `cleanperfecto_login_next=${encodeURIComponent(next)}; path=/; max-age=600; SameSite=Lax`;
+
     const supabase = createSupabaseBrowserClient();
-    const redirectTo = `${window.location.origin}/my/auth/callback?next=${encodeURIComponent(next)}`;
+    const redirectTo = `${window.location.origin}/my/auth/callback`;
     const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
 
     setStatus(error ? "error" : "sent");
