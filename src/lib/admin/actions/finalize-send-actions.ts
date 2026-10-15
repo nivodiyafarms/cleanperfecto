@@ -175,6 +175,21 @@ async function runRemoveCustomAdjustment(admin: { adminUserId: string; role: str
 }
 
 /**
+ * The admin is already authenticated/authorized, so showing the real
+ * notification-send failure reason isn't an information-disclosure
+ * concern — same rationale as resendFinalTotalLinkAction's own
+ * ADMIN_FAILURE_MESSAGE below. Points at the Notifications section's own
+ * Retry button (visits/[visitId]/page.tsx) rather than duplicating the
+ * underlying reason, which the notification row's own failureReason text
+ * already shows there.
+ */
+const NOTIFICATION_FAILURE_MESSAGE: Record<"no_email_on_file" | "link_generation_failed" | "send_failed", string> = {
+  no_email_on_file: "The notification wasn't sent — this customer has no email on file. Add one, then retry it from the Notifications section below.",
+  link_generation_failed: "The notification wasn't sent — couldn't generate a secure link after retrying. Retry it from the Notifications section below.",
+  send_failed: "The notification wasn't sent after retrying. Retry it from the Notifications section below.",
+};
+
+/**
  * The one primary admin action. See finalize-and-send.ts for the full
  * sequencing and idempotency rationale — this wrapper only does RBAC,
  * form parsing, and translating the result into a user-facing message.
@@ -187,21 +202,41 @@ export async function finalizeAndSendAction(_prevState: ActionResult | null, for
 
   const repo = createSupabaseSchedulingRepository();
   try {
-    const result = await finalizeAndSend(repo, createSupabaseBookingRepository(), {
-      serviceVisitId,
-      actor: `admin:${admin.adminUserId}`,
-    });
+    const result = await finalizeAndSend(
+      repo,
+      createSupabaseBookingRepository(),
+      {
+        serviceVisitId,
+        actor: `admin:${admin.adminUserId}`,
+      },
+      {
+        contactLookup: getNotificationRecipientContact,
+        authLinkGenerator: createSupabaseCustomerAuthLinkGenerator(),
+        emailSender: createResendNotificationEmailSender(),
+      }
+    );
     revalidateVisitPaths(serviceVisitId);
     revalidatePath("/admin/packages");
 
     if (result.alreadySent) {
       return actionOk("Final Total was already sent for this visit — use Resend if the customer needs the link again.");
     }
-    return actionOk(
+
+    const amountLabel =
       result.pricing && result.pricing.totalAmount !== result.pricing.baseAmount
-        ? `Sent — final total $${result.pricing.totalAmount.toFixed(2)} (originally $${result.pricing.baseAmount.toFixed(2)}).`
-        : `Sent — final total $${result.pricing?.totalAmount.toFixed(2)}.`
-    );
+        ? `final total $${result.pricing.totalAmount.toFixed(2)} (originally $${result.pricing.baseAmount.toFixed(2)})`
+        : `final total $${result.pricing?.totalAmount.toFixed(2)}`;
+
+    // The visit is genuinely finalized/completed either way (pricing frozen,
+    // work_finished -> completed crossed) — only the notification's own
+    // outcome varies, so a send failure here is reported as an accurate
+    // qualifier, never as an overall action failure that might tempt a
+    // confused re-click of Finalize & Send (which would just report
+    // alreadySent instead of retrying the notification).
+    if (result.notification && !result.notification.ok) {
+      return actionOk(`Finalized — ${amountLabel}. ${NOTIFICATION_FAILURE_MESSAGE[result.notification.reason]}`);
+    }
+    return actionOk(`Sent — ${amountLabel}.`);
   } catch (error) {
     if (error instanceof InvalidVisitStateError || error instanceof SchedulingConflictError) {
       return actionError(error.message);

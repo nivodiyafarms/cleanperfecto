@@ -760,6 +760,18 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return { ok: true, row: toServiceVisitNotificationRow(data as Record<string, unknown>) };
     },
 
+    async claimSpecificServiceVisitNotification(id) {
+      const { data, error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "sending", claimed_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("state", "pending")
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] claimSpecificServiceVisitNotification failed: ${error.message}`);
+      return data ? toServiceVisitNotificationRow(data) : null;
+    },
+
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
       // Scoped to reminder_24h specifically (matches this function's actual
       // intent, "cancel the stale pending REMINDER") — must never collide

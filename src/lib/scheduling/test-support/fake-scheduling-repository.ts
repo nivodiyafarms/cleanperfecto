@@ -520,6 +520,17 @@ export function createFakeSchedulingRepository(
         return { ok: true as const, row };
       });
     },
+
+    async claimSpecificServiceVisitNotification(id) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "pending") {
+          n.state = "sending";
+          n.claimedAt = new Date();
+          return n;
+        }
+      }
+      return null;
+    },
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
       // Scoped to reminder_24h only — see the matching comment in
       // supabase-scheduling-repository.ts.

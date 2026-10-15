@@ -3,16 +3,34 @@ import { RuntimeConfigurationError } from "@/lib/config/runtime-env";
 import { resolveCustomerAuthOrigin } from "./customer-auth-link";
 
 describe("resolveCustomerAuthOrigin", () => {
-  it("local (development, unset NEXT_PUBLIC_SITE_URL) defaults to localhost:3000", () => {
-    expect(resolveCustomerAuthOrigin({ appEnv: "development", siteUrl: undefined })).toBe("http://localhost:3000");
+  it("local (development, unset NEXT_PUBLIC_SITE_URL, no VERCEL_URL) defaults to localhost:3000 — genuine `next dev` with no Vercel runtime at all", () => {
+    expect(resolveCustomerAuthOrigin({ appEnv: "development", siteUrl: undefined, vercelUrl: undefined })).toBe("http://localhost:3000");
   });
 
   it("test (unset) also defaults to localhost:3000 — the same convenience default as getSiteUrl()", () => {
-    expect(resolveCustomerAuthOrigin({ appEnv: "test", siteUrl: undefined })).toBe("http://localhost:3000");
+    expect(resolveCustomerAuthOrigin({ appEnv: "test", siteUrl: undefined, vercelUrl: undefined })).toBe("http://localhost:3000");
   });
 
   it("uses an explicitly configured NEXT_PUBLIC_SITE_URL in development instead of the localhost default", () => {
     expect(resolveCustomerAuthOrigin({ appEnv: "development", siteUrl: "http://localhost:4000" })).toBe("http://localhost:4000");
+  });
+
+  it("development/test running on Vercel with no NEXT_PUBLIC_SITE_URL (e.g. a Preview deployment with no site-url override configured for that scope) uses VERCEL_URL over HTTPS instead of localhost — the bug this covers: a real Preview host must never get a :3000 link", () => {
+    expect(resolveCustomerAuthOrigin({ appEnv: "development", siteUrl: undefined, vercelUrl: "cleanperfecto-abc123-team.vercel.app" })).toBe(
+      "https://cleanperfecto-abc123-team.vercel.app"
+    );
+  });
+
+  it("an explicitly configured NEXT_PUBLIC_SITE_URL still wins over VERCEL_URL", () => {
+    expect(
+      resolveCustomerAuthOrigin({ appEnv: "development", siteUrl: "https://beta.cleanperfecto.com", vercelUrl: "cleanperfecto-abc123-team.vercel.app" })
+    ).toBe("https://beta.cleanperfecto.com");
+  });
+
+  it("operational_beta/production never fall back to VERCEL_URL even when present — still throws without an explicit NEXT_PUBLIC_SITE_URL", () => {
+    expect(() => resolveCustomerAuthOrigin({ appEnv: "operational_beta", siteUrl: undefined, vercelUrl: "cleanperfecto-prod.vercel.app" })).toThrow(
+      RuntimeConfigurationError
+    );
   });
 
   it("operational_beta with NEXT_PUBLIC_SITE_URL set uses the configured beta origin", () => {
@@ -57,15 +75,19 @@ describe("createSupabaseCustomerAuthLinkGenerator", () => {
   // the ambient shell/CI environment happens to have configured.
   const originalSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
   const originalAppEnv = process.env.APP_ENV;
+  const originalVercelUrl = process.env.VERCEL_URL;
   beforeEach(() => {
     delete process.env.NEXT_PUBLIC_SITE_URL;
     process.env.APP_ENV = "test";
+    delete process.env.VERCEL_URL;
   });
   afterEach(() => {
     if (originalSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
     else process.env.NEXT_PUBLIC_SITE_URL = originalSiteUrl;
     if (originalAppEnv === undefined) delete process.env.APP_ENV;
     else process.env.APP_ENV = originalAppEnv;
+    if (originalVercelUrl === undefined) delete process.env.VERCEL_URL;
+    else process.env.VERCEL_URL = originalVercelUrl;
   });
 
   it("builds a CleanPerfecto-hosted /my/auth/confirm URL from generateLink's hashed_token/verification_type — never Supabase's own action_link/redirect_to", async () => {

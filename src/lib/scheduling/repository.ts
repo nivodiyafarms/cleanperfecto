@@ -206,6 +206,23 @@ export interface SchedulingRepository {
     rateLimitWindowSeconds: number;
     rateLimitMax: number;
   }): Promise<{ ok: true; row: ServiceVisitNotificationRow } | { ok: false; reason: "duplicate_request" | "rate_limited" }>;
+  /**
+   * Atomic single-row self-claim for an immediate (non-cron) send: a plain
+   * `UPDATE ... WHERE id = $1 AND state = 'pending' RETURNING *`. Needs no
+   * advisory lock (unlike claimPaymentLinkResend) — a single row keyed by
+   * its own primary key is already fully serialized by Postgres's normal
+   * row-level locking against ANY concurrent claimer, including the cron's
+   * own `FOR UPDATE SKIP LOCKED` batch claim; whichever gets there first
+   * wins. Used by the original Finalize & Send's immediate-send path,
+   * right after insertServiceVisitNotification's own atomic dedup-insert —
+   * that insert's unique idempotency_key already makes a retried Finalize &
+   * Send at the SAME amount a safe no-op, so this only ever needs to claim
+   * a row THIS call itself just created. Returns null if the row wasn't
+   * 'pending' (already claimed by something else, or doesn't exist) —
+   * callers must treat that as "someone else is already handling this",
+   * never retry-insert a second row.
+   */
+  claimSpecificServiceVisitNotification(id: string): Promise<ServiceVisitNotificationRow | null>;
   cancelPendingServiceVisitNotifications(serviceVisitId: string): Promise<void>;
   /** Every notification row for a visit, newest scheduled first — admin display only, never consumed by a domain workflow. */
   listServiceVisitNotifications(serviceVisitId: string): Promise<ServiceVisitNotificationRow[]>;

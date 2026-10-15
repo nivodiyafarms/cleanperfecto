@@ -232,6 +232,26 @@ describe("finalizeAndSendAction", () => {
     const notices = [...fake.state.notifications.values()].filter((n) => n.serviceVisitId === visitId && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(1);
   });
+
+  it("still finalizes and completes the visit when secure-link generation fails, but reports the notification failure accurately instead of claiming it sent — and never degrades to a login-required link", async () => {
+    mockRole("operations");
+    const visitId = await seedWorkFinishedVisit();
+    fakeAuthLink = createFakeCustomerAuthLinkGenerator({ behavior: () => ({ ok: false, reason: "provider_error" }) });
+
+    const result = await finalizeAndSendAction(null, formData({ serviceVisitId: visitId }));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.message).toMatch(/finalized/i);
+      expect(result.message).not.toMatch(/^sent/i);
+      expect(result.message).toMatch(/retry it from the notifications section/i);
+    }
+    expect(fake.state.serviceVisitsById.get(visitId)?.status).toBe("completed");
+    const notice = [...fake.state.notifications.values()].find((n) => n.serviceVisitId === visitId && n.notificationType === "final_total_ready");
+    expect(notice?.state).toBe("failed");
+    expect(notice?.failureReason).toMatch(/link generation failed/i);
+    expect(fakeEmail.state.sentEmails).toHaveLength(0);
+  });
 });
 
 describe("addCustomChargeAction", () => {
@@ -417,7 +437,9 @@ describe("resendFinalTotalLinkAction", () => {
     const resendNotice = notices.find((n) => n.idempotencyKey.includes(":resend:"));
     // Sent synchronously within this call — never left 'pending' for a cron sweep.
     expect(resendNotice?.state).toBe("sent");
-    expect(fakeEmail.state.sentEmails).toHaveLength(1);
+    // 2, not 1: Finalize & Send itself now also sends immediately (see
+    // finalize-and-send.ts), plus this resend — both real sends, no cron.
+    expect(fakeEmail.state.sentEmails).toHaveLength(2);
     const pricingAfter = await fake.repo.findServiceVisitPricingByVisitId(visitId);
     expect(pricingAfter).toEqual(pricingBefore);
   });
@@ -445,7 +467,9 @@ describe("resendFinalTotalLinkAction", () => {
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error).toMatch(/already sent moments ago/i);
-    expect(fakeEmail.state.sentEmails).toHaveLength(1);
+    // 2: Finalize & Send's own immediate send, plus the one successful
+    // resend — the blocked second resend attempt never reaches the sender.
+    expect(fakeEmail.state.sentEmails).toHaveLength(2);
   });
 
   it("logs the resend attempt's real outcome to the visit's event history, including a blocked (not just sent) outcome", async () => {
