@@ -1,16 +1,28 @@
+import type { CustomerAuthLinkGenerator } from "@/lib/customer-portal/customer-auth-link";
 import type { BookingRepository } from "@/lib/booking/repository";
 import type { AddOnId } from "@/lib/pricing/types";
-import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
+import type { NotificationEmailSender } from "@/lib/notifications/email-sender";
+import type { NotificationRecipientContact } from "@/lib/notifications/customer-contact-lookup";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmVisitPricing } from "./confirm-visit-pricing";
 import type { ServiceVisitPricingRow, ServiceVisitRow } from "./domain-types";
 import { estimateVisitPricing } from "./estimate-visit-pricing";
 import { InvalidVisitStateError } from "./errors";
 import type { SchedulingRepository } from "./repository";
+import { sendFinalTotalReadyImmediately, type SendFinalTotalReadyImmediatelyResult } from "./send-final-total-ready-immediately";
 
 export interface FinalizeAndSendInput {
   serviceVisitId: string;
   actor: string;
+}
+
+/** The real notification send-path deps — same shape requestFreshPaymentLink's deps use, injected rather than constructed inside finalizeAndSend so tests can supply fakes. */
+export interface FinalizeAndSendNotificationDeps {
+  contactLookup: (customerId: string) => Promise<NotificationRecipientContact | null>;
+  authLinkGenerator: CustomerAuthLinkGenerator;
+  emailSender: NotificationEmailSender;
+  now?: () => Date;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface FinalizeAndSendResult {
@@ -19,6 +31,8 @@ export interface FinalizeAndSendResult {
   visit: ServiceVisitRow;
   pricing: ServiceVisitPricingRow | null;
   requiresCustomerApproval: boolean;
+  /** The actual outcome of the immediate notification send — null only when alreadySent short-circuited before ever attempting one. Pricing/completion above succeed independently of this; the caller must inspect this to show accurate feedback rather than assuming "Sent" whenever the function returns. */
+  notification: SendFinalTotalReadyImmediatelyResult | null;
 }
 
 /**
@@ -49,12 +63,13 @@ export interface FinalizeAndSendResult {
  *      'final_total_ready' notification below already covers "your
  *      cleaning is complete" AND gives the one-click Final Total link, so
  *      the customer gets exactly one post-cleaning email, not two.
- *   5+7. log a 'final_total_sent' event and enqueue the 'final_total_ready'
- *      notification with a versionKey of the final total, so a retried
- *      Finalize & Send at the SAME amount is a safe no-op (the notification
- *      idempotency-key UNIQUE constraint — see enqueue-notification.ts) and
- *      a genuinely different amount (a later admin scope edit before this
- *      ran, or an actual retry after a scope change) naturally mints a new
+ *   5+7. log a 'final_total_sent' event and send the 'final_total_ready'
+ *      notification immediately (sendFinalTotalReadyImmediately), keyed by
+ *      the final total amount, so a retried Finalize & Send at the SAME
+ *      amount is a safe no-op (the notification idempotency-key UNIQUE
+ *      constraint — see insertServiceVisitNotification) and a genuinely
+ *      different amount (a later admin scope edit before this ran, or an
+ *      actual retry after a scope change) naturally mints a new
  *      notification rather than being silently swallowed. No
  *      'pricing_approval_required' notification and no 'completed'
  *      notification is ever sent for this action — only this one, single
@@ -67,7 +82,8 @@ export interface FinalizeAndSendResult {
 export async function finalizeAndSend(
   repo: SchedulingRepository,
   bookingRepo: BookingRepository,
-  input: FinalizeAndSendInput
+  input: FinalizeAndSendInput,
+  notificationDeps: FinalizeAndSendNotificationDeps
 ): Promise<FinalizeAndSendResult> {
   const visit = await repo.findServiceVisitById(input.serviceVisitId);
   if (!visit) {
@@ -76,7 +92,7 @@ export async function finalizeAndSend(
 
   if (visit.status === "completed") {
     const pricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
-    return { alreadySent: true, visit, pricing, requiresCustomerApproval: pricing?.requiresCustomerApproval ?? false };
+    return { alreadySent: true, visit, pricing, requiresCustomerApproval: pricing?.requiresCustomerApproval ?? false, notification: null };
   }
 
   if (visit.status !== "work_finished") {
@@ -119,14 +135,24 @@ export async function finalizeAndSend(
     notes: null,
   });
 
-  await enqueueNotification(repo, {
-    serviceVisitId: input.serviceVisitId,
-    customerId: visit.customerId,
-    notificationType: "final_total_ready",
-    channel: "email",
-    scheduledSendAt: new Date(),
-    versionKey: pricing.totalAmount.toFixed(2),
-  });
+  // Sent immediately (not enqueued for the next dispatch-notifications
+  // cron sweep) — see send-final-total-ready-immediately.ts's own doc
+  // comment for the full atomicity/idempotency rationale and why it's a
+  // distinct function from requestFreshPaymentLink rather than a shared
+  // call. A send failure here does not undo anything above — pricing is
+  // already confirmed and the visit already completed, matching the prior
+  // enqueue-based behavior where a later failed cron attempt likewise
+  // never rolled those back.
+  const notification = await sendFinalTotalReadyImmediately(
+    { repo, ...notificationDeps },
+    {
+      serviceVisitId: input.serviceVisitId,
+      customerId: visit.customerId,
+      visitStartAtUtc: resultVisit.confirmedStartAt ?? null,
+      timezone: resultVisit.timezone,
+      totalAmount: pricing.totalAmount,
+    }
+  );
 
-  return { alreadySent: false, visit: resultVisit, pricing, requiresCustomerApproval: pricing.requiresCustomerApproval };
+  return { alreadySent: false, visit: resultVisit, pricing, requiresCustomerApproval: pricing.requiresCustomerApproval, notification };
 }

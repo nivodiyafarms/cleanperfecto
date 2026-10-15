@@ -117,6 +117,28 @@ export function createFakeSchedulingRepository(
   const events: ServiceVisitEventRow[] = [];
   const feeAssessments: ServiceFeeAssessmentRow[] = [];
   const notifications = new Map<string, FakeNotification>();
+  // Per-visit serialization queue — simulates claim_payment_link_resend's
+  // real advisory transaction lock (pg_advisory_xact_lock keyed to the
+  // visit id) closely enough that a genuine concurrency test (Promise.all
+  // of two truly interleaved async calls against this SAME fake) exercises
+  // the real mutual-exclusion guarantee, not just the single-threaded
+  // logic. Never blocks a DIFFERENT visit's concurrent call.
+  const paymentLinkResendLocks = new Map<string, Promise<unknown>>();
+  async function withPaymentLinkResendLock<T>(serviceVisitId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = paymentLinkResendLocks.get(serviceVisitId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    paymentLinkResendLocks.set(
+      serviceVisitId,
+      previous.then(() => gate)
+    );
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
   const recurringSchedulesById = new Map<string, RecurringScheduleRow>();
   const packageVisitPlansById = new Map<string, PackageVisitPlanRow>();
   const packageVisitPlanHistory: NewPackageVisitPlanHistoryRow[] = [];
@@ -453,6 +475,61 @@ export function createFakeSchedulingRepository(
         claimedAt: null,
       });
       return { inserted: true };
+    },
+
+    async claimPaymentLinkResend(params) {
+      return withPaymentLinkResendLock(params.serviceVisitId, async () => {
+        const priorResendAttempts = [...notifications.values()].filter(
+          (n) =>
+            n.serviceVisitId === params.serviceVisitId &&
+            n.notificationType === "final_total_ready" &&
+            n.idempotencyKey.includes(":resend:")
+        );
+
+        const mostRecentAt = priorResendAttempts.reduce<number | null>(
+          (latest, n) => (latest === null || n.scheduledSendAt.getTime() > latest ? n.scheduledSendAt.getTime() : latest),
+          null
+        );
+        if (mostRecentAt !== null && params.now.getTime() - mostRecentAt < params.cooldownSeconds * 1000) {
+          return { ok: false as const, reason: "duplicate_request" as const };
+        }
+
+        const recentCount = priorResendAttempts.filter(
+          (n) => params.now.getTime() - n.scheduledSendAt.getTime() < params.rateLimitWindowSeconds * 1000
+        ).length;
+        if (recentCount >= params.rateLimitMax) {
+          return { ok: false as const, reason: "rate_limited" as const };
+        }
+
+        const row: FakeNotification = {
+          id: randomUUID(),
+          serviceVisitId: params.serviceVisitId,
+          customerId: params.customerId,
+          notificationType: "final_total_ready",
+          channel: "email",
+          scheduledSendAt: params.now,
+          idempotencyKey: params.idempotencyKey,
+          state: "sending",
+          sentAt: null,
+          failureReason: null,
+          retryCount: 0,
+          providerMessageId: null,
+          claimedAt: params.now,
+        };
+        notifications.set(params.idempotencyKey, row);
+        return { ok: true as const, row };
+      });
+    },
+
+    async claimSpecificServiceVisitNotification(id) {
+      for (const n of notifications.values()) {
+        if (n.id === id && n.state === "pending") {
+          n.state = "sending";
+          n.claimedAt = new Date();
+          return n;
+        }
+      }
+      return null;
     },
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
       // Scoped to reminder_24h only — see the matching comment in

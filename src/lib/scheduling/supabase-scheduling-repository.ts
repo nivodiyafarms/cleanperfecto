@@ -738,6 +738,40 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return { inserted: Boolean(data) };
     },
 
+    async claimPaymentLinkResend(params) {
+      const { data, error } = await supabase.rpc("claim_payment_link_resend", {
+        p_service_visit_id: params.serviceVisitId,
+        p_customer_id: params.customerId,
+        p_idempotency_key: params.idempotencyKey,
+        p_now: params.now.toISOString(),
+        p_cooldown_seconds: params.cooldownSeconds,
+        p_rate_limit_window_seconds: params.rateLimitWindowSeconds,
+        p_rate_limit_max: params.rateLimitMax,
+      });
+      if (error) {
+        // The function raises a plain 'duplicate_request'/'rate_limited'
+        // exception for the two expected block reasons — matched by
+        // message, same convention as every other business-rule rejection
+        // RPC in this schema. Anything else is a genuine unexpected error.
+        if (error.message.includes("duplicate_request")) return { ok: false, reason: "duplicate_request" };
+        if (error.message.includes("rate_limited")) return { ok: false, reason: "rate_limited" };
+        throw new Error(`[scheduling] claim_payment_link_resend failed: ${error.message}`);
+      }
+      return { ok: true, row: toServiceVisitNotificationRow(data as Record<string, unknown>) };
+    },
+
+    async claimSpecificServiceVisitNotification(id) {
+      const { data, error } = await supabase
+        .from("service_visit_notifications")
+        .update({ state: "sending", claimed_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("state", "pending")
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] claimSpecificServiceVisitNotification failed: ${error.message}`);
+      return data ? toServiceVisitNotificationRow(data) : null;
+    },
+
     async cancelPendingServiceVisitNotifications(serviceVisitId) {
       // Scoped to reminder_24h specifically (matches this function's actual
       // intent, "cancel the stale pending REMINDER") — must never collide
