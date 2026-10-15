@@ -186,6 +186,48 @@ describe("getVisitPaymentReviewAction", () => {
       { description: "Courtesy credit", amount: -10 },
     ]);
   });
+
+  it("never leaks the raw service_visit UUID or internal entity-name wording to the customer when the visit isn't completed yet — prepareVisitPaymentReview's own message embeds the id, but the action must report a generic, customer-safe reason instead", async () => {
+    mockSession("customer-1");
+    const visitId = await seedWorkFinishedNotYetConfirmed("customer-1");
+
+    const result = await getVisitPaymentReviewAction(visitId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain(visitId);
+    expect(result.error).not.toContain("service_visit");
+    expect(result.error).toMatch(/couldn't process|try again|contact cleanperfecto/i);
+  });
+
+  it("never leaks the raw service_visit UUID when the visit has no resolvable ZIP for the Stripe Tax preview — the real bug found against a stray test row with no address on file", async () => {
+    mockSession("customer-1");
+    const visit = await fakeScheduling.repo.insertServiceVisit({ ...NEW_VISIT, customerId: "customer-1", serviceAddressIdentity: null });
+    await fakeScheduling.repo.upsertServiceVisitPricing({
+      serviceVisitId: visit.id,
+      pricingVersion: "v1",
+      pricingSnapshot: {},
+      baseAmount: 179,
+      addOnIds: [],
+      addOnAmount: 0,
+      totalAmount: 179,
+      amountDueFromCustomer: 179,
+      priceStatus: "estimated",
+      requiresCustomerApproval: false,
+      previouslyApprovedAmount: null,
+    });
+    await fakeScheduling.repo.confirmServiceVisitPricing(visit.id, "admin:1");
+    fakeScheduling.state.serviceVisitsById.set(visit.id, { ...(await fakeScheduling.repo.findServiceVisitById(visit.id))!, status: "completed" });
+
+    const result = await getVisitPaymentReviewAction(visit.id);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).not.toContain(visit.id);
+    expect(result.error).not.toContain("service_visit");
+    expect(result.error).not.toContain("ZIP");
+    expect(result.error).toMatch(/couldn't process|try again|contact cleanperfecto/i);
+  });
 });
 
 describe("selectVisitTipAction", () => {
