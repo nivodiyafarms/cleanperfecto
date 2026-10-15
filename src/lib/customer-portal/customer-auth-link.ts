@@ -6,20 +6,38 @@ import { sanitizeNextPath } from "./next-path";
 
 /**
  * Resolves the CleanPerfecto origin a SERVER-SIDE auth link should redirect
- * back to. The browser-side login flow (CustomerLoginForm.tsx) already gets
- * this right for free via `window.location.origin` — whatever host the
- * customer is actually on. A server-side link generator (a cron dispatcher,
- * no browser, no request) has nothing else to go on, so this has to be
- * explicit and environment-aware instead.
+ * back to. The browser-side login flow now ALSO goes through this same
+ * server-side generator (see request-customer-login-link.ts) rather than
+ * window.location.origin — generateLink has no dependency on Supabase's
+ * Auth "Redirect URLs" allowlist at all (see createSupabaseCustomerAuthLinkGenerator's
+ * own doc comment below), which is what makes it reliable across every
+ * deployment, including ephemeral Preview URLs the allowlist could never
+ * practically enumerate. A server-side generator (a cron dispatcher, no
+ * browser, no request) has nothing else to go on regardless, so this has to
+ * be explicit and environment-aware either way.
  *
- * development/test default to localhost for zero-config local dev, matching
- * getSiteUrl()'s existing convenience default (src/lib/booking/site-url.ts).
+ * development/test with NO Vercel runtime (genuine `next dev` on a laptop)
+ * default to localhost — zero-config local dev, matching getSiteUrl()'s
+ * existing convenience default (src/lib/booking/site-url.ts, a separate,
+ * unrelated Stripe-Checkout-URL helper, not touched here).
+ *
+ * development/test RUNNING ON VERCEL (e.g. a Preview deployment with no
+ * NEXT_PUBLIC_SITE_URL/APP_ENV configured for that scope — APP_ENV then
+ * defaults to "development") must NOT fall back to localhost: that
+ * produces an unreachable `https://<preview-host>:3000/...` link once the
+ * host is corrected but the port is still inherited from this origin.
+ * Vercel injects VERCEL_URL automatically into every deployment's runtime
+ * — the deployment's OWN current hostname, always accurate, never
+ * manually configured or able to go stale across ephemeral Preview URLs —
+ * so that is preferred over localhost whenever present.
+ *
  * operational_beta and production REQUIRE NEXT_PUBLIC_SITE_URL to be
- * explicitly set and throw rather than ever silently substituting the wrong
- * origin — an unset/misconfigured site URL in a deployed environment must
- * block link generation, never guess beta or localhost.
+ * explicitly set and throw rather than ever silently substituting VERCEL_URL
+ * or localhost — an unset/misconfigured site URL in a real deployed
+ * environment must block link generation, never guess beta or production's
+ * canonical domain from an internal Vercel alias.
  */
-export function resolveCustomerAuthOrigin(overrides?: { appEnv?: string; siteUrl?: string }): string {
+export function resolveCustomerAuthOrigin(overrides?: { appEnv?: string; siteUrl?: string; vercelUrl?: string }): string {
   const appEnv = resolveAppEnv(overrides?.appEnv);
   const siteUrl = overrides?.siteUrl ?? process.env.NEXT_PUBLIC_SITE_URL;
 
@@ -28,6 +46,10 @@ export function resolveCustomerAuthOrigin(overrides?: { appEnv?: string; siteUrl
   }
 
   if (appEnv === "development" || appEnv === "test") {
+    const vercelUrl = overrides?.vercelUrl ?? process.env.VERCEL_URL;
+    if (vercelUrl) {
+      return `https://${vercelUrl}`;
+    }
     return "http://localhost:3000";
   }
 
