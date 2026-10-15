@@ -1,11 +1,34 @@
 import type { InvoiceRow } from "@/lib/scheduling/domain-types";
 import { formatMoney } from "@/lib/admin/format";
+import { utcToZonedDateTime } from "@/lib/scheduling/timezone";
+import BrandLogo from "@/components/brand/BrandLogo";
 import PrintButton from "./PrintButton";
 
-function formatDate(value: Date | string | null): string {
+/** The one timezone this business operates in (see Approved Service Area) — invoices carry no per-row timezone of their own, unlike a service_visit. */
+const INVOICE_DISPLAY_TIMEZONE = "America/Chicago";
+
+/**
+ * `value` is either an already-bare calendar date (service_date — no time
+ * component, nothing to convert) or a real UTC timestamptz (issue_date,
+ * void_at). A timestamptz MUST be converted to this business's own
+ * timezone before reading off its calendar date — formatting it directly
+ * in UTC (the previous bug here) can show the wrong day entirely for a
+ * document issued late at night Central time, since that instant can
+ * already be past midnight UTC. Both cases end up as the same kind of
+ * bare "YYYY-MM-DD" string before display, so one formatter handles both
+ * correctly without silently reinterpreting a date-only value through a
+ * timezone conversion it was never subject to.
+ */
+export function formatInvoiceDate(value: Date | string | null): string {
   if (!value) return "—";
-  const date = typeof value === "string" ? new Date(`${value}T00:00:00Z`) : value;
+  const calendarDate = typeof value === "string" ? value : utcToZonedDateTime(value, INVOICE_DISPLAY_TIMEZONE).date;
+  const date = new Date(`${calendarDate}T00:00:00Z`);
   return date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+}
+
+/** formatMoney is sign-naive ($-25.00 for a negative amount) — a discount line item needs the conventional "-$25.00" instead. */
+export function formatLineAmount(amount: number): string {
+  return amount < 0 ? `-${formatMoney(Math.abs(amount))}` : formatMoney(amount);
 }
 
 export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
@@ -35,6 +58,8 @@ export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 rounded-2xl border border-border bg-surface p-8 print:border-0 print:p-0">
+      <BrandLogo />
+
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Invoice</h1>
@@ -47,7 +72,7 @@ export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
 
       {invoice.paymentStatus === "void" && (
         <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-          This invoice was voided on {formatDate(invoice.voidAt)}
+          This invoice was voided on {formatInvoiceDate(invoice.voidAt)}
           {invoice.voidReason ? `: ${invoice.voidReason}` : "."}
         </div>
       )}
@@ -60,11 +85,11 @@ export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
         </div>
         <div className="text-right">
           <div className="text-muted">Issue date</div>
-          <div className="font-medium text-foreground">{formatDate(invoice.issueDate)}</div>
+          <div className="font-medium text-foreground">{formatInvoiceDate(invoice.issueDate)}</div>
           {invoice.serviceDate && (
             <>
               <div className="mt-2 text-muted">Service date</div>
-              <div className="font-medium text-foreground">{formatDate(invoice.serviceDate)}</div>
+              <div className="font-medium text-foreground">{formatInvoiceDate(invoice.serviceDate)}</div>
             </>
           )}
         </div>
@@ -81,7 +106,7 @@ export default function InvoiceDocument({ invoice }: { invoice: InvoiceRow }) {
           {lineItems.map((item, index) => (
             <tr key={index} className="border-b border-border/60">
               <td className="py-2 text-foreground">{item.label}</td>
-              <td className="py-2 text-right text-foreground">{formatMoney(item.amount)}</td>
+              <td className="py-2 text-right text-foreground">{formatLineAmount(item.amount)}</td>
             </tr>
           ))}
           <tr className="border-b border-border/60">
