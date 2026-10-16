@@ -1,6 +1,7 @@
 import "server-only";
 
 import type Stripe from "stripe";
+import type { AgreedQuoteInvitationRepository } from "@/lib/instant-quote/agreed-quote-invitation-repository";
 import type { ConsentRepository } from "@/lib/consent/consent-repository";
 import type { PaymentMode } from "@/lib/config/runtime-env";
 import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
@@ -41,7 +42,8 @@ export async function retryStuckWebhookEvents(
   paymentGateway?: VisitPaymentGateway,
   now: Date = new Date(),
   limit = 20,
-  paymentMode?: PaymentMode
+  paymentMode?: PaymentMode,
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<RetryStuckWebhookEventsResult> {
   const candidates = await repo.listStuckWebhookEvents(now, WEBHOOK_PROCESSING_LEASE_SECONDS, limit);
 
@@ -50,7 +52,7 @@ export async function retryStuckWebhookEvents(
   for (const candidate of candidates) {
     try {
       const event = candidate.payload as unknown as Stripe.Event;
-      const outcome = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode);
+      const outcome = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode, agreedQuoteInvitationRepo);
       if (outcome.outcome === "processed") result.processed += 1;
       else if (outcome.outcome === "skipped") result.skipped += 1;
       else result.failed += 1;

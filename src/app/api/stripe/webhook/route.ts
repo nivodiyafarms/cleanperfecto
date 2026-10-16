@@ -2,6 +2,7 @@ import { getStripeClient } from "@/lib/booking/stripe/client";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { claimAndProcessStripeWebhookEvent } from "@/lib/booking/webhook/claim-and-process-stripe-webhook-event";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
+import { createSupabaseAgreedQuoteInvitationRepository } from "@/lib/instant-quote/supabase-agreed-quote-invitation-repository";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 
@@ -46,8 +47,9 @@ export async function POST(request: Request): Promise<Response> {
   const schedulingRepo = createSupabaseSchedulingRepository();
   const consentRepo = createSupabaseConsentRepository();
   const paymentGateway = createStripeVisitPaymentGateway();
+  const agreedQuoteInvitationRepo = createSupabaseAgreedQuoteInvitationRepository();
 
-  const result = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway);
+  const result = await claimAndProcessStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, undefined, agreedQuoteInvitationRepo);
   if (result.outcome === "failed") {
     return new Response(`Webhook processing failed: ${result.error}`, { status: 500 });
   }

@@ -41,6 +41,7 @@ describe("hasCapability", () => {
     expect(hasCapability("operations", "complete_service_visit")).toBe(true);
     expect(hasCapability("operations", "record_external_payment")).toBe(true);
     expect(hasCapability("operations", "customer_portal_operations")).toBe(true);
+    expect(hasCapability("operations", "create_agreed_quote")).toBe(true);
   });
 
   it("operations lacks every owner-only financial capability", () => {

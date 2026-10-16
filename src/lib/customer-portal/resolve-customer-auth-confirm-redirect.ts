@@ -28,6 +28,7 @@ export type CustomerAuthConfirmOutcome =
   | { status: "success"; next: string };
 
 const PAYMENT_VISIT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const AGREED_QUOTE_INVITATION_PATTERN = /^\/my\/agreed-quote\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /** Extracts the visit id ONLY when `next` is exactly a /my/payments?visit=<uuid> destination — never a partial/fuzzy match on some other path that merely contains "payments". */
 function extractPaymentVisitId(next: string): string | null {
@@ -42,6 +43,18 @@ function extractPaymentVisitId(next: string): string | null {
   return visitId && PAYMENT_VISIT_ID_PATTERN.test(visitId) ? visitId : null;
 }
 
+/** Extracts the invitation id ONLY when `next` is exactly a /my/agreed-quote/<uuid> destination — same exact-match discipline as extractPaymentVisitId. */
+function extractAgreedQuoteInvitationId(next: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(next, "http://placeholder.invalid");
+  } catch {
+    return null;
+  }
+  const match = url.pathname.match(AGREED_QUOTE_INVITATION_PATTERN);
+  return match ? match[1] : null;
+}
+
 export function resolveCustomerAuthConfirmRedirectPath(outcome: CustomerAuthConfirmOutcome): string {
   if (outcome.status === "success") {
     return `/my/activate?next=${encodeURIComponent(outcome.next)}`;
@@ -49,6 +62,10 @@ export function resolveCustomerAuthConfirmRedirectPath(outcome: CustomerAuthConf
   const paymentVisitId = extractPaymentVisitId(outcome.next);
   if (paymentVisitId) {
     return `/my/payment-link-expired?visit=${encodeURIComponent(paymentVisitId)}`;
+  }
+  const agreedQuoteInvitationId = extractAgreedQuoteInvitationId(outcome.next);
+  if (agreedQuoteInvitationId) {
+    return `/my/agreed-quote-link-expired?invitation=${encodeURIComponent(agreedQuoteInvitationId)}`;
   }
   return `/my/login?next=${encodeURIComponent(outcome.next)}`;
 }
