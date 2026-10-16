@@ -27,6 +27,13 @@
  * same reasoning as the two auth routes above. It never calls
  * requireCustomer() and never renders visit-specific data, only a generic
  * "request a new link" form — see that page's own doc comment.
+ *
+ * /my/agreed-quote-link-expired is the same pattern's agreed-quote-invitation
+ * sibling — reached either from /my/auth/confirm (a failed verification
+ * whose destination was /my/agreed-quote/<id>) or directly from the live
+ * /my/agreed-quote/[invitationId] page once it detects the offer itself
+ * has expired. Also never calls requireCustomer() and never renders
+ * invitation-specific scope/price data.
  */
 export function isPublicCustomerPath(pathname: string): boolean {
   return (
@@ -35,6 +42,7 @@ export function isPublicCustomerPath(pathname: string): boolean {
     pathname === "/my/auth/callback" ||
     pathname.startsWith("/my/auth/callback/") ||
     pathname === "/my/auth/confirm" ||
-    pathname === "/my/payment-link-expired"
+    pathname === "/my/payment-link-expired" ||
+    pathname === "/my/agreed-quote-link-expired"
   );
 }

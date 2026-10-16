@@ -36,6 +36,7 @@ export async function getQuoteForBooking(quoteId: string, repo: BookingRepositor
       customerId: row.customerId,
       cleaningType: row.cleaningType,
       baseInput: row.pricingSnapshot.input,
+      pricingSnapshotResult: row.pricingSnapshot.result,
       emailNormalized: row.emailNormalized,
       phoneNormalized: row.phoneNormalized,
       serviceAddressIdentity: row.serviceAddressIdentity,

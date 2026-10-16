@@ -41,6 +41,7 @@ export type AdminCapability =
   | "complete_service_visit"
   | "record_external_payment" // ONLY through the existing frozen/system-derived amount flow — see record-external-payment.ts
   | "customer_portal_operations" // availability, cleaners, consent, notifications — routine admin-side operational actions
+  | "create_agreed_quote" // create/revise/resend/renew/cancel an admin-entered agreed-quote onboarding invitation — see create-agreed-quote.ts. The reference-price discount check (an agreed total below what calculateEstimate would produce) additionally requires financial_correction, asserted separately at the call site — never folded into this capability.
   // Owner-only — privileged financial/administrative actions.
   | "waive_fee" // explicitly listed as a "financial waiver/correction" — owner-only, never operations
   | "issue_refund" // no application-initiated refund action exists yet (refunds are webhook-reconciled only) — reserved for when one is built
@@ -54,6 +55,7 @@ const OPERATIONS_CAPABILITIES: ReadonlySet<AdminCapability> = new Set<AdminCapab
   "complete_service_visit",
   "record_external_payment",
   "customer_portal_operations",
+  "create_agreed_quote",
 ]);
 
 /** 'owner_admin' and the legacy 'admin' value are treated identically during the transition — see the module-level comment. */

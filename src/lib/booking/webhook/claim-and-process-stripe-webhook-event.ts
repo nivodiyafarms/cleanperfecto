@@ -1,6 +1,7 @@
 import "server-only";
 
 import type Stripe from "stripe";
+import type { AgreedQuoteInvitationRepository } from "@/lib/instant-quote/agreed-quote-invitation-repository";
 import type { ConsentRepository } from "@/lib/consent/consent-repository";
 import type { PaymentMode } from "@/lib/config/runtime-env";
 import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
@@ -30,7 +31,8 @@ export async function claimAndProcessStripeWebhookEvent(
   schedulingRepo?: SchedulingRepository,
   consentRepo?: ConsentRepository,
   paymentGateway?: VisitPaymentGateway,
-  paymentMode?: PaymentMode
+  paymentMode?: PaymentMode,
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<ClaimAndProcessOutcome> {
   const claim = await claimWebhookEvent(repo, event.id, event.type, event as unknown as Record<string, unknown>);
 
@@ -39,7 +41,7 @@ export async function claimAndProcessStripeWebhookEvent(
   }
 
   try {
-    await processStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode);
+    await processStripeWebhookEvent(stripe, repo, event, schedulingRepo, consentRepo, paymentGateway, paymentMode, agreedQuoteInvitationRepo);
     await repo.markWebhookEventProcessed(claim.eventRowId, claim.claimToken);
     return { outcome: "processed" };
   } catch (error) {

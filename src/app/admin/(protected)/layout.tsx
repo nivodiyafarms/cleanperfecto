@@ -7,6 +7,7 @@ import EnvironmentBanner from "@/components/admin/EnvironmentBanner";
 const NAV_ITEMS = [
   { href: "/admin", label: "Schedule" },
   { href: "/admin/requests", label: "Requests" },
+  { href: "/admin/agreed-quotes", label: "Agreed Quotes" },
   { href: "/admin/cleaners", label: "Cleaners" },
   { href: "/admin/packages", label: "Packages" },
   { href: "/admin/availability", label: "Availability" },
