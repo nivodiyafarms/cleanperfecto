@@ -1306,7 +1306,18 @@ export function createFakeSchedulingRepository(
         ) {
           return { ok: false as const, reason: "not_eligible" as const };
         }
-        const updated: ServiceVisitPaymentRow = { ...existing, status: "processing", stripePaymentIntentId: null };
+        // Mirrors the real RPC's idempotency_key rotation (see
+        // 20261018090700_rotate_idempotency_key_on_payment_retry.sql) —
+        // discovered necessary via real Stripe test-mode verification:
+        // reusing the dead intent's original key makes Stripe's own
+        // idempotency cache replay the dead intent instead of creating a
+        // genuinely new one.
+        const updated: ServiceVisitPaymentRow = {
+          ...existing,
+          status: "processing",
+          stripePaymentIntentId: null,
+          idempotencyKey: `visit-payment:${input.serviceVisitId}:retry:${randomUUID()}`,
+        };
         paymentsByVisitId.set(input.serviceVisitId, updated);
         return { ok: true as const, record: updated };
       });

@@ -221,6 +221,23 @@ describe("createVisitPaymentIntent", () => {
     expect(payment!.status).toBe("processing");
   });
 
+  it("retry lifecycle: the replacement intent is created with a freshly-rotated idempotency key, never the dead intent's original key — a real bug found via Preview + Stripe test-mode verification (Stripe's own idempotency cache would otherwise replay the dead intent's original response)", async () => {
+    const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    if (first.outcome !== "ready") throw new Error("expected ready");
+    const originalIdempotencyKey = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.idempotencyKey;
+
+    for (const record of gatewayState.paymentIntents.values()) record.status = "canceled";
+    await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+
+    expect(gatewayState.lastCreatePaymentIntentInput?.idempotencyKey).not.toBe(originalIdempotencyKey);
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.idempotencyKey).toBe(gatewayState.lastCreatePaymentIntentInput?.idempotencyKey);
+  });
+
   it("retry lifecycle: a visit mid-revision is refused before ever reaching the retry claim or Stripe, never creating a replacement intent", async () => {
     const { schedulingRepo, gateway, gatewayState, schedulingState, visitId } = await seedVisitWithSelectedTip(179);
     const { repo: bookingRepo } = createFakeBookingRepository({
