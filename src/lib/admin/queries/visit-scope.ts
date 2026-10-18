@@ -100,3 +100,58 @@ export async function resolvePackageSchedulingContext(prepaidPackageId: string):
     calculationInput: bookingOrder.pricingSnapshot.input,
   };
 }
+
+export interface RecurringSchedulingContext {
+  customerId: string;
+  cleaningType: CalculationInput["cleaningType"];
+  serviceAddressLine1: string | null;
+  serviceAddressLine2: string | null;
+  serviceCity: string | null;
+  serviceState: string | null;
+  serviceAddressIdentity: string | null;
+  timezone: string;
+}
+
+/**
+ * Everything scheduleRecurringVisitPlan needs for one Pay Per Cleaning
+ * recurring schedule — customer, cleaning type, original service address,
+ * and timezone — all read back from the schedule's own originating
+ * booking_orders row (recurring_schedules.booking_order_id), never
+ * re-collected or guessed. The exact parallel of
+ * resolvePackageSchedulingContext above, for the non-package recurring
+ * path (a recurring_schedules row always has exactly one of
+ * booking_order_id/prepaid_package_id set — see
+ * recurring_schedules_exactly_one_source — so this is only ever called for
+ * the booking_order_id side).
+ */
+export async function resolveRecurringSchedulingContext(recurringScheduleId: string): Promise<RecurringSchedulingContext | null> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("recurring_schedules")
+    .select("customer_id,booking_order_id,timezone")
+    .eq("id", recurringScheduleId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`[admin] recurring_schedule lookup failed: ${error.message}`);
+  }
+  if (!data?.booking_order_id) {
+    return null;
+  }
+
+  const bookingRepo = createSupabaseBookingRepository();
+  const bookingOrder = await bookingRepo.findBookingOrderById(data.booking_order_id);
+  if (!bookingOrder) {
+    return null;
+  }
+
+  return {
+    customerId: data.customer_id,
+    cleaningType: bookingOrder.cleaningType,
+    serviceAddressLine1: bookingOrder.serviceAddressLine1,
+    serviceAddressLine2: bookingOrder.serviceAddressLine2,
+    serviceCity: bookingOrder.serviceCity,
+    serviceState: bookingOrder.serviceState,
+    serviceAddressIdentity: bookingOrder.serviceAddressIdentity,
+    timezone: data.timezone,
+  };
+}
