@@ -107,8 +107,7 @@ export async function scheduleRecurringVisitPlanAction(_prevState: ActionResult 
   await requireAdmin();
   const recurringVisitPlanId = String(formData.get("recurringVisitPlanId") ?? "");
   const recurringScheduleId = String(formData.get("recurringScheduleId") ?? "");
-  const customerId = String(formData.get("customerId") ?? "");
-  if (!recurringVisitPlanId || !recurringScheduleId || !customerId) {
+  if (!recurringVisitPlanId || !recurringScheduleId) {
     return actionError("Plan not found.");
   }
 
@@ -119,7 +118,10 @@ export async function scheduleRecurringVisitPlanAction(_prevState: ActionResult 
   try {
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId,
-      customerId,
+      // Derived server-side from the schedule's own booking order, never
+      // trusted from the client — same discipline as
+      // schedulePackageVisitPlanAction's context.customerId.
+      customerId: context.customerId,
       cleaningType: context.cleaningType,
       serviceAddressLine1: context.serviceAddressLine1,
       serviceAddressLine2: context.serviceAddressLine2,

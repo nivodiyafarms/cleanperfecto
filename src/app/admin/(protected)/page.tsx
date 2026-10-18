@@ -203,7 +203,6 @@ function PlannedOccurrenceCard({ occurrence }: { occurrence: AdminSchedulePlanne
       <ActionForm action={scheduleRecurringVisitPlanAction} className="mt-2">
         <input type="hidden" name="recurringVisitPlanId" value={occurrence.recurringVisitPlanId} />
         <input type="hidden" name="recurringScheduleId" value={occurrence.recurringScheduleId} />
-        <input type="hidden" name="customerId" value={occurrence.customerId} />
         <button type="submit" className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground hover:bg-background-alt">
           Schedule this visit
         </button>

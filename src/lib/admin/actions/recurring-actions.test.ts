@@ -313,10 +313,54 @@ describe("scheduleRecurringVisitPlanAction", () => {
     ).rejects.toThrow(AdminUnauthorizedError);
   });
 
-  it("requires the plan, schedule, and customer ids", async () => {
+  it("requires the plan and schedule ids", async () => {
     mockAuthorized();
     const result = await scheduleRecurringVisitPlanAction(null, formData({}));
     expect(result.ok).toBe(false);
+  });
+
+  it("never trusts a client-submitted customerId — always uses the schedule's own real customer, derived server-side", async () => {
+    mockAuthorized();
+    const schedule = await fake.repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "biweekly",
+      preferredDayOfWeek: 0,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-11-01",
+      supersedesId: null,
+    });
+    const { plan } = await fake.repo.insertRecurringVisitPlan({
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      visitNumber: 2,
+      plannedDate: "2026-11-15",
+      plannedStartTime: "10:00",
+    });
+    resolveRecurringSchedulingContextResult = {
+      customerId: "customer-1",
+      cleaningType: "standard",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+      timezone: "America/Chicago",
+    };
+
+    // A tampered/mismatched customerId in the submitted form must have no
+    // effect at all — the action doesn't even read this field.
+    const result = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "attacker-customer-id" })
+    );
+
+    expect(result.ok).toBe(true);
+    const updatedPlan = fake.state.recurringVisitPlansById.get(plan.id);
+    const visit = await fake.repo.findServiceVisitById(updatedPlan!.serviceVisitId!);
+    expect(visit?.customerId).toBe("customer-1"); // the real customer, never "attacker-customer-id"
   });
 
   it("turns a planned calendar occurrence into a real 'requested' service_visit — the admin Schedule calendar's 'Schedule this visit'", async () => {
