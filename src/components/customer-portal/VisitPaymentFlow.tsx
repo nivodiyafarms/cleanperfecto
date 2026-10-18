@@ -198,6 +198,11 @@ export default function VisitPaymentFlow({ serviceVisitId, stripeChargesAvailabl
       setError("Your total was refreshed — please review the updated amount and confirm again.");
       return;
     }
+    if (data.outcome === "not_available_right_now") {
+      setProcessing(false);
+      setError("This payment isn't available right now — please refresh the page and try again.");
+      return;
+    }
 
     // outcome === "ready"
     if (!data.clientSecret) {

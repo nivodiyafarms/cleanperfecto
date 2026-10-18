@@ -11,27 +11,15 @@ export type CreateVisitPaymentIntentOutcome =
   | { outcome: "needs_payment_method" }
   | { outcome: "refreshed"; approvedAmount: number; tipAmount: number; taxAmount: number; totalAmount: number }
   | { outcome: "no_payment_due" }
-  | { outcome: "ready"; clientSecret: string | null; totalAmount: number };
-
-/**
- * Thrown when the frozen row's existing PaymentIntent is definitively dead
- * (see payment-intent-retry-decision.ts) and no code path currently exists
- * to safely replace it — service_visit_payments.stripe_payment_intent_id is
- * immutable once set (DB trigger, see 20260828100300_create_service_visit_payments.sql).
- * Creating a fresh intent for this row requires a migration relaxing that
- * trigger (authored, not yet applied — see the live-payment hardening
- * blocker register) plus a new repository method to perform the swap.
- * Surfaced as a clear, distinct error rather than silently returning the
- * dead intent's client_secret (which would previously fail confusingly at
- * Stripe.js confirmation time instead of here).
- */
-export class DeadPaymentIntentError extends InvalidVisitStateError {
-  constructor(serviceVisitId: string, stripePaymentIntentId: string, stripeStatus: string) {
-    super(
-      `service_visit ${serviceVisitId}'s existing PaymentIntent ${stripePaymentIntentId} is dead (Stripe status: ${stripeStatus}) and cannot be reused. Creating a fresh PaymentIntent for an already-frozen row requires admin/manual intervention pending the retry-lifecycle migration.`
-    );
-  }
-}
+  | { outcome: "ready"; clientSecret: string | null; totalAmount: number }
+  /**
+   * A fresh-attempt claim or a dead-intent-replacement claim found zero
+   * eligible rows — already in flight (claimed by a concurrent attempt),
+   * already paid, or a "Revise & Resend Final Total" revision is active.
+   * Surfaced as a typed, caught outcome rather than ever calling Stripe —
+   * the caller should prompt the customer to refresh.
+   */
+  | { outcome: "not_available_right_now" };
 
 /**
  * Step 3 — Confirm & Pay (stripe_card rail only). Ownership/session checks
@@ -40,6 +28,16 @@ export class DeadPaymentIntentError extends InvalidVisitStateError {
  * a repeated call after a PaymentIntent already exists returns its existing
  * client_secret rather than creating another one (Stripe's own idempotency
  * key is the backstop if this check is ever raced).
+ *
+ * Restructured around three branches (decidePaymentIntentRetry's decision
+ * logic is unchanged — only how each branch is PROTECTED changes, closing
+ * the "Revise & Resend Final Total" concurrency gap): a fresh attempt and a
+ * dead-intent replacement are now each durably claimed (via
+ * claimVisitPaymentAttempt / beginVisitPaymentRetry — see
+ * src/lib/scheduling/repository.ts) BEFORE Stripe is ever contacted, so a
+ * concurrent revision attempt always sees the claim, even before a
+ * PaymentIntent exists. A pure resume (the existing intent is still
+ * genuinely live) needs no new protection — nothing durable changes.
  */
 export async function createVisitPaymentIntent(
   repo: SchedulingRepository,
@@ -76,24 +74,59 @@ export async function createVisitPaymentIntent(
     }
     if (payment.stripePaymentIntentId) {
       const intent = await gateway.retrievePaymentIntent(payment.stripePaymentIntentId);
+
       if (decidePaymentIntentRetry(intent.status) === "fresh_intent_required") {
-        throw new DeadPaymentIntentError(input.serviceVisitId, payment.stripePaymentIntentId, intent.status);
+        // Retry branch (b) — the existing intent is definitively dead
+        // (canceled). Durably claim the replacement window FIRST (nulling
+        // stripe_payment_intent_id under the dedicated
+        // app.allow_payment_retry_intent_clear escape), leaving the row at
+        // status='processing' with no intent id — structurally identical
+        // to the original claim's own pre-intent-id window, so
+        // start_visit_pricing_revision's existing rule already covers it.
+        assertCanCreateStripeCharge();
+        const claim = await repo.beginVisitPaymentRetry({
+          serviceVisitId: input.serviceVisitId,
+          expectedOldPaymentIntentId: payment.stripePaymentIntentId,
+        });
+        if (!claim.ok) {
+          return { outcome: "not_available_right_now" };
+        }
+        const replacement = claim.record;
+        const replacementIntent = await gateway.createPaymentIntent({
+          stripeCustomerId: replacement.stripeCustomerId!,
+          stripePaymentMethodId: replacement.stripePaymentMethodId!,
+          amountCents: toStripeCents(replacement.totalAmount ?? 0),
+          stripeTaxCalculationId: replacement.stripeTaxCalculationId!,
+          metadata: {
+            service_visit_id: visit.id,
+            service_visit_payment_id: replacement.id,
+            tip_amount: String(replacement.tipAmount ?? 0),
+          },
+          idempotencyKey: replacement.idempotencyKey,
+        });
+        await repo.setServiceVisitPaymentIntent(replacement.id, { stripePaymentIntentId: replacementIntent.id, status: "processing" });
+        return { outcome: "ready", clientSecret: replacementIntent.clientSecret, totalAmount: replacement.totalAmount ?? 0 };
       }
+
+      // Resume branch (c) — the existing intent is still genuinely live.
+      // No new write, no new RPC call, since nothing durable changes.
       return { outcome: "ready", clientSecret: intent.clientSecret, totalAmount: payment.totalAmount ?? 0 };
     }
 
     // Safe-retry: financial facts already froze successfully
-    // (freezeServiceVisitPaymentForStripeCard set tip_confirmed_at), but the
-    // subsequent gateway.createPaymentIntent call itself failed before an
-    // intent id could be persisted (e.g. the frozen payment method was
-    // rejected by Stripe as non-card — the real E2E failure this closes).
-    // This is NOT an external settlement: record_external_visit_payment_
-    // with_audit always sets status='paid' atomically in the same
-    // transaction that sets tip_confirmed_at, so status can never
-    // legitimately stay 'created' after a real external settlement.
-    // Narrowly scoped to exactly this state — never re-freezes, never
-    // recomputes any amount, never accepts a different payment method than
-    // the one already frozen on the row.
+    // (the row is frozen — tip_confirmed_at is set), but the subsequent
+    // gateway.createPaymentIntent call itself failed before an intent id
+    // could be persisted (e.g. the frozen payment method was rejected by
+    // Stripe as non-card). No live or dead intent exists to resolve here at
+    // all, so neither claim RPC applies (begin_visit_payment_retry requires
+    // status in ('processing','payment_failed'), which this row — still
+    // 'created' — structurally cannot be). This is NOT an external
+    // settlement: record_external_visit_payment_with_audit always sets
+    // status='paid' atomically in the same transaction that sets
+    // tip_confirmed_at, so status can never legitimately stay 'created'
+    // after a real external settlement. Narrowly scoped to exactly this
+    // state — never re-freezes, never recomputes any amount, never accepts
+    // a different payment method than the one already frozen on the row.
     if (
       payment.status === "created" &&
       payment.paymentMethodType === "stripe_card" &&
@@ -152,12 +185,21 @@ export async function createVisitPaymentIntent(
   // without stranding a payment already legitimately in flight.
   assertCanCreateStripeCharge();
 
-  const frozen = await repo.freezeServiceVisitPaymentForStripeCard(payment.id, {
+  // Fresh-attempt branch (a) — durably claim the row (atomically freezing
+  // it AND transitioning status 'created' -> 'processing') BEFORE any
+  // Stripe API call, so a concurrent revision attempt sees this claim even
+  // before a PaymentIntent exists.
+  const claim = await repo.claimVisitPaymentAttempt({
+    serviceVisitId: input.serviceVisitId,
     stripeCustomerId: customer.stripeCustomerId,
     stripePaymentMethodId: customer.stripeDefaultPaymentMethodId,
     cardBrand: customer.stripePaymentMethodBrand,
     cardLast4: customer.stripePaymentMethodLast4,
   });
+  if (!claim.ok) {
+    return { outcome: "not_available_right_now" };
+  }
+  const frozen = claim.record;
 
   const intent = await gateway.createPaymentIntent({
     stripeCustomerId: customer.stripeCustomerId,

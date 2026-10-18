@@ -90,18 +90,25 @@ export async function finalizeAndSend(
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
 
-  if (visit.status === "completed") {
-    const pricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
-    return { alreadySent: true, visit, pricing, requiresCustomerApproval: pricing?.requiresCustomerApproval ?? false, notification: null };
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+  const isRevisionInProgress = existingPricing?.priceStatus === "revision_in_progress";
+
+  if (visit.status === "completed" && !isRevisionInProgress) {
+    return {
+      alreadySent: true,
+      visit,
+      pricing: existingPricing,
+      requiresCustomerApproval: existingPricing?.requiresCustomerApproval ?? false,
+      notification: null,
+    };
   }
 
-  if (visit.status !== "work_finished") {
+  if (visit.status !== "work_finished" && !(visit.status === "completed" && isRevisionInProgress)) {
     throw new InvalidVisitStateError(
-      `service_visit ${input.serviceVisitId} must be marked work-finished before Finalize & Send (current status: ${visit.status})`
+      `service_visit ${input.serviceVisitId} must be marked work-finished (or mid-revision — see Revise Final Total) before Finalize & Send (current status: ${visit.status})`
     );
   }
 
-  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const addOnIds = (existingPricing?.addOnIds ?? []) as AddOnId[];
   let pricing = await estimateVisitPricing(repo, { serviceVisitId: input.serviceVisitId, addOnIds }, bookingRepo);
   // Captured BEFORE confirmVisitPricing (below) can overwrite it — see that
@@ -151,6 +158,7 @@ export async function finalizeAndSend(
       visitStartAtUtc: resultVisit.confirmedStartAt ?? null,
       timezone: resultVisit.timezone,
       totalAmount: pricing.totalAmount,
+      revisionNumber: pricing.revisionNumber ?? 0,
     }
   );
 

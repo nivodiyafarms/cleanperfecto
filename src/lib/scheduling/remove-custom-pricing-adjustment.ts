@@ -27,13 +27,14 @@ export async function removeCustomPricingAdjustment(
   if (!visit) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
-  if (visit.status !== "work_finished") {
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+  const isRevisionInProgress = visit.status === "completed" && existingPricing?.priceStatus === "revision_in_progress";
+
+  if (visit.status !== "work_finished" && !isRevisionInProgress) {
     throw new InvalidVisitStateError(
-      `service_visit ${input.serviceVisitId} must be work-finished before a custom charge/discount can be removed (current status: ${visit.status})`
+      `service_visit ${input.serviceVisitId} must be work-finished (or mid-revision — see Revise Final Total) before a custom charge/discount can be removed (current status: ${visit.status})`
     );
   }
-
-  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   if (!existingPricing) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} has no pricing record yet — nothing to remove`);
   }

@@ -94,6 +94,16 @@ export interface VisitPaymentGateway {
   createTaxCalculation(input: CreateTaxCalculationInput): Promise<TaxCalculationResult>;
   createPaymentIntent(input: CreatePaymentIntentInput): Promise<PaymentIntentResult>;
   retrievePaymentIntent(id: string): Promise<PaymentIntentResult>;
+  /**
+   * Admin-initiated cancel of a live, not-yet-captured PaymentIntent —
+   * "Revise & Resend Final Total" only (see startVisitPricingRevision).
+   * The caller always freshly retrieves the intent first and only calls
+   * this for a status Stripe actually permits cancelling
+   * (requires_payment_method/requires_capture/requires_confirmation/
+   * requires_action) — never for succeeded/processing, which the caller
+   * hard-aborts on instead.
+   */
+  cancelPaymentIntent(id: string): Promise<PaymentIntentResult>;
   /** Read-only reconciliation for the stripe_card rail — never creates anything. */
   findTaxAssociation(paymentIntentId: string): Promise<TaxTransactionAttemptResult | null>;
   /** The one legitimate manual Tax Transaction path — for an external (zelle/cash) settlement ONLY, never for stripe_card. Idempotent via the caller-supplied idempotencyKey. */
@@ -180,6 +190,11 @@ export function createStripeVisitPaymentGateway(): VisitPaymentGateway {
 
     async retrievePaymentIntent(id) {
       const intent = await stripe.paymentIntents.retrieve(id);
+      return { id: intent.id, clientSecret: intent.client_secret, status: intent.status };
+    },
+
+    async cancelPaymentIntent(id) {
+      const intent = await stripe.paymentIntents.cancel(id);
       return { id: intent.id, clientSecret: intent.client_secret, status: intent.status };
     },
 

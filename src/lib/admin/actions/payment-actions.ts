@@ -7,6 +7,7 @@ import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-sc
 import { InvalidVisitStateError, LegacyPackageTaxUnknownError } from "@/lib/scheduling/errors";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { recordExternalPayment } from "@/lib/payments/record-external-payment";
+import { recordCashOrZellePayment } from "@/lib/payments/record-cash-or-zelle-payment";
 import { collectServiceFeeExternally } from "@/lib/payments/collect-service-fee";
 import { refundPrepaidPackage } from "@/lib/payments/refund-prepaid-package";
 import { refundVisitPayment } from "@/lib/payments/refund-visit-payment";
@@ -47,6 +48,56 @@ export async function recordExternalPaymentAction(_prevState: ActionResult | nul
     await recordExternalPayment(repo, gateway, {
       serviceVisitId,
       paymentMethodType,
+      externalPaymentReference,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+    });
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
+
+  revalidatePath("/admin");
+  return actionOk("Payment recorded.");
+}
+
+/**
+ * Admin "Record Cash/Zelle Payment Received" — Feature 1's direct,
+ * self-contained recording form (never dependent on the customer ever
+ * visiting /my/payments). Same capability as recordExternalPaymentAction
+ * (record_external_payment, operations-permitted): this still only ever
+ * settles through the existing audited recordExternalPayment flow — the
+ * admin's tip figure and double-entry total confirmation are validated
+ * against the server-authoritative total before anything is recorded, see
+ * record-cash-or-zelle-payment.ts.
+ */
+export async function recordCashOrZellePaymentAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "record_external_payment");
+  const repo = createSupabaseSchedulingRepository();
+  const gateway = createStripeVisitPaymentGateway();
+
+  const serviceVisitId = String(formData.get("serviceVisitId") ?? "");
+  const paymentMethodType = String(formData.get("paymentMethodType") ?? "");
+  const tipAmount = Number(formData.get("tipAmount") ?? "");
+  const totalReceivedConfirmation = Number(formData.get("totalReceivedConfirmation") ?? "");
+  const externalPaymentReference = String(formData.get("externalPaymentReference") ?? "").trim() || null;
+  if (!serviceVisitId || (paymentMethodType !== "zelle" && paymentMethodType !== "cash")) {
+    return actionError("Choose Zelle or Cash.");
+  }
+  if (!Number.isFinite(tipAmount) || tipAmount < 0) {
+    return actionError("Enter a valid tip amount (zero or more).");
+  }
+  if (!Number.isFinite(totalReceivedConfirmation) || totalReceivedConfirmation < 0) {
+    return actionError("Enter a valid total received amount.");
+  }
+
+  try {
+    await recordCashOrZellePayment(repo, gateway, {
+      serviceVisitId,
+      paymentMethodType,
+      tipAmount,
+      totalReceivedConfirmation,
       externalPaymentReference,
       actorAdminUserId: admin.adminUserId,
       actorRole: admin.role,

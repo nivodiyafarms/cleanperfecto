@@ -22,7 +22,8 @@ export type RecurringVisitPlanHistoryChangeReason =
 
 export type RecurringScopeVersionStatus = "pending_customer_approval" | "active" | "superseded" | "rejected";
 
-export type ServiceVisitPricingPriceStatus = "estimated" | "pending_customer_approval" | "confirmed";
+/** 'revision_in_progress' is the "Revise & Resend Final Total" window — see start-visit-pricing-revision.ts. Entered only via start_visit_pricing_revision() and exited only via confirmVisitPricing(); service_visits.status stays 'completed' throughout. */
+export type ServiceVisitPricingPriceStatus = "estimated" | "pending_customer_approval" | "confirmed" | "revision_in_progress";
 
 /**
  * Shared vocabulary between service_visit_pricing.payment_status (the

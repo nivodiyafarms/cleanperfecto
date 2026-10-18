@@ -329,6 +329,32 @@ export interface SchedulingRepository {
   /** Admin confirms the current estimate as final: priceStatus -> 'confirmed', previouslyApprovedAmount -> totalAmount, paymentStatus -> 'awaiting_completion' if amountDueFromCustomer > 0 else left as 'not_applicable'. */
   confirmServiceVisitPricing(serviceVisitId: string, confirmedBy: string): Promise<ServiceVisitPricingRow | null>;
   /**
+   * Atomic entry point for "Revise & Resend Final Total" — reopens a
+   * completed visit's pricing (price_status 'confirmed' -> 'revision_in_progress',
+   * revision_number incremented) and resets its payment row (if any),
+   * snapshotting the full prior payment-attempt history into
+   * financial_audit_log.metadata first — via a single Postgres RPC
+   * (start_visit_pricing_revision), under the shared visit_payment_claim
+   * advisory lock. `expectedPaymentIntentId` is the caller's own,
+   * already-Stripe-verified (confirmed cancelled, or absent) intent id —
+   * this RPC's own compare-and-swap is defense-in-depth for the narrow
+   * remaining gap between that verification and this call acquiring the
+   * lock, never a replacement for it. Idempotent re-entry (already
+   * mid-revision) returns `{ ok: true, pricing }` unchanged, no audit/event
+   * recorded again. See src/lib/scheduling/start-visit-pricing-revision.ts,
+   * the sole caller.
+   */
+  startVisitPricingRevision(input: {
+    serviceVisitId: string;
+    actorAdminUserId: string;
+    actorRole: string;
+    reason: string;
+    expectedPaymentIntentId: string | null;
+  }): Promise<
+    | { ok: true; pricing: ServiceVisitPricingRow }
+    | { ok: false; reason: "not_completed" | "pricing_not_confirmed" | "already_paid" | "payment_attempt_in_progress" | "concurrent_modification" }
+  >;
+  /**
    * Atomically appends one custom charge/discount to
    * service_visit_pricing.custom_adjustments (updating the matching
    * aggregate column) AND records the required financial_audit_log
@@ -381,6 +407,47 @@ export interface SchedulingRepository {
   /** Settable exactly once from null (enforced by the DB trigger) — the created PaymentIntent id, alongside the attempt-level status it produced. */
   setServiceVisitPaymentIntent(id: string, params: { stripePaymentIntentId: string; status: ServiceVisitPaymentRow["status"] }): Promise<ServiceVisitPaymentRow>;
   /**
+   * Pre-freeze-only resync of approved_amount to the CURRENT
+   * pricing.amountDueFromCustomer — a plain `UPDATE ... WHERE id=$1 AND
+   * tip_confirmed_at IS NULL`, no audit needed (not yet a financial fact).
+   * Closes the gap where a row created (or last resynced) against an
+   * older estimate never reflects a later scope change or a finished
+   * revision. See src/lib/payments/prepare-visit-payment-review.ts, the
+   * sole caller.
+   */
+  resyncServiceVisitPaymentApprovedAmount(id: string, approvedAmount: number): Promise<ServiceVisitPaymentRow>;
+  /**
+   * Durable in-flight claim for a FRESH card-payment attempt — atomically
+   * freezes the row (same fields as freezeServiceVisitPaymentForStripeCard)
+   * and transitions status 'created' -> 'processing', BEFORE any Stripe
+   * API call, via the claim_visit_payment_attempt RPC (gated on
+   * price_status != 'revision_in_progress'). Replaces the former
+   * unconditional freezeServiceVisitPaymentForStripeCard call in
+   * createVisitPaymentIntent's fresh-attempt branch. See
+   * src/lib/payments/create-visit-payment-intent.ts, the sole caller.
+   */
+  claimVisitPaymentAttempt(input: {
+    serviceVisitId: string;
+    stripeCustomerId: string;
+    stripePaymentMethodId: string;
+    cardBrand: string | null;
+    cardLast4: string | null;
+  }): Promise<{ ok: true; record: ServiceVisitPaymentRow } | { ok: false; reason: "revision_in_progress" | "not_eligible" }>;
+  /**
+   * Durable in-flight claim for REPLACING a dead PaymentIntent — atomically
+   * nulls stripe_payment_intent_id (never sets a new one directly; the
+   * caller records the replacement id in a separate follow-up write once
+   * Stripe responds) via the begin_visit_payment_retry RPC,
+   * compare-and-swapped against the exact cancelled intent id the caller
+   * just freshly confirmed with Stripe. Gated on price_status !=
+   * 'revision_in_progress'. See
+   * src/lib/payments/create-visit-payment-intent.ts, the sole caller.
+   */
+  beginVisitPaymentRetry(input: {
+    serviceVisitId: string;
+    expectedOldPaymentIntentId: string | null;
+  }): Promise<{ ok: true; record: ServiceVisitPaymentRow } | { ok: false; reason: "revision_in_progress" | "not_eligible" }>;
+  /**
    * General attempt-status transition (processing/requires_action/paid/payment_failed) — never touches the frozen financial facts.
    * `allowedFromStatuses` is a compare-and-swap guard (same idiom as updateBookingOrderStatus's expectedStatus): the update only
    * applies if the row's CURRENT status is one of these — see payment-status-transitions.ts for the authoritative table. Returns
@@ -403,12 +470,24 @@ export interface SchedulingRepository {
    * The Stripe Tax transaction commit itself remains a separate,
    * deliberately best-effort step after this call returns — see
    * record-external-payment.ts.
+   *
+   * Also acquires the shared visit_payment_claim advisory lock and
+   * refuses (`{ ok: false, reason: "revision_in_progress" }`) while the
+   * visit's pricing is mid-revision. `cas`, when supplied (only by
+   * recordCashOrZellePayment — see record-cash-or-zelle-payment.ts), folds
+   * a revision-number + total/tip-amount compare-and-swap directly into
+   * the settling UPDATE: if any of the three no longer match a fresh read
+   * at the moment it runs, this returns `{ ok: false, reason:
+   * "stale_pricing_version" }` rather than ever settling a stale
+   * total/tip as paid. Omitted entirely by every other existing caller,
+   * which gets the exact original, unconditional behavior.
    */
   recordExternalServiceVisitPaymentWithAudit(
     id: string,
     patch: ServiceVisitPaymentExternalSettlementPatch,
-    audit: { actorAdminUserId: string; actorRole: string }
-  ): Promise<ServiceVisitPaymentRow>;
+    audit: { actorAdminUserId: string; actorRole: string },
+    cas?: { expectedRevisionNumber?: number | null; expectedTotalAmount?: number | null; expectedTipAmount?: number | null }
+  ): Promise<{ ok: true; record: ServiceVisitPaymentRow } | { ok: false; reason: "revision_in_progress" | "stale_pricing_version" }>;
   /** Tax-sync-only update — never touches status/paidAt/any frozen financial fact. Used by both the stripe_card reconciliation path and the external retry-tax-sync path. */
   updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch): Promise<ServiceVisitPaymentRow | null>;
   /** Refund reconciliation from charge.refunded — never touches tip/tax/total, only refund + status fields. `allowedFromStatuses` is the same CAS guard as updateServiceVisitPaymentStatus, see payment-status-transitions.ts. */

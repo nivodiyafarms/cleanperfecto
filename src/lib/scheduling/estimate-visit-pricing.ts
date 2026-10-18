@@ -62,13 +62,19 @@ export async function estimateVisitPricing(
   if (!visit) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
-  if (visit.status === "completed") {
+
+  const existing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+
+  if (visit.status === "completed" && existing?.priceStatus !== "revision_in_progress") {
     // service_visit_pricing's pricing/status columns are frozen by a BEFORE
     // UPDATE trigger once the visit is completed (historical pricing must
     // never be rewritten — see 20260824100400's migration comment). Refusing
     // here, at the point a NEW pending-approval state would otherwise be
     // created, is what actually prevents that trigger from ever being hit —
     // it also gives a clear, actionable message instead of a raw DB error.
+    // The one exception: a visit mid "Revise & Resend Final Total" window
+    // (price_status = 'revision_in_progress') is exactly where this function
+    // is expected to recompute again — see start-visit-pricing-revision.ts.
     throw new InvalidVisitStateError(
       `service_visit ${input.serviceVisitId} has already completed — its pricing is frozen and can no longer be re-estimated`
     );
@@ -116,7 +122,6 @@ export async function estimateVisitPricing(
   const classified = classifyAddOns(input.addOnIds);
   const addOnAmount = roundToCents(classified.pricedTotal);
 
-  const existing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   // Legacy/historical field only — read and passed straight through
   // unchanged (never dropped), but no longer compared against totalAmount
   // to gate anything. See this function's own doc comment.
@@ -143,6 +148,14 @@ export async function estimateVisitPricing(
     ? roundToCents(Math.max(0, addOnAmount + customChargeAmount - customDiscountAmount))
     : totalAmount;
 
+  // Mid-revision, the trigger only permits price_status to stay
+  // 'revision_in_progress' or move to 'confirmed' (via confirmVisitPricing)
+  // — never back to 'estimated', which would otherwise be rejected by
+  // protect_service_visit_pricing_after_completion(). Every other path
+  // keeps the original, unconditional "estimated" (never recomputed to
+  // anything else here).
+  const priceStatus = existing?.priceStatus === "revision_in_progress" ? "revision_in_progress" : "estimated";
+
   return repo.upsertServiceVisitPricing({
     serviceVisitId: input.serviceVisitId,
     pricingVersion: PRICING_VERSION,
@@ -155,7 +168,8 @@ export async function estimateVisitPricing(
     customDiscountAmount,
     totalAmount,
     amountDueFromCustomer,
-    priceStatus: "estimated",
+    priceStatus,
+    revisionNumber: existing?.revisionNumber ?? 0,
     requiresCustomerApproval: false,
     previouslyApprovedAmount,
   });

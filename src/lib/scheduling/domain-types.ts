@@ -408,7 +408,8 @@ export interface ServiceVisitEventRow {
     | "completed"
     | "no_access_recorded"
     | "work_finished"
-    | "final_total_sent";
+    | "final_total_sent"
+    | "visit_pricing_revision_started";
   actor: string | null;
   previousState: Record<string, unknown> | null;
   newState: Record<string, unknown> | null;
@@ -582,6 +583,8 @@ export interface NewServiceVisitPricingRow {
   priceStatus: ServiceVisitPricingPriceStatus;
   requiresCustomerApproval: boolean;
   previouslyApprovedAmount: number | null;
+  /** Optional — omitted by every pre-existing caller (recurring auto-scheduling, add-on requests, every pre-existing test fixture) and defaults to 0/preserved-existing, matching the column's own DB default. estimateVisitPricing() always passes `existing?.revisionNumber ?? 0` explicitly, read straight through unchanged (never recomputed here) — only start_visit_pricing_revision() ever increments it. */
+  revisionNumber?: number;
 }
 
 export interface ServiceVisitPricingRow extends NewServiceVisitPricingRow {
@@ -595,6 +598,10 @@ export interface ServiceVisitPricingRow extends NewServiceVisitPricingRow {
   paymentStatus: ServiceVisitPricingPaymentStatus;
   confirmedAt: Date | null;
   confirmedBy: string | null;
+  // Required here (unlike the optional NewServiceVisitPricingRow input) —
+  // every real persisted row always has a concrete value (0 by column
+  // default), never absent.
+  revisionNumber: number;
 }
 
 // -- Payments V1: service_visit_payments ------------------------------------

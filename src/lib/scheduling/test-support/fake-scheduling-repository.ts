@@ -139,6 +139,30 @@ export function createFakeSchedulingRepository(
       release();
     }
   }
+  // Per-visit serialization queue mirroring the real
+  // visit_payment_claim advisory lock (pg_advisory_xact_lock keyed to the
+  // visit id) shared by claim_visit_payment_attempt/begin_visit_payment_retry/
+  // record_external_visit_payment_with_audit/start_visit_pricing_revision —
+  // same technique as withPaymentLinkResendLock above, for the SAME reason:
+  // a genuine concurrency test (Promise.all of two truly interleaved async
+  // calls against this one fake) needs a real mutual-exclusion guarantee,
+  // not just single-threaded call ordering.
+  const visitPaymentClaimLocks = new Map<string, Promise<unknown>>();
+  async function withVisitPaymentClaimLock<T>(serviceVisitId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = visitPaymentClaimLocks.get(serviceVisitId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    visitPaymentClaimLocks.set(
+      serviceVisitId,
+      previous.then(() => gate)
+    );
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
   const recurringSchedulesById = new Map<string, RecurringScheduleRow>();
   const packageVisitPlansById = new Map<string, PackageVisitPlanRow>();
   const packageVisitPlanHistory: NewPackageVisitPlanHistoryRow[] = [];
@@ -918,6 +942,7 @@ export function createFakeSchedulingRepository(
         paymentStatus: existing?.paymentStatus ?? "not_applicable",
         confirmedAt: existing?.confirmedAt ?? null,
         confirmedBy: existing?.confirmedBy ?? null,
+        revisionNumber: row.revisionNumber ?? existing?.revisionNumber ?? 0,
       };
       servicePricingByVisitId.set(row.serviceVisitId, updated);
       return updated;
@@ -1020,6 +1045,107 @@ export function createFakeSchedulingRepository(
       };
       servicePricingByVisitId.set(serviceVisitId, updated);
       return updated;
+    },
+    async startVisitPricingRevision(input) {
+      return withVisitPaymentClaimLock(input.serviceVisitId, async () => {
+        const visit = serviceVisitsById.get(input.serviceVisitId);
+        if (!visit) throw new Error(`[fake-scheduling] service_visit ${input.serviceVisitId} not found`);
+        if (visit.status !== "completed") return { ok: false as const, reason: "not_completed" as const };
+
+        const pricing = servicePricingByVisitId.get(input.serviceVisitId);
+        if (!pricing) return { ok: false as const, reason: "pricing_not_confirmed" as const };
+
+        // Idempotent re-entry: already mid-revision is a genuine no-op.
+        if (pricing.priceStatus === "revision_in_progress") return { ok: true as const, pricing };
+        if (pricing.priceStatus !== "confirmed") return { ok: false as const, reason: "pricing_not_confirmed" as const };
+
+        const payment = paymentsByVisitId.get(input.serviceVisitId) ?? null;
+        if (payment) {
+          if (payment.status === "paid" || payment.status === "partially_refunded" || payment.status === "refunded") {
+            return { ok: false as const, reason: "already_paid" as const };
+          }
+          if (payment.status === "processing" && payment.stripePaymentIntentId === null) {
+            return { ok: false as const, reason: "payment_attempt_in_progress" as const };
+          }
+          if (payment.stripePaymentIntentId !== input.expectedPaymentIntentId) {
+            return { ok: false as const, reason: "concurrent_modification" as const };
+          }
+        }
+
+        const newRevisionNumber = pricing.revisionNumber + 1;
+        const updatedPricing: ServiceVisitPricingRow = { ...pricing, priceStatus: "revision_in_progress", revisionNumber: newRevisionNumber };
+
+        let updatedPayment: ServiceVisitPaymentRow | null = null;
+        let priorPaymentSnapshot: ServiceVisitPaymentRow | null = null;
+        if (payment) {
+          priorPaymentSnapshot = { ...payment };
+          updatedPayment = {
+            ...payment,
+            approvedAmount: pricing.amountDueFromCustomer,
+            tipBasisAmount: null,
+            tipSelectionType: null,
+            tipPercentage: null,
+            tipAmount: null,
+            taxAmount: null,
+            totalAmount: null,
+            tipSelectedAt: null,
+            tipConfirmedAt: null,
+            taxLocationSnapshot: null,
+            paymentMethodType: null,
+            stripeCustomerId: null,
+            stripePaymentMethodId: null,
+            cardBrand: null,
+            cardLast4: null,
+            stripePaymentIntentId: null,
+            stripeTaxCalculationId: null,
+            taxCalculationExpiresAt: null,
+            taxTransactionStatus: "not_applicable",
+            stripeTaxTransactionId: null,
+            taxTransactionFailureCode: null,
+            taxTransactionFailureMessage: null,
+            taxTransactionLastAttemptAt: null,
+            externalPaymentReference: null,
+            status: "created",
+            idempotencyKey: `visit-payment:${input.serviceVisitId}:v${newRevisionNumber}`,
+            failureCode: null,
+            failureMessage: null,
+            refundedAmount: 0,
+            refundedAt: null,
+            paidAt: null,
+          };
+        }
+
+        if (financialAuditControl.simulateFailure) {
+          throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+        }
+
+        servicePricingByVisitId.set(input.serviceVisitId, updatedPricing);
+        if (updatedPayment) paymentsByVisitId.set(input.serviceVisitId, updatedPayment);
+
+        financialAuditLog.push({
+          id: `audit-${financialAuditLog.length + 1}`,
+          actorAdminUserId: input.actorAdminUserId,
+          actorRole: input.actorRole,
+          actionType: "final_total_revision_started",
+          targetEntityType: "service_visit_pricing",
+          targetEntityId: updatedPricing.id,
+          serviceVisitId: input.serviceVisitId,
+          reason: input.reason,
+          metadata: { revisionNumber: newRevisionNumber, priorPayment: priorPaymentSnapshot },
+          createdAt: new Date(),
+        });
+
+        events.push({
+          serviceVisitId: input.serviceVisitId,
+          eventType: "visit_pricing_revision_started",
+          actor: `admin:${input.actorAdminUserId}`,
+          previousState: { priceStatus: "confirmed" },
+          newState: { priceStatus: "revision_in_progress", revisionNumber: newRevisionNumber },
+          notes: input.reason,
+        });
+
+        return { ok: true as const, pricing: updatedPricing };
+      });
     },
     async updateServiceVisitPricingPaymentStatus(serviceVisitId, paymentStatus) {
       const existing = servicePricingByVisitId.get(serviceVisitId);
@@ -1138,6 +1264,53 @@ export function createFakeSchedulingRepository(
       paymentsByVisitId.set(existing.serviceVisitId, updated);
       return updated;
     },
+    async resyncServiceVisitPaymentApprovedAmount(id: string, approvedAmount: number) {
+      const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
+      if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
+      if (existing.tipConfirmedAt) throw new Error(`[fake-scheduling] service_visit_payments ${id} is already frozen — cannot resync approved_amount`);
+      const updated: ServiceVisitPaymentRow = { ...existing, approvedAmount };
+      paymentsByVisitId.set(existing.serviceVisitId, updated);
+      return updated;
+    },
+    async claimVisitPaymentAttempt(input) {
+      return withVisitPaymentClaimLock(input.serviceVisitId, async () => {
+        const pricing = servicePricingByVisitId.get(input.serviceVisitId);
+        if (pricing?.priceStatus === "revision_in_progress") return { ok: false as const, reason: "revision_in_progress" as const };
+        const existing = paymentsByVisitId.get(input.serviceVisitId);
+        if (!existing || existing.status !== "created" || existing.tipConfirmedAt !== null) {
+          return { ok: false as const, reason: "not_eligible" as const };
+        }
+        const updated: ServiceVisitPaymentRow = {
+          ...existing,
+          paymentMethodType: "stripe_card",
+          stripeCustomerId: input.stripeCustomerId,
+          stripePaymentMethodId: input.stripePaymentMethodId,
+          cardBrand: input.cardBrand,
+          cardLast4: input.cardLast4,
+          tipConfirmedAt: new Date(),
+          status: "processing",
+        };
+        paymentsByVisitId.set(input.serviceVisitId, updated);
+        return { ok: true as const, record: updated };
+      });
+    },
+    async beginVisitPaymentRetry(input) {
+      return withVisitPaymentClaimLock(input.serviceVisitId, async () => {
+        const pricing = servicePricingByVisitId.get(input.serviceVisitId);
+        if (pricing?.priceStatus === "revision_in_progress") return { ok: false as const, reason: "revision_in_progress" as const };
+        const existing = paymentsByVisitId.get(input.serviceVisitId);
+        if (
+          !existing ||
+          !(existing.status === "processing" || existing.status === "payment_failed") ||
+          existing.stripePaymentIntentId !== input.expectedOldPaymentIntentId
+        ) {
+          return { ok: false as const, reason: "not_eligible" as const };
+        }
+        const updated: ServiceVisitPaymentRow = { ...existing, status: "processing", stripePaymentIntentId: null };
+        paymentsByVisitId.set(input.serviceVisitId, updated);
+        return { ok: true as const, record: updated };
+      });
+    },
     async updateServiceVisitPaymentStatus(id: string, patch, allowedFromStatuses) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
       if (!existing) return null;
@@ -1155,57 +1328,70 @@ export function createFakeSchedulingRepository(
     async recordExternalServiceVisitPaymentWithAudit(
       id: string,
       patch: ServiceVisitPaymentExternalSettlementPatch,
-      audit: { actorAdminUserId: string; actorRole: string }
+      audit: { actorAdminUserId: string; actorRole: string },
+      cas?: { expectedRevisionNumber?: number | null; expectedTotalAmount?: number | null; expectedTipAmount?: number | null }
     ) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
       if (!existing) throw new Error(`[fake-scheduling] service_visit_payments ${id} not found`);
-      if (existing.status !== "created") throw new Error(`[fake-scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
 
-      // Mirrors the real RPC: compute every effect first, into local
-      // values only — nothing is written to paymentsByVisitId,
-      // servicePricingByVisitId, or financialAuditLog until every step has
-      // succeeded. If financialAuditControl.simulateFailure is set (a test
-      // simulating the audit half of the real transaction failing), throw
-      // here, BEFORE any commit — proving the same all-or-nothing guarantee
-      // a real Postgres transaction rollback would give.
-      const now = new Date();
-      const updatedPayment: ServiceVisitPaymentRow = {
-        ...existing,
-        paymentMethodType: patch.paymentMethodType,
-        externalPaymentReference: patch.externalPaymentReference,
-        status: "paid",
-        paidAt: now,
-        taxTransactionStatus: "pending",
-        tipConfirmedAt: existing.tipConfirmedAt ?? now,
-      };
+      return withVisitPaymentClaimLock(existing.serviceVisitId, async () => {
+        const existingPricing = servicePricingByVisitId.get(existing.serviceVisitId);
+        if (existingPricing?.priceStatus === "revision_in_progress") {
+          return { ok: false as const, reason: "revision_in_progress" as const };
+        }
+        if (existing.status !== "created") throw new Error(`[fake-scheduling] service_visit_payments ${id} is not eligible for external settlement (must be status='created')`);
 
-      const existingPricing = servicePricingByVisitId.get(existing.serviceVisitId);
-      const updatedPricing: ServiceVisitPricingRow | null = existingPricing
-        ? { ...existingPricing, paymentStatus: "paid" }
-        : null;
+        if (
+          (cas?.expectedRevisionNumber !== undefined && cas.expectedRevisionNumber !== null && cas.expectedRevisionNumber !== (existingPricing?.revisionNumber ?? 0)) ||
+          (cas?.expectedTotalAmount !== undefined && cas.expectedTotalAmount !== null && cas.expectedTotalAmount !== existing.totalAmount) ||
+          (cas?.expectedTipAmount !== undefined && cas.expectedTipAmount !== null && cas.expectedTipAmount !== existing.tipAmount)
+        ) {
+          return { ok: false as const, reason: "stale_pricing_version" as const };
+        }
 
-      const auditRow: FakeFinancialAuditLogRow = {
-        id: `audit-${financialAuditLog.length + 1}`,
-        actorAdminUserId: audit.actorAdminUserId,
-        actorRole: audit.actorRole,
-        actionType: "external_payment_recorded",
-        targetEntityType: "service_visit_payment",
-        targetEntityId: existing.id,
-        serviceVisitId: existing.serviceVisitId,
-        reason: patch.externalPaymentReference,
-        metadata: { paymentMethodType: patch.paymentMethodType, totalAmount: existing.totalAmount },
-        createdAt: now,
-      };
+        // Mirrors the real RPC: compute every effect first, into local
+        // values only — nothing is written to paymentsByVisitId,
+        // servicePricingByVisitId, or financialAuditLog until every step has
+        // succeeded. If financialAuditControl.simulateFailure is set (a test
+        // simulating the audit half of the real transaction failing), throw
+        // here, BEFORE any commit — proving the same all-or-nothing guarantee
+        // a real Postgres transaction rollback would give.
+        const now = new Date();
+        const updatedPayment: ServiceVisitPaymentRow = {
+          ...existing,
+          paymentMethodType: patch.paymentMethodType,
+          externalPaymentReference: patch.externalPaymentReference,
+          status: "paid",
+          paidAt: now,
+          taxTransactionStatus: "pending",
+          tipConfirmedAt: existing.tipConfirmedAt ?? now,
+        };
 
-      if (financialAuditControl.simulateFailure) {
-        throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
-      }
+        const updatedPricing: ServiceVisitPricingRow | null = existingPricing ? { ...existingPricing, paymentStatus: "paid" } : null;
 
-      paymentsByVisitId.set(existing.serviceVisitId, updatedPayment);
-      if (updatedPricing) servicePricingByVisitId.set(existing.serviceVisitId, updatedPricing);
-      financialAuditLog.push(auditRow);
+        const auditRow: FakeFinancialAuditLogRow = {
+          id: `audit-${financialAuditLog.length + 1}`,
+          actorAdminUserId: audit.actorAdminUserId,
+          actorRole: audit.actorRole,
+          actionType: "external_payment_recorded",
+          targetEntityType: "service_visit_payment",
+          targetEntityId: existing.id,
+          serviceVisitId: existing.serviceVisitId,
+          reason: patch.externalPaymentReference,
+          metadata: { paymentMethodType: patch.paymentMethodType, totalAmount: existing.totalAmount },
+          createdAt: now,
+        };
 
-      return updatedPayment;
+        if (financialAuditControl.simulateFailure) {
+          throw new Error("[fake-scheduling] simulated financial_audit_log insert failure — no state was mutated");
+        }
+
+        paymentsByVisitId.set(existing.serviceVisitId, updatedPayment);
+        if (updatedPricing) servicePricingByVisitId.set(existing.serviceVisitId, updatedPricing);
+        financialAuditLog.push(auditRow);
+
+        return { ok: true as const, record: updatedPayment };
+      });
     },
     async refundServiceVisitPaymentWithAudit(id, patch, audit) {
       const existing = [...paymentsByVisitId.values()].find((r) => r.id === id);
