@@ -15,6 +15,8 @@ import { InvalidVisitStateError, SchedulingConflictError } from "@/lib/schedulin
 import { finalizeAndSend } from "@/lib/scheduling/finalize-and-send";
 import { removeCustomPricingAdjustment } from "@/lib/scheduling/remove-custom-pricing-adjustment";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
+import { startVisitPricingRevision } from "@/lib/scheduling/start-visit-pricing-revision";
+import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { actionError, actionOk, type ActionResult } from "./types";
 
 function revalidateVisitPaths(visitId: string): void {
@@ -45,8 +47,10 @@ export async function updateFinalScopeAction(_prevState: ActionResult | null, fo
   const repo = createSupabaseSchedulingRepository();
   const visit = await repo.findServiceVisitById(serviceVisitId);
   if (!visit) return actionError("Visit not found.");
-  if (visit.status !== "work_finished") {
-    return actionError("Final scope can only be updated after work is marked finished.");
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  const isRevisionInProgress = visit.status === "completed" && existingPricing?.priceStatus === "revision_in_progress";
+  if (visit.status !== "work_finished" && !isRevisionInProgress) {
+    return actionError("Final scope can only be updated after work is marked finished (or mid-revision — see Revise Final Total).");
   }
 
   try {
@@ -170,6 +174,41 @@ async function runRemoveCustomAdjustment(admin: { adminUserId: string; role: str
   } catch (error) {
     if (error instanceof InvalidVisitStateError) return actionError(error.message);
     if (error instanceof Error) return actionError(error.message);
+    throw error;
+  }
+}
+
+/**
+ * Admin "Revise Final Total" — Feature 2's reopen entry point. Owner-only
+ * (financial_correction — same tier as a custom discount/credit, since
+ * this can both decrease an already-sent total AND cancels a live Stripe
+ * charge). A required reason mirrors refundPaymentAction's own
+ * required-reason pattern. Everything downstream of the reopen (adding/
+ * removing custom charges, Finalize & Send again) reuses the existing,
+ * completely unmodified RBAC for those actions — this action only opens
+ * the window.
+ */
+export async function startVisitPricingRevisionAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const admin = await requireAdmin();
+  assertCapability(admin.role, "financial_correction");
+  const serviceVisitId = String(formData.get("serviceVisitId") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!serviceVisitId) return actionError("Missing visit id.");
+  if (!reason) return actionError("A reason is required to revise the Final Total.");
+
+  const repo = createSupabaseSchedulingRepository();
+  const gateway = createStripeVisitPaymentGateway();
+  try {
+    await startVisitPricingRevision(repo, gateway, {
+      serviceVisitId,
+      actorAdminUserId: admin.adminUserId,
+      actorRole: admin.role,
+      reason,
+    });
+    revalidateVisitPaths(serviceVisitId);
+    return actionOk("Revision started — make your adjustments below, then Finalize & Send again.");
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
     throw error;
   }
 }

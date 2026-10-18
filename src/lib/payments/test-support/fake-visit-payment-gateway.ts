@@ -45,6 +45,7 @@ export interface FakeVisitPaymentGatewayState {
   taxReversals: Map<string, { originalTransactionId: string; mode: "full" | "partial"; refundAmountCents?: number }>;
   createTaxCalculationCallCount: number;
   createPaymentIntentCallCount: number;
+  cancelPaymentIntentCallCount: number;
   createTaxTransactionCallCount: number;
   createRefundCallCount: number;
   createTaxReversalCallCount: number;
@@ -76,6 +77,7 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
     taxReversals: new Map(),
     createTaxCalculationCallCount: 0,
     createPaymentIntentCallCount: 0,
+    cancelPaymentIntentCallCount: 0,
     createTaxTransactionCallCount: 0,
     createRefundCallCount: 0,
     createTaxReversalCallCount: 0,
@@ -112,6 +114,14 @@ export function createFakeVisitPaymentGateway(options: FakeVisitPaymentGatewayOp
       const record = state.paymentIntents.get(id);
       if (!record) throw new Error(`[fake-visit-payment-gateway] unknown PaymentIntent ${id}`);
       return { id, clientSecret: `${id}_secret_test`, status: record.status };
+    },
+
+    async cancelPaymentIntent(id: string): Promise<PaymentIntentResult> {
+      state.cancelPaymentIntentCallCount += 1;
+      const record = state.paymentIntents.get(id);
+      if (!record) throw new Error(`[fake-visit-payment-gateway] unknown PaymentIntent ${id}`);
+      record.status = "canceled";
+      return { id, clientSecret: `${id}_secret_test`, status: "canceled" };
     },
 
     async findTaxAssociation(paymentIntentId: string): Promise<TaxTransactionAttemptResult | null> {

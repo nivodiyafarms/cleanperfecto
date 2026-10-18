@@ -1,9 +1,8 @@
 import { classifyAddOns } from "@/lib/pricing/add-ons";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
-import { toStripeCents } from "@/lib/booking/stripe/money";
 import { resolveTipBasisAmount } from "./resolve-tip-basis";
-import { resolveTaxLocationAddress } from "./resolve-tax-location";
+import { previewServiceAmountAndTax } from "./preview-service-amount-and-tax";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface VisitPaymentReviewLineItem {
@@ -54,31 +53,45 @@ export async function prepareVisitPaymentReview(repo: SchedulingRepository, gate
   }
 
   const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  if (pricing?.priceStatus === "revision_in_progress") {
+    // Deliberately no "service_visit " prefix and no raw id embedded here —
+    // unlike most InvalidVisitStateError messages in this domain, THIS one
+    // is customer-facing (via getVisitPaymentReviewAction's
+    // sanitizeVisitStateMessage, which replaces any message starting with
+    // "service_visit "/containing a UUID with a generic fallback) as well
+    // as admin-facing (via recordCashOrZellePayment's own early check).
+    // Embedding either would make the customer version silently collapse
+    // to the generic "we couldn't process that" text, defeating the point
+    // of writing this specific copy.
+    throw new InvalidVisitStateError(
+      "This visit's total is currently being revised — check back shortly once the new Final Total is confirmed."
+    );
+  }
   if (!pricing || pricing.priceStatus !== "confirmed") {
     throw new InvalidVisitStateError(`service_visit ${serviceVisitId} pricing is not confirmed — no payment review is available yet`);
   }
 
   const tipBasisAmount = await resolveTipBasisAmount(repo, visit, pricing);
 
-  const { record } = await repo.insertServiceVisitPaymentAttempt({
+  const { record: inserted } = await repo.insertServiceVisitPaymentAttempt({
     serviceVisitId,
     serviceVisitPricingId: pricing.id,
     approvedAmount: pricing.amountDueFromCustomer,
     idempotencyKey: `visit-payment:${serviceVisitId}:v1`,
   });
 
-  let previewTaxAmount = 0;
-  let previewAmountDueBeforeTip = record.approvedAmount;
-  if (record.approvedAmount > 0) {
-    const address = resolveTaxLocationAddress(visit);
-    const preview = await gateway.createTaxCalculation({
-      serviceAmountCents: toStripeCents(record.approvedAmount),
-      tipAmountCents: 0,
-      address,
-    });
-    previewTaxAmount = preview.taxAmountExclusiveCents / 100;
-    previewAmountDueBeforeTip = preview.amountTotalCents / 100;
-  }
+  // A pre-existing gap, independent of (but newly reachable by) the
+  // Revise & Resend feature: this row may have been created (or last
+  // resynced) against an OLDER pricing.amountDueFromCustomer — e.g. a scope
+  // change, or a revision that finished since. Resync in place while still
+  // pre-freeze so the customer/admin always reviews the CURRENT amount, not
+  // a stale snapshot.
+  const record =
+    !inserted.tipConfirmedAt && inserted.approvedAmount !== pricing.amountDueFromCustomer
+      ? await repo.resyncServiceVisitPaymentApprovedAmount(inserted.id, pricing.amountDueFromCustomer)
+      : inserted;
+
+  const { taxAmount: previewTaxAmount, previewTotal: previewAmountDueBeforeTip } = await previewServiceAmountAndTax(gateway, visit, pricing);
 
   const lineItems: VisitPaymentReviewLineItem[] = [
     ...classifyAddOns(pricing.addOnIds).priced.map((addOn) => ({ description: addOn.label, amount: addOn.amount })),

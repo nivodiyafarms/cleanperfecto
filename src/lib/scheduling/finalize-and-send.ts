@@ -90,18 +90,25 @@ export async function finalizeAndSend(
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
 
-  if (visit.status === "completed") {
-    const pricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
-    return { alreadySent: true, visit, pricing, requiresCustomerApproval: pricing?.requiresCustomerApproval ?? false, notification: null };
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+  const isRevisionInProgress = existingPricing?.priceStatus === "revision_in_progress";
+
+  if (visit.status === "completed" && !isRevisionInProgress) {
+    return {
+      alreadySent: true,
+      visit,
+      pricing: existingPricing,
+      requiresCustomerApproval: existingPricing?.requiresCustomerApproval ?? false,
+      notification: null,
+    };
   }
 
-  if (visit.status !== "work_finished") {
+  if (visit.status !== "work_finished" && !(visit.status === "completed" && isRevisionInProgress)) {
     throw new InvalidVisitStateError(
-      `service_visit ${input.serviceVisitId} must be marked work-finished before Finalize & Send (current status: ${visit.status})`
+      `service_visit ${input.serviceVisitId} must be marked work-finished (or mid-revision — see Revise Final Total) before Finalize & Send (current status: ${visit.status})`
     );
   }
 
-  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const addOnIds = (existingPricing?.addOnIds ?? []) as AddOnId[];
   let pricing = await estimateVisitPricing(repo, { serviceVisitId: input.serviceVisitId, addOnIds }, bookingRepo);
   // Captured BEFORE confirmVisitPricing (below) can overwrite it — see that
@@ -114,6 +121,18 @@ export async function finalizeAndSend(
   const priorApprovedAmount = pricing.previouslyApprovedAmount;
 
   pricing = await confirmVisitPricing(repo, { serviceVisitId: input.serviceVisitId, confirmedBy: input.actor });
+  // confirmVisitPricing's own repo call always resets payment_status to
+  // 'awaiting_completion' when something is due. On a FIRST Finalize & Send,
+  // completeServiceVisit's scheduled/work_finished -> completed transition
+  // (below) rolls that forward to 'awaiting_payment'. On the Revise & Resend
+  // path the visit is ALREADY 'completed' here, so that transition never
+  // fires again and completeServiceVisit's own rollup is skipped — do it
+  // directly so the rollup doesn't stay stuck at 'awaiting_completion'
+  // forever after a revision, even though a fresh payable
+  // service_visit_payments row now exists.
+  if (isRevisionInProgress && pricing.paymentStatus === "awaiting_completion") {
+    pricing = (await repo.updateServiceVisitPricingPaymentStatus(input.serviceVisitId, "awaiting_payment")) ?? pricing;
+  }
   // Skip the generic 'completed' email here — the 'final_total_ready'
   // notification enqueued below already tells the customer their cleaning
   // is complete AND gives them the one-click Final Total link, so sending
@@ -151,6 +170,7 @@ export async function finalizeAndSend(
       visitStartAtUtc: resultVisit.confirmedStartAt ?? null,
       timezone: resultVisit.timezone,
       totalAmount: pricing.totalAmount,
+      revisionNumber: pricing.revisionNumber ?? 0,
     }
   );
 

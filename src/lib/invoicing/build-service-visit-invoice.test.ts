@@ -53,6 +53,7 @@ function basePricing(overrides: Partial<ServiceVisitPricingRow> = {}): ServiceVi
     priceStatus: "confirmed",
     requiresCustomerApproval: false,
     previouslyApprovedAmount: null,
+    revisionNumber: 0,
     paymentStatus: "awaiting_payment",
     confirmedAt: new Date(),
     confirmedBy: "admin:1",

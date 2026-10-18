@@ -47,9 +47,12 @@ export async function addCustomPricingAdjustment(
   if (!visit) {
     throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId} not found`);
   }
-  if (visit.status !== "work_finished") {
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
+  const isRevisionInProgress = visit.status === "completed" && existingPricing?.priceStatus === "revision_in_progress";
+
+  if (visit.status !== "work_finished" && !isRevisionInProgress) {
     throw new InvalidVisitStateError(
-      `service_visit ${input.serviceVisitId} must be work-finished before a custom charge/discount can be added (current status: ${visit.status})`
+      `service_visit ${input.serviceVisitId} must be work-finished (or mid-revision — see Revise Final Total) before a custom charge/discount can be added (current status: ${visit.status})`
     );
   }
   if (!input.description.trim()) {
@@ -59,7 +62,6 @@ export async function addCustomPricingAdjustment(
     throw new InvalidVisitStateError("The amount must be a positive number.");
   }
 
-  const existingPricing = await repo.findServiceVisitPricingByVisitId(input.serviceVisitId);
   const pricingBeforeAdjustment = await estimateVisitPricing(
     repo,
     { serviceVisitId: input.serviceVisitId, addOnIds: existingPricing?.addOnIds ?? [] },

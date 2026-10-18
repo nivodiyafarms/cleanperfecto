@@ -131,6 +131,76 @@ describe("recordExternalPayment", () => {
     expect(payment!.externalPaymentReference).toBeNull();
   });
 
+  describe("Revise & Resend Final Total concurrency guards", () => {
+    it("refuses while a revision is in progress, even though the row's own status is still 'created'", async () => {
+      const { repo, gateway, visitId } = await seedVisitWithTipSelected();
+      const pricing = await repo.findServiceVisitPricingByVisitId(visitId);
+      await repo.upsertServiceVisitPricing({ ...pricing!, priceStatus: "revision_in_progress" });
+
+      await expect(
+        recordExternalPayment(repo, gateway, { serviceVisitId: visitId, paymentMethodType: "zelle", externalPaymentReference: null, ...ACTOR })
+      ).rejects.toThrow("currently being revised");
+
+      const payment = await repo.findServiceVisitPaymentByVisitId(visitId);
+      expect(payment!.status).toBe("created"); // never settled
+    });
+
+    it("stale_pricing_version CAS: refuses and records nothing when the expected total/tip no longer matches the row's current values", async () => {
+      const { repo, gateway, visitId } = await seedVisitWithTipSelected();
+      const payment = (await repo.findServiceVisitPaymentByVisitId(visitId))!;
+
+      await expect(
+        recordExternalPayment(repo, gateway, {
+          serviceVisitId: visitId,
+          paymentMethodType: "zelle",
+          externalPaymentReference: null,
+          ...ACTOR,
+          expectedRevisionNumber: 0,
+          expectedTotalAmount: (payment.totalAmount ?? 0) + 1, // deliberately stale
+          expectedTipAmount: payment.tipAmount ?? 0,
+        })
+      ).rejects.toThrow("The total changed since you reviewed it");
+
+      const after = await repo.findServiceVisitPaymentByVisitId(visitId);
+      expect(after!.status).toBe("created"); // never settled against the stale figure
+    });
+
+    it("stale_pricing_version CAS: refuses when the expected revisionNumber no longer matches (a revision already landed)", async () => {
+      const { repo, gateway, visitId } = await seedVisitWithTipSelected();
+      const payment = (await repo.findServiceVisitPaymentByVisitId(visitId))!;
+
+      await expect(
+        recordExternalPayment(repo, gateway, {
+          serviceVisitId: visitId,
+          paymentMethodType: "zelle",
+          externalPaymentReference: null,
+          ...ACTOR,
+          expectedRevisionNumber: 1, // stale — the row is still at revision 0
+          expectedTotalAmount: payment.totalAmount ?? 0,
+          expectedTipAmount: payment.tipAmount ?? 0,
+        })
+      ).rejects.toThrow("The total changed since you reviewed it");
+    });
+
+    it("matching CAS values settle normally — the compare-and-swap never blocks a correct, unraced call", async () => {
+      const { repo, gateway, visitId } = await seedVisitWithTipSelected();
+      const payment = (await repo.findServiceVisitPaymentByVisitId(visitId))!;
+
+      await recordExternalPayment(repo, gateway, {
+        serviceVisitId: visitId,
+        paymentMethodType: "zelle",
+        externalPaymentReference: null,
+        ...ACTOR,
+        expectedRevisionNumber: 0,
+        expectedTotalAmount: payment.totalAmount ?? 0,
+        expectedTipAmount: payment.tipAmount ?? 0,
+      });
+
+      const after = await repo.findServiceVisitPaymentByVisitId(visitId);
+      expect(after!.status).toBe("paid");
+    });
+  });
+
   describe("money-path integrity: payment settlement + financial audit are atomic", () => {
     it("a successful recording produces exactly one financial_audit_log row with the correct actor, in the same call that settles the payment", async () => {
       const { repo, state, gateway, visitId } = await seedVisitWithTipSelected();

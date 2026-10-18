@@ -79,10 +79,29 @@ export type SendFinalTotalReadyImmediatelyResult =
  */
 export async function sendFinalTotalReadyImmediately(
   deps: SendFinalTotalReadyImmediatelyDeps,
-  params: { serviceVisitId: string; customerId: string; visitStartAtUtc: Date | null; timezone: string; totalAmount: number }
+  params: {
+    serviceVisitId: string;
+    customerId: string;
+    visitStartAtUtc: Date | null;
+    timezone: string;
+    totalAmount: number;
+    /** service_visit_pricing.revisionNumber — 0 for every visit that has never been through start_visit_pricing_revision(). */
+    revisionNumber: number;
+  }
 ): Promise<SendFinalTotalReadyImmediatelyResult> {
   const now = deps.now?.() ?? new Date();
-  const idempotencyKey = `${params.customerId}:${params.serviceVisitId}:final_total_ready:email:${params.totalAmount.toFixed(2)}`;
+  // Backward-compatible: a never-revised visit (revisionNumber 0 — the
+  // default for every pre-existing row) keeps the EXACT original,
+  // amount-based key format, so deduplication against already-sent
+  // notifications is unaffected by this change. Only once a visit has
+  // genuinely been through a revision does the key become revision-scoped
+  // — exactly where the amount-based key's two failure modes (same amount
+  // after a scope-only change; price returning to a previously-sent figure)
+  // actually occur, since neither is possible before a revision exists.
+  const idempotencyKey =
+    params.revisionNumber > 0
+      ? `${params.customerId}:${params.serviceVisitId}:final_total_ready:email:revision:${params.revisionNumber}`
+      : `${params.customerId}:${params.serviceVisitId}:final_total_ready:email:${params.totalAmount.toFixed(2)}`;
 
   const insertResult = await deps.repo.insertServiceVisitNotification({
     serviceVisitId: params.serviceVisitId,

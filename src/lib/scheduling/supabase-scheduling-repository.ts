@@ -216,6 +216,7 @@ function toServiceVisitPricingRow(row: Record<string, unknown>): ServiceVisitPri
     requiresCustomerApproval: row.requires_customer_approval as boolean,
     confirmedAt: row.confirmed_at ? new Date(row.confirmed_at as string) : null,
     confirmedBy: (row.confirmed_by as string | null) ?? null,
+    revisionNumber: Number(row.revision_number ?? 0),
   };
 }
 
@@ -1304,6 +1305,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
             price_status: row.priceStatus,
             requires_customer_approval: row.requiresCustomerApproval,
             previously_approved_amount: row.previouslyApprovedAmount,
+            ...(row.revisionNumber !== undefined ? { revision_number: row.revisionNumber } : {}),
           },
           { onConflict: "service_visit_id" }
         )
@@ -1363,6 +1365,29 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         .maybeSingle();
       if (error) throw new Error(`[scheduling] service_visit_pricing confirm failed: ${error.message}`);
       return data ? toServiceVisitPricingRow(data) : null;
+    },
+
+    async startVisitPricingRevision(input) {
+      const { data, error } = await supabase.rpc("start_visit_pricing_revision", {
+        p_service_visit_id: input.serviceVisitId,
+        p_actor_admin_user_id: input.actorAdminUserId,
+        p_actor_role: input.actorRole,
+        p_reason: input.reason,
+        p_expected_payment_intent_id: input.expectedPaymentIntentId,
+      });
+      if (error) {
+        // The RPC raises a plain exception for each distinguishable
+        // business-rule rejection — matched by message, same convention as
+        // claim_payment_link_resend. Anything else is a genuine unexpected
+        // error.
+        if (error.message.includes("not_completed")) return { ok: false, reason: "not_completed" };
+        if (error.message.includes("pricing_not_confirmed")) return { ok: false, reason: "pricing_not_confirmed" };
+        if (error.message.includes("already_paid")) return { ok: false, reason: "already_paid" };
+        if (error.message.includes("payment_attempt_in_progress")) return { ok: false, reason: "payment_attempt_in_progress" };
+        if (error.message.includes("concurrent_modification")) return { ok: false, reason: "concurrent_modification" };
+        throw new Error(`[scheduling] start_visit_pricing_revision failed: ${error.message}`);
+      }
+      return { ok: true, pricing: toServiceVisitPricingRow(data as Record<string, unknown>) };
     },
 
     async updateServiceVisitPricingPaymentStatus(serviceVisitId, paymentStatus) {
@@ -1486,6 +1511,48 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       return toServiceVisitPaymentRow(data);
     },
 
+    async resyncServiceVisitPaymentApprovedAmount(id: string, approvedAmount: number) {
+      const { data, error } = await supabase
+        .from("service_visit_payments")
+        .update({ approved_amount: approvedAmount })
+        .eq("id", id)
+        .is("tip_confirmed_at", null)
+        .select()
+        .maybeSingle();
+      if (error) throw new Error(`[scheduling] service_visit_payments resyncServiceVisitPaymentApprovedAmount failed: ${error.message}`);
+      if (!data) throw new Error(`[scheduling] service_visit_payments ${id} is already frozen — cannot resync approved_amount`);
+      return toServiceVisitPaymentRow(data);
+    },
+
+    async claimVisitPaymentAttempt(input) {
+      const { data, error } = await supabase.rpc("claim_visit_payment_attempt", {
+        p_service_visit_id: input.serviceVisitId,
+        p_stripe_customer_id: input.stripeCustomerId,
+        p_stripe_payment_method_id: input.stripePaymentMethodId,
+        p_card_brand: input.cardBrand,
+        p_card_last4: input.cardLast4,
+      });
+      if (error) {
+        if (error.message.includes("revision_in_progress")) return { ok: false, reason: "revision_in_progress" };
+        if (error.message.includes("not_eligible")) return { ok: false, reason: "not_eligible" };
+        throw new Error(`[scheduling] claim_visit_payment_attempt failed: ${error.message}`);
+      }
+      return { ok: true, record: toServiceVisitPaymentRow(data as Record<string, unknown>) };
+    },
+
+    async beginVisitPaymentRetry(input) {
+      const { data, error } = await supabase.rpc("begin_visit_payment_retry", {
+        p_service_visit_id: input.serviceVisitId,
+        p_expected_old_payment_intent_id: input.expectedOldPaymentIntentId,
+      });
+      if (error) {
+        if (error.message.includes("revision_in_progress")) return { ok: false, reason: "revision_in_progress" };
+        if (error.message.includes("not_eligible")) return { ok: false, reason: "not_eligible" };
+        throw new Error(`[scheduling] begin_visit_payment_retry failed: ${error.message}`);
+      }
+      return { ok: true, record: toServiceVisitPaymentRow(data as Record<string, unknown>) };
+    },
+
     async updateServiceVisitPaymentStatus(id: string, patch, allowedFromStatuses) {
       const update: Record<string, unknown> = { status: patch.status };
       if (patch.failureCode !== undefined) update.failure_code = patch.failureCode;
@@ -1505,7 +1572,8 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
     async recordExternalServiceVisitPaymentWithAudit(
       id: string,
       patch: ServiceVisitPaymentExternalSettlementPatch,
-      audit: { actorAdminUserId: string; actorRole: string }
+      audit: { actorAdminUserId: string; actorRole: string },
+      cas?: { expectedRevisionNumber?: number | null; expectedTotalAmount?: number | null; expectedTipAmount?: number | null }
     ) {
       // Single atomic Postgres RPC — see its migration for why this
       // replaced two separate application-level writes (the settlement
@@ -1518,9 +1586,16 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
         p_external_payment_reference: patch.externalPaymentReference,
         p_actor_admin_user_id: audit.actorAdminUserId,
         p_actor_role: audit.actorRole,
+        p_expected_revision_number: cas?.expectedRevisionNumber ?? null,
+        p_expected_total_amount: cas?.expectedTotalAmount ?? null,
+        p_expected_tip_amount: cas?.expectedTipAmount ?? null,
       });
-      if (error) throw new Error(`[scheduling] record_external_visit_payment_with_audit failed: ${error.message}`);
-      return toServiceVisitPaymentRow(data);
+      if (error) {
+        if (error.message.includes("revision_in_progress")) return { ok: false, reason: "revision_in_progress" };
+        if (error.message.includes("stale_pricing_version")) return { ok: false, reason: "stale_pricing_version" };
+        throw new Error(`[scheduling] record_external_visit_payment_with_audit failed: ${error.message}`);
+      }
+      return { ok: true, record: toServiceVisitPaymentRow(data) };
     },
 
     async updateServiceVisitPaymentTaxSync(id: string, patch: ServiceVisitPaymentTaxSyncPatch) {

@@ -15,6 +15,7 @@ import {
   removeCustomChargeAction,
   removeCustomDiscountAction,
   resendFinalTotalLinkAction,
+  startVisitPricingRevisionAction,
   updateFinalScopeAction,
 } from "@/lib/admin/actions/finalize-send-actions";
 import { retryNotificationAction } from "@/lib/admin/actions/notification-actions";
@@ -27,6 +28,9 @@ import { requireAdmin } from "@/lib/admin/require-admin";
 import { computeVisitProgressStatus, formatVisitProgressStatusLabel } from "@/lib/admin/visit-progress-status";
 import { computeVisitTaxReversalStatus } from "@/lib/admin/visit-tax-reversal-status";
 import { ADD_ON_CATALOG } from "@/lib/pricing/add-ons";
+import RecordCashZellePaymentForm from "@/components/admin/RecordCashZellePaymentForm";
+import { previewServiceAmountAndTax } from "@/lib/payments/preview-service-amount-and-tax";
+import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { buildVisitPaymentQrCode } from "@/lib/payments/visit-qr-code";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { estimateDuration } from "@/lib/scheduling/duration-engine";
@@ -119,6 +123,29 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
   const bookingAuthorization = buildBookingAuthorizationEvidence(bookingOrder);
 
   const visitPayment = visit.status === "completed" ? await schedulingRepo.findServiceVisitPaymentByVisitId(visitId) : null;
+
+  // Feature 1 — "Record Cash/Zelle Payment Received": eligible whenever
+  // pricing is confirmed and there's either no payment row yet at all, or
+  // one exists but the customer never selected a tip (the exact gap this
+  // feature closes — a visit whose customer intends to pay in person and
+  // never opens /my/payments). Once a tip HAS been selected, the existing
+  // "Record External Payment" form below (unchanged) is the right tool.
+  const canRecordCashZelle =
+    visit.status === "completed" && visitPricing?.priceStatus === "confirmed" && (!visitPayment || (visitPayment.status === "created" && !visitPayment.tipSelectionType));
+  const cashZellePreview = canRecordCashZelle
+    ? await (async () => {
+        const fullVisit = await schedulingRepo.findServiceVisitById(visitId);
+        return fullVisit ? previewServiceAmountAndTax(createStripeVisitPaymentGateway(), fullVisit, visitPricing!) : null;
+      })()
+    : null;
+
+  // Feature 2 — "Revise & Resend Final Total": reopens a completed visit's
+  // pricing/payment for correction. Never available once genuinely paid —
+  // that's Issue Refund's job instead.
+  const isPaymentSettled = visitPayment?.status === "paid" || visitPayment?.status === "partially_refunded" || visitPayment?.status === "refunded";
+  const canReviseFinalTotal = visit.status === "completed" && visitPricing?.priceStatus === "confirmed" && !isPaymentSettled;
+  const isRevisionInProgress = visitPricing?.priceStatus === "revision_in_progress";
+
   const progressStatus = computeVisitProgressStatus({
     visitStatus: visit.status,
     priceStatus: visitPricing?.priceStatus ?? null,
@@ -379,7 +406,40 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
             <div className="text-xs text-muted">Final Total sent: {finalTotalAlreadySent ? "Yes" : "Not yet"}</div>
           </dl>
 
-          {visit.status === "work_finished" && (
+          {isRevisionInProgress && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+              <p className="text-sm font-semibold text-amber-900">Revision in progress</p>
+              <p className="mt-1 text-xs text-amber-800">
+                This visit&apos;s Final Total is being revised. The customer&apos;s prior tip selection and any in-progress payment attempt were reset — make your
+                adjustments below, then Finalize &amp; Send to confirm and resend the corrected total.
+              </p>
+            </div>
+          )}
+
+          {visit.status === "completed" && !isRevisionInProgress && canManageDiscounts && (
+            <div className="rounded-xl border border-border p-3">
+              {canReviseFinalTotal ? (
+                <>
+                  <p className="text-sm font-medium text-foreground">Need to correct an already-sent Final Total?</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Reopens this visit&apos;s pricing for correction (the cleaning itself stays marked completed). Cancels any live payment attempt first. Only
+                    available before the customer has paid.
+                  </p>
+                  <ActionForm action={startVisitPricingRevisionAction} className="mt-2 flex flex-wrap items-end gap-2">
+                    <input type="hidden" name="serviceVisitId" value={visitId} />
+                    <input name="reason" type="text" placeholder="Reason for revising" required className="rounded-lg border border-border px-2 py-1 text-xs" />
+                    <button type="submit" className="rounded-lg border border-amber-400 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100">
+                      Revise Final Total
+                    </button>
+                  </ActionForm>
+                </>
+              ) : (
+                <p className="text-xs text-muted">This visit has already been paid — use Issue Refund (below) to correct it instead of revising the Final Total.</p>
+              )}
+            </div>
+          )}
+
+          {(visit.status === "work_finished" || (visit.status === "completed" && isRevisionInProgress)) && (
             <>
               <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
                 <p className="text-sm font-medium text-foreground">A. No changes — use booking price</p>
@@ -591,31 +651,42 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
         </details>
       )}
 
-      {visitPayment && (
+      {(visitPayment || canRecordCashZelle) && (
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5">
           <h2 className="text-sm font-semibold text-foreground">Payment</h2>
-          <dl className="mt-2 space-y-1 text-xs text-muted">
-            <div>Approved service/extras: {formatMoney(visitPayment.approvedAmount)}</div>
-            {visitPayment.tipAmount !== null && <div>Customer tip: {formatMoney(visitPayment.tipAmount)}</div>}
-            {visitPayment.taxAmount !== null && <div>Tax: {formatMoney(visitPayment.taxAmount)}</div>}
-            {visitPayment.totalAmount !== null && <div>Total charged: {formatMoney(visitPayment.totalAmount)}</div>}
-            <div>Payment status: {visitPayment.status}</div>
-            {visitPayment.paymentMethodType && (
-              <div>
-                Method: {visitPayment.paymentMethodType === "stripe_card" ? `Card${visitPayment.cardBrand ? ` — ${visitPayment.cardBrand} •••• ${visitPayment.cardLast4}` : ""}` : visitPayment.paymentMethodType === "zelle" ? "Zelle" : "Cash"}
-              </div>
-            )}
-            {visitPayment.externalPaymentReference && <div>Reference: {visitPayment.externalPaymentReference}</div>}
-            {visitPayment.stripePaymentIntentId && <div>Stripe PaymentIntent: {visitPayment.stripePaymentIntentId}</div>}
-            {visitPayment.stripeTaxCalculationId && <div>Stripe Tax Calculation: {visitPayment.stripeTaxCalculationId}</div>}
-            {visitPayment.stripeTaxTransactionId && <div>Stripe Tax Transaction: {visitPayment.stripeTaxTransactionId}</div>}
-            <div>Tax sync status: {visitPayment.taxTransactionStatus}</div>
-            {visitPayment.taxTransactionFailureMessage && <div className="text-red-600">Tax sync issue: {visitPayment.taxTransactionFailureMessage}</div>}
-            {visitPayment.failureMessage && <div className="text-red-600">Payment failure: {visitPayment.failureMessage}</div>}
-            {visitPayment.refundedAmount > 0 && <div>Refunded: {formatMoney(visitPayment.refundedAmount)}</div>}
-          </dl>
+          {visitPayment && (
+            <dl className="mt-2 space-y-1 text-xs text-muted">
+              <div>Approved service/extras: {formatMoney(visitPayment.approvedAmount)}</div>
+              {visitPayment.tipAmount !== null && <div>Customer tip: {formatMoney(visitPayment.tipAmount)}</div>}
+              {visitPayment.taxAmount !== null && <div>Tax: {formatMoney(visitPayment.taxAmount)}</div>}
+              {visitPayment.totalAmount !== null && <div>Total charged: {formatMoney(visitPayment.totalAmount)}</div>}
+              <div>Payment status: {visitPayment.status}</div>
+              {visitPayment.paymentMethodType && (
+                <div>
+                  Method: {visitPayment.paymentMethodType === "stripe_card" ? `Card${visitPayment.cardBrand ? ` — ${visitPayment.cardBrand} •••• ${visitPayment.cardLast4}` : ""}` : visitPayment.paymentMethodType === "zelle" ? "Zelle" : "Cash"}
+                </div>
+              )}
+              {visitPayment.externalPaymentReference && <div>Reference: {visitPayment.externalPaymentReference}</div>}
+              {visitPayment.stripePaymentIntentId && <div>Stripe PaymentIntent: {visitPayment.stripePaymentIntentId}</div>}
+              {visitPayment.stripeTaxCalculationId && <div>Stripe Tax Calculation: {visitPayment.stripeTaxCalculationId}</div>}
+              {visitPayment.stripeTaxTransactionId && <div>Stripe Tax Transaction: {visitPayment.stripeTaxTransactionId}</div>}
+              <div>Tax sync status: {visitPayment.taxTransactionStatus}</div>
+              {visitPayment.taxTransactionFailureMessage && <div className="text-red-600">Tax sync issue: {visitPayment.taxTransactionFailureMessage}</div>}
+              {visitPayment.failureMessage && <div className="text-red-600">Payment failure: {visitPayment.failureMessage}</div>}
+              {visitPayment.refundedAmount > 0 && <div>Refunded: {formatMoney(visitPayment.refundedAmount)}</div>}
+            </dl>
+          )}
 
-          {visitPayment.status === "created" && visitPayment.tipSelectionType && (
+          {canRecordCashZelle && cashZellePreview && (
+            <div className="mt-3">
+              <p className="text-xs font-medium text-muted">
+                {visitPayment ? "Customer hasn't selected a tip yet — record what was actually received in person:" : "Record a payment the customer paid in person (no payment review has been started yet):"}
+              </p>
+              <RecordCashZellePaymentForm serviceVisitId={visitId} preview={cashZellePreview} />
+            </div>
+          )}
+
+          {visitPayment && visitPayment.status === "created" && visitPayment.tipSelectionType && (
             <ActionForm action={recordExternalPaymentAction} className="mt-3 flex flex-wrap items-end gap-2">
               <input type="hidden" name="serviceVisitId" value={visitId} />
               <select name="paymentMethodType" className="rounded-lg border border-border px-3 py-1.5 text-sm">
@@ -629,7 +700,7 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
             </ActionForm>
           )}
 
-          {visitPayment.status === "paid" && (visitPayment.taxTransactionStatus === "pending" || visitPayment.taxTransactionStatus === "failed") && (
+          {visitPayment && visitPayment.status === "paid" && (visitPayment.taxTransactionStatus === "pending" || visitPayment.taxTransactionStatus === "failed") && (
             <ActionForm action={retryTaxSyncAction} className="mt-3">
               <input type="hidden" name="serviceVisitPaymentId" value={visitPayment.id} />
               <button type="submit" className="rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-background-alt">
@@ -638,7 +709,7 @@ export default async function AdminVisitDetailPage({ params, searchParams }: Vis
             </ActionForm>
           )}
 
-          {(visitPayment.status === "paid" || visitPayment.status === "partially_refunded") && (
+          {visitPayment && (visitPayment.status === "paid" || visitPayment.status === "partially_refunded") && (
             <ActionForm action={refundPaymentAction} className="mt-3 flex flex-wrap items-end gap-2">
               <input type="hidden" name="serviceVisitId" value={visitId} />
               <input name="refundAmount" type="number" step="0.01" min="0.01" placeholder="Refund amount" required className="w-32 rounded-lg border border-border px-3 py-1.5 text-sm" />

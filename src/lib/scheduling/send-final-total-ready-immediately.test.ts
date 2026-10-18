@@ -13,6 +13,7 @@ const PARAMS = {
   visitStartAtUtc: new Date("2026-10-20T15:00:00Z"),
   timezone: "America/Chicago",
   totalAmount: 199,
+  revisionNumber: 0,
 };
 
 function buildDeps(

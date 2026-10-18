@@ -11,6 +11,18 @@ export interface RecordExternalPaymentInput {
   /** Attributed in the same transaction as the payment settlement itself — see recordExternalServiceVisitPaymentWithAudit. */
   actorAdminUserId: string;
   actorRole: string;
+  /**
+   * Supplied ONLY by recordCashOrZellePayment (see
+   * record-cash-or-zelle-payment.ts) — folded into the same settling
+   * UPDATE as a compare-and-swap, so a concurrent tip change or revision
+   * start between that caller's own validation and this call can only
+   * ever produce a refusal, never a stale amount recorded as paid. Every
+   * other caller omits this entirely and gets the exact original,
+   * unconditional behavior.
+   */
+  expectedRevisionNumber?: number;
+  expectedTotalAmount?: number;
+  expectedTipAmount?: number;
 }
 
 /**
@@ -42,12 +54,24 @@ export async function recordExternalPayment(repo: SchedulingRepository, gateway:
 
   // Phase 1 — the payment fact AND its financial-audit actor record,
   // atomically. Commits unconditionally (both or neither), regardless of
-  // what happens to the tax-transaction attempt below.
-  const settled = await repo.recordExternalServiceVisitPaymentWithAudit(
+  // what happens to the tax-transaction attempt below. Also acquires the
+  // shared visit_payment_claim advisory lock and (when `cas` fields are
+  // supplied — recordCashOrZellePayment only) folds a revision-number +
+  // total/tip-amount compare-and-swap into this same atomic write — see
+  // the repo method's own doc comment.
+  const result = await repo.recordExternalServiceVisitPaymentWithAudit(
     payment.id,
     { paymentMethodType: input.paymentMethodType, externalPaymentReference: input.externalPaymentReference },
-    { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole }
+    { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole },
+    { expectedRevisionNumber: input.expectedRevisionNumber, expectedTotalAmount: input.expectedTotalAmount, expectedTipAmount: input.expectedTipAmount }
   );
+  if (!result.ok) {
+    if (result.reason === "revision_in_progress") {
+      throw new InvalidVisitStateError(`service_visit ${input.serviceVisitId}'s total is currently being revised — check back shortly once the new Final Total is confirmed`);
+    }
+    throw new InvalidVisitStateError("The total changed since you reviewed it — please refresh and recheck the amount.");
+  }
+  const settled = result.record;
 
   // Best-effort — issuing the invoice/receipt paperwork must never be
   // mistaken for (or roll back) the payment itself, which already

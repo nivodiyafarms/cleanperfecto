@@ -4,7 +4,7 @@ import { createFakeBookingRepository } from "@/lib/booking/test-support/fake-boo
 import { createFakeVisitPaymentGateway } from "./test-support/fake-visit-payment-gateway";
 import { prepareVisitPaymentReview } from "./prepare-visit-payment-review";
 import { selectVisitTip } from "./select-visit-tip";
-import { createVisitPaymentIntent, DeadPaymentIntentError } from "./create-visit-payment-intent";
+import { createVisitPaymentIntent } from "./create-visit-payment-intent";
 import type { NewServiceVisitRow } from "@/lib/scheduling/domain-types";
 
 const NEW_VISIT: NewServiceVisitRow = {
@@ -200,20 +200,85 @@ describe("createVisitPaymentIntent", () => {
     }
   });
 
-  it("retry lifecycle: a definitively dead PaymentIntent (canceled) throws DeadPaymentIntentError rather than silently returning a dead client_secret or creating a duplicate charge", async () => {
+  it("retry lifecycle: a definitively dead PaymentIntent (canceled) creates a genuinely NEW replacement via the claimed retry window, never reusing the dead one or creating a duplicate", async () => {
     const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
     const { repo: bookingRepo } = createFakeBookingRepository({
       customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
     });
     const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
     if (first.outcome !== "ready") throw new Error("expected ready");
+    const firstIntentId = [...gatewayState.paymentIntents.keys()][0];
 
     for (const record of gatewayState.paymentIntents.values()) record.status = "canceled";
 
+    const second = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    expect(second.outcome).toBe("ready");
+    expect(gatewayState.createPaymentIntentCallCount).toBe(2); // a genuinely new replacement intent, not the dead one reused
+
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.stripePaymentIntentId).not.toBe(firstIntentId);
+    expect(payment!.stripePaymentIntentId).not.toBeNull();
+    expect(payment!.status).toBe("processing");
+  });
+
+  it("retry lifecycle: the replacement intent is created with a freshly-rotated idempotency key, never the dead intent's original key — a real bug found via Preview + Stripe test-mode verification (Stripe's own idempotency cache would otherwise replay the dead intent's original response)", async () => {
+    const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    if (first.outcome !== "ready") throw new Error("expected ready");
+    const originalIdempotencyKey = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!.idempotencyKey;
+
+    for (const record of gatewayState.paymentIntents.values()) record.status = "canceled";
+    await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+
+    expect(gatewayState.lastCreatePaymentIntentInput?.idempotencyKey).not.toBe(originalIdempotencyKey);
+    const payment = await schedulingRepo.findServiceVisitPaymentByVisitId(visitId);
+    expect(payment!.idempotencyKey).toBe(gatewayState.lastCreatePaymentIntentInput?.idempotencyKey);
+  });
+
+  it("retry lifecycle: a visit mid-revision is refused before ever reaching the retry claim or Stripe, never creating a replacement intent", async () => {
+    const { schedulingRepo, gateway, gatewayState, schedulingState, visitId } = await seedVisitWithSelectedTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    if (first.outcome !== "ready") throw new Error("expected ready");
+    for (const record of gatewayState.paymentIntents.values()) record.status = "canceled";
+
+    const pricing = schedulingState.servicePricingByVisitId.get(visitId)!;
+    schedulingState.servicePricingByVisitId.set(visitId, { ...pricing, priceStatus: "revision_in_progress" });
+
     await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" })).rejects.toThrow(
-      DeadPaymentIntentError
+      "pricing is not confirmed"
     );
-    expect(gatewayState.createPaymentIntentCallCount).toBe(1); // still only the original — no duplicate-charge attempt
+    expect(gatewayState.createPaymentIntentCallCount).toBe(1); // no replacement intent was ever created
+  });
+
+  it("retry lifecycle: the retry claim itself is refused (not_available_right_now) if a revision starts in the narrow race after the pricing check but before the claim commits", async () => {
+    const { schedulingRepo, gateway, gatewayState, visitId } = await seedVisitWithSelectedTip(179);
+    const { repo: bookingRepo } = createFakeBookingRepository({
+      customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+    });
+    const first = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visitId, customerId: "customer-1" });
+    if (first.outcome !== "ready") throw new Error("expected ready");
+    const payment = (await schedulingRepo.findServiceVisitPaymentByVisitId(visitId))!;
+
+    // Unit-level: beginVisitPaymentRetry itself refuses once mid-revision —
+    // the exact guard createVisitPaymentIntent's retry branch relies on for
+    // the narrow window after its own earlier pricing.priceStatus check.
+    const claim = await schedulingRepo.beginVisitPaymentRetry({ serviceVisitId: visitId, expectedOldPaymentIntentId: payment.stripePaymentIntentId });
+    expect(claim.ok).toBe(true);
+    const revision = await schedulingRepo.startVisitPricingRevision({
+      serviceVisitId: visitId,
+      actorAdminUserId: "admin-1",
+      actorRole: "owner_admin",
+      reason: "test",
+      expectedPaymentIntentId: null,
+    });
+    expect(revision).toEqual({ ok: false, reason: "payment_attempt_in_progress" });
+    expect(gatewayState.createPaymentIntentCallCount).toBe(1);
   });
 
   describe("safe retry when financial facts froze but PaymentIntent creation never happened", () => {
@@ -346,6 +411,53 @@ describe("createVisitPaymentIntent", () => {
       // which was frozen as "pm_1" (a card PM) in seedFrozenWithNoIntent —
       // there is no code path here that could substitute a Link/non-card id.
       expect(gatewayState.lastCreatePaymentIntentInput?.stripePaymentMethodId).toBe("pm_1");
+    });
+
+    it("also recovers when the claim (not the legacy freeze) left the row at status='processing' with no intent id — a real bug found via code review: claimVisitPaymentAttempt now sets status='processing' atomically with the freeze, so the safe-retry guard must accept that status too, or the row becomes permanently stuck behind 'already settled through another method'", async () => {
+      const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+      const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);
+      await schedulingRepo.upsertServiceVisitPricing({
+        serviceVisitId: visit.id,
+        pricingVersion: "v1",
+        pricingSnapshot: {},
+        baseAmount: 185,
+        addOnIds: [],
+        addOnAmount: 0,
+        totalAmount: 185,
+        amountDueFromCustomer: 185,
+        priceStatus: "estimated",
+        requiresCustomerApproval: false,
+        previouslyApprovedAmount: null,
+      });
+      await schedulingRepo.confirmServiceVisitPricing(visit.id, "admin:1");
+      state.serviceVisitsById.set(visit.id, { ...(await schedulingRepo.findServiceVisitById(visit.id))!, status: "completed" });
+
+      const { gateway } = createFakeVisitPaymentGateway({ failNextPaymentIntentCreate: true });
+      await prepareVisitPaymentReview(schedulingRepo, gateway, visit.id);
+      await selectVisitTip(schedulingRepo, gateway, { serviceVisitId: visit.id, tipSelectionType: "percentage_15" });
+
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      // First call: the claim commits (status -> 'processing', tip_confirmed_at
+      // set), THEN gateway.createPaymentIntent throws (simulated transient
+      // Stripe failure) — leaving the row at status='processing' with no
+      // intent id, exactly the state the fix must recover from.
+      await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visit.id, customerId: "customer-1" })).rejects.toThrow();
+      const stuck = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+      expect(stuck!.status).toBe("processing");
+      expect(stuck!.stripePaymentIntentId).toBeNull();
+      expect(stuck!.tipConfirmedAt).not.toBeNull();
+
+      // Second call (Stripe now succeeds): must recover via the SAME
+      // already-frozen fields, never throw "already settled", never
+      // require a dead intent id to replace (there isn't one).
+      const outcome = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visit.id, customerId: "customer-1" });
+      expect(outcome.outcome).toBe("ready");
+      const recovered = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+      expect(recovered!.status).toBe("processing");
+      expect(recovered!.stripePaymentIntentId).not.toBeNull();
     });
   });
 });
