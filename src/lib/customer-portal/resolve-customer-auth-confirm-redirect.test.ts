@@ -74,4 +74,27 @@ describe("resolveCustomerAuthConfirmRedirectPath", () => {
       `/my/activate?next=%2Fmy%2Fpayments%3Fvisit%3D${REAL_VISIT_ID}`
     );
   });
+
+  const REAL_INVITATION_ID = "11684d00-6ba3-4978-9660-518defd828c4";
+
+  it("redirects a FAILED verification whose destination is an agreed-quote invitation to the branded agreed-quote expired-link page", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: `/my/agreed-quote/${REAL_INVITATION_ID}` })).toBe(
+      `/my/agreed-quote-link-expired?invitation=${REAL_INVITATION_ID}`
+    );
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "missing_token", next: `/my/agreed-quote/${REAL_INVITATION_ID}` })).toBe(
+      `/my/agreed-quote-link-expired?invitation=${REAL_INVITATION_ID}`
+    );
+  });
+
+  it("does NOT redirect to the agreed-quote expired-link page when the invitation value isn't actually UUID-shaped", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "verify_failed", next: "/my/agreed-quote/not-a-real-id" })).toBe(
+      "/my/login?next=%2Fmy%2Fagreed-quote%2Fnot-a-real-id"
+    );
+  });
+
+  it("still succeeds to /my/activate on the success path even when next targets an agreed-quote invitation", () => {
+    expect(resolveCustomerAuthConfirmRedirectPath({ status: "success", next: `/my/agreed-quote/${REAL_INVITATION_ID}` })).toBe(
+      `/my/activate?next=%2Fmy%2Fagreed-quote%2F${REAL_INVITATION_ID}`
+    );
+  });
 });

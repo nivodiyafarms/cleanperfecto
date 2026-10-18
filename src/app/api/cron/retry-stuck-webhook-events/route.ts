@@ -6,6 +6,7 @@ import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-
 import { retryStuckWebhookEvents } from "@/lib/booking/webhook/retry-stuck-webhook-events";
 import { isCronRequestAuthorized } from "@/lib/notifications/cron-auth";
 import { createSupabaseConsentRepository } from "@/lib/consent/consent-repository";
+import { createSupabaseAgreedQuoteInvitationRepository } from "@/lib/instant-quote/supabase-agreed-quote-invitation-repository";
 import { createStripeVisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 
@@ -44,8 +45,9 @@ async function handleRetry(request: NextRequest): Promise<NextResponse> {
   const schedulingRepo = createSupabaseSchedulingRepository();
   const consentRepo = createSupabaseConsentRepository();
   const paymentGateway = createStripeVisitPaymentGateway();
+  const agreedQuoteInvitationRepo = createSupabaseAgreedQuoteInvitationRepository();
 
-  const result = await retryStuckWebhookEvents(stripe, repo, schedulingRepo, consentRepo, paymentGateway);
+  const result = await retryStuckWebhookEvents(stripe, repo, schedulingRepo, consentRepo, paymentGateway, new Date(), 20, undefined, agreedQuoteInvitationRepo);
   return NextResponse.json({ ok: true, ...result });
 }
 

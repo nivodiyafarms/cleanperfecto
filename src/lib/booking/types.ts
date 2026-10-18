@@ -77,6 +77,8 @@ export interface BookableQuote {
   customerId: string;
   cleaningType: "standard" | "deep" | "move";
   baseInput: CalculationInput;
+  /** The frozen CalculationResult captured at quote time — strictly additive (existing callers read only baseInput). Needed by createAgreedQuoteBookingCheckout, which takes an agreed-quote's price verbatim rather than recomputing it via calculateEstimate. */
+  pricingSnapshotResult: CalculationResult;
   emailNormalized: string | null;
   phoneNormalized: string | null;
   serviceAddressIdentity: string | null;

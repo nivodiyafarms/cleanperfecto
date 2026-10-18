@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import type { AgreedQuoteInvitationRepository } from "@/lib/instant-quote/agreed-quote-invitation-repository";
 import { bootstrapRecurringVisitPlansFromDirectVisit } from "@/lib/scheduling/bootstrap-recurring-visit-plans-from-direct-visit";
 import { createRequestedVisitFromBooking } from "@/lib/scheduling/create-requested-visit-from-booking";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
@@ -116,7 +117,8 @@ async function handleSetupSessionCompleted(
   session: Stripe.Checkout.Session,
   bookingOrderId: string,
   schedulingRepo?: SchedulingRepository,
-  consentRepo?: ConsentRepository
+  consentRepo?: ConsentRepository,
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<void> {
   const setupIntentId = intentIdOf(session.setup_intent);
   if (!setupIntentId) return;
@@ -185,6 +187,27 @@ async function handleSetupSessionCompleted(
   }
 
   const changed = await repo.updateBookingOrderStatus(bookingOrderId, "awaiting_payment_method", "pending_confirmation");
+
+  // Agreed-quote invitation completion hook — run UNCONDITIONALLY on every
+  // delivery that reaches this point, never gated behind `changed`.
+  // `changed` exists only to avoid re-sending duplicate confirmation
+  // emails on a webhook retry; nesting this inside it would let a
+  // delivery that updates booking_orders but then crashes before reaching
+  // this line leave the invitation stuck at 'checkout_in_progress' forever
+  // once a retry finds `changed === false`. Deliberately NOT best-effort/
+  // swallowed: a failure here must propagate (throw) so the existing
+  // claim/process/mark-failed webhook machinery — and the
+  // retry-stuck-webhook-events cron sweep behind it — actually retries
+  // this exact delivery until it succeeds, rather than silently leaving
+  // the invitation stuck. markAgreedQuoteInvitationCompletedByBookingOrderId's
+  // own `WHERE status = 'checkout_in_progress'` makes every call here a
+  // safe no-op once already applied, and a no-op (zero rows) for the
+  // overwhelming majority of bookings that never came from an agreed
+  // quote at all.
+  if (agreedQuoteInvitationRepo) {
+    await agreedQuoteInvitationRepo.markAgreedQuoteInvitationCompletedByBookingOrderId(bookingOrderId, new Date());
+  }
+
   if (changed) {
     // Best-effort, same convention as the rest of the codebase (Promise
     // rejection here must never turn a successful setup into a failed
@@ -215,7 +238,8 @@ async function finalizeVerifiedPayment(
   bookingOrderId: string,
   schedulingRepo?: SchedulingRepository,
   consentRepo?: ConsentRepository,
-  paymentGateway?: VisitPaymentGateway
+  paymentGateway?: VisitPaymentGateway,
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<void> {
   const paymentIntentId = intentIdOf(session.payment_intent);
   let paymentMethod: Stripe.PaymentMethod | null = null;
@@ -291,6 +315,16 @@ async function finalizeVerifiedPayment(
 
   const changed = await repo.updateBookingOrderStatus(bookingOrderId, "awaiting_payment", "payment_completed");
 
+  // Same unconditional, non-best-effort completion hook as
+  // handleSetupSessionCompleted — see that function's comment for the
+  // full rationale. Placed after the status transition (never gated
+  // behind `inserted && changed`), since the plan's own crash-recovery
+  // scenario is specifically "booking_orders already updated, invitation
+  // not yet" — this ordering is what that scenario assumes.
+  if (agreedQuoteInvitationRepo) {
+    await agreedQuoteInvitationRepo.markAgreedQuoteInvitationCompletedByBookingOrderId(bookingOrderId, new Date());
+  }
+
   if (inserted && changed) {
     await sendPrepaidPackageSuccessEmails(repo, bookingOrderId).catch(() => {});
 
@@ -325,7 +359,8 @@ async function handlePaymentSessionCompleted(
   bookingOrderId: string,
   schedulingRepo?: SchedulingRepository,
   consentRepo?: ConsentRepository,
-  paymentGateway?: VisitPaymentGateway
+  paymentGateway?: VisitPaymentGateway,
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<void> {
   if (session.payment_status !== "paid") {
     // Delayed/async payment method still settling — do not activate yet.
@@ -333,7 +368,7 @@ async function handlePaymentSessionCompleted(
     await repo.updatePaymentAttemptBySessionId(session.id, { status: "processing" });
     return;
   }
-  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
+  await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway, agreedQuoteInvitationRepo);
 }
 
 /**
@@ -352,7 +387,8 @@ export async function processStripeWebhookEvent(
   schedulingRepo?: SchedulingRepository,
   consentRepo?: ConsentRepository,
   paymentGateway?: VisitPaymentGateway,
-  paymentMode: PaymentMode = resolvePaymentMode()
+  paymentMode: PaymentMode = resolvePaymentMode(),
+  agreedQuoteInvitationRepo?: AgreedQuoteInvitationRepository
 ): Promise<void> {
   // Checked once, before any dispatch — see webhook-fulfillment-guard.ts.
   // A denied decision is a safe no-op: the caller (route.ts) already
@@ -388,9 +424,9 @@ export async function processStripeWebhookEvent(
       if (!bookingOrderId) return;
 
       if (session.mode === "setup") {
-        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo);
+        await handleSetupSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, agreedQuoteInvitationRepo);
       } else if (session.mode === "payment") {
-        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
+        await handlePaymentSessionCompleted(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway, agreedQuoteInvitationRepo);
       }
       return;
     }
@@ -399,7 +435,7 @@ export async function processStripeWebhookEvent(
       const session = event.data.object;
       const bookingOrderId = bookingOrderIdFromSession(session);
       if (!bookingOrderId || session.payment_status !== "paid") return;
-      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway);
+      await finalizeVerifiedPayment(stripe, repo, session, bookingOrderId, schedulingRepo, consentRepo, paymentGateway, agreedQuoteInvitationRepo);
       return;
     }
 

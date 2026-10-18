@@ -41,6 +41,19 @@ describe("isPublicCustomerPath", () => {
     expect(isPublicCustomerPath("/my/payment-link-expired-fake")).toBe(false);
   });
 
+  it("allows the branded expired-agreed-quote-link landing page — unauthenticated by definition, same as payment-link-expired", () => {
+    expect(isPublicCustomerPath("/my/agreed-quote-link-expired")).toBe(true);
+  });
+
+  it("does NOT allow an agreed-quote-link-expired lookalike with a sub-path — exact match only", () => {
+    expect(isPublicCustomerPath("/my/agreed-quote-link-expired/anything")).toBe(false);
+    expect(isPublicCustomerPath("/my/agreed-quote-link-expired-fake")).toBe(false);
+  });
+
+  it("keeps the live agreed-quote review page behind the normal authenticated-session check — only the expired-link landing page is public", () => {
+    expect(isPublicCustomerPath("/my/agreed-quote/11684d00-6ba3-4978-9660-518defd828c4")).toBe(false);
+  });
+
   it("keeps the real protected customer portal behind the normal check", () => {
     expect(isPublicCustomerPath("/my")).toBe(false);
     expect(isPublicCustomerPath("/my/payments")).toBe(false);
