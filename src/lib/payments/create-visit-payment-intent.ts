@@ -113,22 +113,32 @@ export async function createVisitPaymentIntent(
       return { outcome: "ready", clientSecret: intent.clientSecret, totalAmount: payment.totalAmount ?? 0 };
     }
 
-    // Safe-retry: financial facts already froze successfully
-    // (the row is frozen — tip_confirmed_at is set), but the subsequent
+    // Safe-retry: financial facts already froze successfully (the row is
+    // frozen — tip_confirmed_at is set), but the subsequent
     // gateway.createPaymentIntent call itself failed before an intent id
     // could be persisted (e.g. the frozen payment method was rejected by
-    // Stripe as non-card). No live or dead intent exists to resolve here at
-    // all, so neither claim RPC applies (begin_visit_payment_retry requires
-    // status in ('processing','payment_failed'), which this row — still
-    // 'created' — structurally cannot be). This is NOT an external
-    // settlement: record_external_visit_payment_with_audit always sets
-    // status='paid' atomically in the same transaction that sets
-    // tip_confirmed_at, so status can never legitimately stay 'created'
-    // after a real external settlement. Narrowly scoped to exactly this
-    // state — never re-freezes, never recomputes any amount, never accepts
-    // a different payment method than the one already frozen on the row.
+    // Stripe as non-card, or a transient network/5xx failure). No live or
+    // dead intent exists to resolve here at all. Accepts EITHER status —
+    // 'created' is the legacy shape from before claimVisitPaymentAttempt
+    // existed (freezing used to leave status at 'created' until a separate
+    // setServiceVisitPaymentIntent call); 'processing' is what every
+    // fresh claim (claimVisitPaymentAttempt/beginVisitPaymentRetry) now
+    // leaves behind the instant it commits, BEFORE Stripe is ever called —
+    // so a failed createPaymentIntent call after a successful claim must
+    // be recoverable here too, or the row becomes permanently stuck (the
+    // claim already consumed 'created', and begin_visit_payment_retry
+    // requires status in ('processing','payment_failed') WITH a dead
+    // intent id to replace, which doesn't exist in this no-intent-at-all
+    // case). This is NOT an external settlement:
+    // record_external_visit_payment_with_audit always sets status='paid'
+    // atomically in the same transaction that sets tip_confirmed_at, so
+    // status can never legitimately be 'created'/'processing' after a real
+    // external settlement. Narrowly scoped to exactly this state — never
+    // re-freezes, never recomputes any amount, never accepts a different
+    // payment method than the one already frozen on the row.
     if (
-      payment.status === "created" &&
+      (payment.status === "created" || payment.status === "processing") &&
+      !payment.stripePaymentIntentId &&
       payment.paymentMethodType === "stripe_card" &&
       !payment.externalPaymentReference &&
       payment.stripeCustomerId &&

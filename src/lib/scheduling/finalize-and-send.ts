@@ -121,6 +121,18 @@ export async function finalizeAndSend(
   const priorApprovedAmount = pricing.previouslyApprovedAmount;
 
   pricing = await confirmVisitPricing(repo, { serviceVisitId: input.serviceVisitId, confirmedBy: input.actor });
+  // confirmVisitPricing's own repo call always resets payment_status to
+  // 'awaiting_completion' when something is due. On a FIRST Finalize & Send,
+  // completeServiceVisit's scheduled/work_finished -> completed transition
+  // (below) rolls that forward to 'awaiting_payment'. On the Revise & Resend
+  // path the visit is ALREADY 'completed' here, so that transition never
+  // fires again and completeServiceVisit's own rollup is skipped — do it
+  // directly so the rollup doesn't stay stuck at 'awaiting_completion'
+  // forever after a revision, even though a fresh payable
+  // service_visit_payments row now exists.
+  if (isRevisionInProgress && pricing.paymentStatus === "awaiting_completion") {
+    pricing = (await repo.updateServiceVisitPricingPaymentStatus(input.serviceVisitId, "awaiting_payment")) ?? pricing;
+  }
   // Skip the generic 'completed' email here — the 'final_total_ready'
   // notification enqueued below already tells the customer their cleaning
   // is complete AND gives them the one-click Final Total link, so sending

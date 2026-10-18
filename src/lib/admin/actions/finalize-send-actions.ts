@@ -47,8 +47,10 @@ export async function updateFinalScopeAction(_prevState: ActionResult | null, fo
   const repo = createSupabaseSchedulingRepository();
   const visit = await repo.findServiceVisitById(serviceVisitId);
   if (!visit) return actionError("Visit not found.");
-  if (visit.status !== "work_finished") {
-    return actionError("Final scope can only be updated after work is marked finished.");
+  const existingPricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
+  const isRevisionInProgress = visit.status === "completed" && existingPricing?.priceStatus === "revision_in_progress";
+  if (visit.status !== "work_finished" && !isRevisionInProgress) {
+    return actionError("Final scope can only be updated after work is marked finished (or mid-revision — see Revise Final Total).");
   }
 
   try {

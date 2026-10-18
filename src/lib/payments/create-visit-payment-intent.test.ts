@@ -412,5 +412,52 @@ describe("createVisitPaymentIntent", () => {
       // there is no code path here that could substitute a Link/non-card id.
       expect(gatewayState.lastCreatePaymentIntentInput?.stripePaymentMethodId).toBe("pm_1");
     });
+
+    it("also recovers when the claim (not the legacy freeze) left the row at status='processing' with no intent id — a real bug found via code review: claimVisitPaymentAttempt now sets status='processing' atomically with the freeze, so the safe-retry guard must accept that status too, or the row becomes permanently stuck behind 'already settled through another method'", async () => {
+      const { repo: schedulingRepo, state } = createFakeSchedulingRepository();
+      const visit = await schedulingRepo.insertServiceVisit(NEW_VISIT);
+      await schedulingRepo.upsertServiceVisitPricing({
+        serviceVisitId: visit.id,
+        pricingVersion: "v1",
+        pricingSnapshot: {},
+        baseAmount: 185,
+        addOnIds: [],
+        addOnAmount: 0,
+        totalAmount: 185,
+        amountDueFromCustomer: 185,
+        priceStatus: "estimated",
+        requiresCustomerApproval: false,
+        previouslyApprovedAmount: null,
+      });
+      await schedulingRepo.confirmServiceVisitPricing(visit.id, "admin:1");
+      state.serviceVisitsById.set(visit.id, { ...(await schedulingRepo.findServiceVisitById(visit.id))!, status: "completed" });
+
+      const { gateway } = createFakeVisitPaymentGateway({ failNextPaymentIntentCreate: true });
+      await prepareVisitPaymentReview(schedulingRepo, gateway, visit.id);
+      await selectVisitTip(schedulingRepo, gateway, { serviceVisitId: visit.id, tipSelectionType: "percentage_15" });
+
+      const { repo: bookingRepo } = createFakeBookingRepository({
+        customers: { "customer-1": { id: "customer-1", name: "Jane", email: "jane@example.com", phone: null, stripeCustomerId: "cus_1", stripeDefaultPaymentMethodId: "pm_1", stripePaymentMethodBrand: "visa", stripePaymentMethodLast4: "4242" } },
+      });
+
+      // First call: the claim commits (status -> 'processing', tip_confirmed_at
+      // set), THEN gateway.createPaymentIntent throws (simulated transient
+      // Stripe failure) — leaving the row at status='processing' with no
+      // intent id, exactly the state the fix must recover from.
+      await expect(createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visit.id, customerId: "customer-1" })).rejects.toThrow();
+      const stuck = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+      expect(stuck!.status).toBe("processing");
+      expect(stuck!.stripePaymentIntentId).toBeNull();
+      expect(stuck!.tipConfirmedAt).not.toBeNull();
+
+      // Second call (Stripe now succeeds): must recover via the SAME
+      // already-frozen fields, never throw "already settled", never
+      // require a dead intent id to replace (there isn't one).
+      const outcome = await createVisitPaymentIntent(schedulingRepo, bookingRepo, gateway, { serviceVisitId: visit.id, customerId: "customer-1" });
+      expect(outcome.outcome).toBe("ready");
+      const recovered = await schedulingRepo.findServiceVisitPaymentByVisitId(visit.id);
+      expect(recovered!.status).toBe("processing");
+      expect(recovered!.stripePaymentIntentId).not.toBeNull();
+    });
   });
 });

@@ -376,4 +376,27 @@ describe("finalizeAndSend", () => {
     const notices = [...state.notifications.values()].filter((n) => n.serviceVisitId === visit.id && n.notificationType === "final_total_ready");
     expect(notices.length).toBe(1);
   });
+
+  it("Revise & Resend: the resend rolls payment_status forward to 'awaiting_payment' — a real bug found via code review: completeServiceVisit's own rollup only fires on a scheduled/work_finished->completed transition, which never happens again on a resend (the visit is already 'completed'), so without an explicit fix the rollup stays stuck at 'awaiting_completion' forever even though a fresh payable row exists", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { repo: bookingRepo } = createFakeBookingRepository();
+    const { visit } = await seedWorkFinishedVisit(repo, state);
+
+    await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    const afterFirst = await repo.findServiceVisitPricingByVisitId(visit.id);
+    expect(afterFirst!.paymentStatus).toBe("awaiting_payment"); // the normal first-send rollup
+
+    // Simulate startVisitPricingRevision's own reopening (reaching that RPC
+    // directly isn't needed to exercise this particular rollup bug) — the
+    // visit's own status stays 'completed' throughout, exactly as the real
+    // revision window does.
+    await repo.upsertServiceVisitPricing({ ...afterFirst!, priceStatus: "revision_in_progress" });
+
+    const second = await finalizeAndSend(repo, bookingRepo, { serviceVisitId: visit.id, actor: "admin:1" }, fakeNotificationDeps());
+    expect(second.alreadySent).toBe(false);
+    expect(second.pricing?.paymentStatus).toBe("awaiting_payment"); // not stuck at 'awaiting_completion'
+
+    const afterSecond = await repo.findServiceVisitPricingByVisitId(visit.id);
+    expect(afterSecond!.paymentStatus).toBe("awaiting_payment");
+  });
 });

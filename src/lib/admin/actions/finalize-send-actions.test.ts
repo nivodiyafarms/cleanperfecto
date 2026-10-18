@@ -195,6 +195,21 @@ describe("updateFinalScopeAction — cleaner cannot alter price", () => {
     expect(after?.totalAmount).toBe((before?.totalAmount ?? 0) + 30);
     expect(after?.priceStatus).not.toBe("confirmed");
   });
+
+  it("also works mid-revision (visit already 'completed', pricing 'revision_in_progress') — a real bug found via code review: this action's own pre-check was never widened with the same revision exception its sibling actions (addCustomChargeAction etc.) got, even though the admin UI renders this exact form during a revision", async () => {
+    mockRole("operations");
+    const visitId = await seedWorkFinishedVisit();
+    const confirmed = await fake.repo.confirmServiceVisitPricing(visitId, "admin:1");
+    const current = fake.state.serviceVisitsById.get(visitId)!;
+    fake.state.serviceVisitsById.set(visitId, { ...current, status: "completed", completedAt: new Date() });
+    await fake.repo.upsertServiceVisitPricing({ ...confirmed!, priceStatus: "revision_in_progress" });
+
+    const result = await updateFinalScopeAction(null, formData({ serviceVisitId: visitId, addOnIds: ["inside_oven"] }));
+
+    expect(result.ok).toBe(true);
+    const after = await fake.repo.findServiceVisitPricingByVisitId(visitId);
+    expect(after?.totalAmount).toBe((confirmed!.totalAmount ?? 0) + 30);
+  });
 });
 
 describe("finalizeAndSendAction", () => {

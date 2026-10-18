@@ -54,8 +54,17 @@ export async function prepareVisitPaymentReview(repo: SchedulingRepository, gate
 
   const pricing = await repo.findServiceVisitPricingByVisitId(serviceVisitId);
   if (pricing?.priceStatus === "revision_in_progress") {
+    // Deliberately no "service_visit " prefix and no raw id embedded here —
+    // unlike most InvalidVisitStateError messages in this domain, THIS one
+    // is customer-facing (via getVisitPaymentReviewAction's
+    // sanitizeVisitStateMessage, which replaces any message starting with
+    // "service_visit "/containing a UUID with a generic fallback) as well
+    // as admin-facing (via recordCashOrZellePayment's own early check).
+    // Embedding either would make the customer version silently collapse
+    // to the generic "we couldn't process that" text, defeating the point
+    // of writing this specific copy.
     throw new InvalidVisitStateError(
-      `service_visit ${serviceVisitId}'s total is currently being revised — check back shortly once the new Final Total is confirmed`
+      "This visit's total is currently being revised — check back shortly once the new Final Total is confirmed."
     );
   }
   if (!pricing || pricing.priceStatus !== "confirmed") {
