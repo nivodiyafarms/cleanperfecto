@@ -925,25 +925,125 @@ export function createFakeSchedulingRepository(
           return { visitId: plan.serviceVisitId, alreadyLinked: true };
         }
 
-        const visit = await repo.insertServiceVisit({
-          customerId: input.customerId,
-          quoteRequestId: null,
-          bookingOrderId: null,
-          prepaidPackageId: input.prepaidPackageId,
-          recurringScheduleId: plan.recurringScheduleId,
-          visitNumber: plan.visitNumber,
-          cleaningType: input.cleaningType,
-          frequency: null,
-          requestedStartAt: input.requestedStartAt,
-          timezone: input.timezone,
-          serviceAddressLine1: input.serviceAddressLine1,
-          serviceAddressLine2: input.serviceAddressLine2,
-          serviceCity: input.serviceCity,
-          serviceState: input.serviceState,
-          serviceAddressIdentity: input.serviceAddressIdentity,
-        });
-        recurringVisitPlansById.set(plan.id, { ...plan, status: "linked", serviceVisitId: visit.id });
-        return { visitId: visit.id, alreadyLinked: false };
+        // From here on, every mutation is all-or-nothing — mirrors the
+        // real claim_and_schedule_recurring_visit_plan() Postgres function,
+        // where this is one transaction: a thrown error (e.g. a simulated
+        // failure injected by a test, or a genuine transient error) rolls
+        // every one of these back, so a retry sees the plan still
+        // 'planned' and redoes the full claim cleanly rather than resuming
+        // a partial state or permanently skipping a step.
+        const rollbacks: Array<() => void> = [];
+        try {
+          const visit = await repo.insertServiceVisit({
+            customerId: input.customerId,
+            quoteRequestId: null,
+            bookingOrderId: null,
+            prepaidPackageId: input.prepaidPackageId,
+            recurringScheduleId: plan.recurringScheduleId,
+            visitNumber: plan.visitNumber,
+            cleaningType: input.cleaningType,
+            frequency: null,
+            requestedStartAt: input.requestedStartAt,
+            timezone: input.timezone,
+            serviceAddressLine1: input.serviceAddressLine1,
+            serviceAddressLine2: input.serviceAddressLine2,
+            serviceCity: input.serviceCity,
+            serviceState: input.serviceState,
+            serviceAddressIdentity: input.serviceAddressIdentity,
+          });
+          rollbacks.push(() => {
+            serviceVisitsById.delete(visit.id);
+          });
+
+          recurringVisitPlansById.set(plan.id, { ...plan, status: "linked", serviceVisitId: visit.id });
+          rollbacks.push(() => {
+            recurringVisitPlansById.set(plan.id, plan);
+          });
+
+          const historyRow: NewRecurringVisitPlanHistoryRow = {
+            recurringVisitPlanId: plan.id,
+            recurringScheduleId: plan.recurringScheduleId,
+            visitNumber: plan.visitNumber,
+            previousPlannedDate: plan.plannedDate,
+            previousPlannedStartTime: plan.plannedStartTime,
+            previousStatus: plan.status,
+            newPlannedDate: plan.plannedDate,
+            newPlannedStartTime: plan.plannedStartTime,
+            newStatus: "linked",
+            changeReason: "linked_to_visit",
+          };
+          await repo.insertRecurringVisitPlanHistory(historyRow);
+          rollbacks.push(() => {
+            const idx = recurringVisitPlanHistory.indexOf(historyRow);
+            if (idx !== -1) recurringVisitPlanHistory.splice(idx, 1);
+          });
+
+          const eventRow: ServiceVisitEventRow = {
+            serviceVisitId: visit.id,
+            eventType: "requested",
+            actor: "system",
+            previousState: null,
+            newState: {
+              requestedStartAt: input.requestedStartAt.toISOString(),
+              recurringVisitPlanId: plan.id,
+              prepaidPackageId: input.prepaidPackageId,
+            },
+            notes: null,
+          };
+          await repo.insertServiceVisitEvent(eventRow);
+          rollbacks.push(() => {
+            const idx = events.indexOf(eventRow);
+            if (idx !== -1) events.splice(idx, 1);
+          });
+
+          // Package-plan sync, inlined exactly like the SQL function (not
+          // routed through sync-linked-recurring-package-plan.ts, which
+          // stays reserved for its other, non-atomic callers) — a no-op
+          // when no package_visit_plans row links to this plan, or when
+          // the two sides already agree.
+          const linkedPackagePlan = [...packageVisitPlansById.values()].find((p) => p.recurringVisitPlanId === plan.id);
+          if (
+            linkedPackagePlan &&
+            (linkedPackagePlan.plannedDate !== plan.plannedDate ||
+              linkedPackagePlan.plannedStartTime !== plan.plannedStartTime ||
+              linkedPackagePlan.status !== "linked" ||
+              linkedPackagePlan.serviceVisitId !== visit.id)
+          ) {
+            const packageHistoryRow: NewPackageVisitPlanHistoryRow = {
+              packageVisitPlanId: linkedPackagePlan.id,
+              prepaidPackageId: linkedPackagePlan.prepaidPackageId,
+              visitNumber: linkedPackagePlan.visitNumber,
+              previousPlannedDate: linkedPackagePlan.plannedDate,
+              previousPlannedStartTime: linkedPackagePlan.plannedStartTime,
+              previousStatus: linkedPackagePlan.status,
+              newPlannedDate: plan.plannedDate,
+              newPlannedStartTime: plan.plannedStartTime,
+              newStatus: "linked",
+              changeReason: "linked_to_visit",
+              packageAmendmentId: null,
+            };
+            await repo.insertPackageVisitPlanHistory(packageHistoryRow);
+            rollbacks.push(() => {
+              const idx = packageVisitPlanHistory.indexOf(packageHistoryRow);
+              if (idx !== -1) packageVisitPlanHistory.splice(idx, 1);
+            });
+
+            await repo.updatePackageVisitPlan(linkedPackagePlan.id, {
+              plannedDate: plan.plannedDate,
+              plannedStartTime: plan.plannedStartTime,
+              status: "linked",
+              serviceVisitId: visit.id,
+            });
+            rollbacks.push(() => {
+              packageVisitPlansById.set(linkedPackagePlan.id, linkedPackagePlan);
+            });
+          }
+
+          return { visitId: visit.id, alreadyLinked: false };
+        } catch (err) {
+          for (const rollback of rollbacks.reverse()) rollback();
+          throw err;
+        }
       });
     },
 
