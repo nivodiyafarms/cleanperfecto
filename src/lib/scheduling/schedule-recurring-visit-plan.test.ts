@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
+import { InvalidVisitStateError } from "./errors";
 import { planRecurringVisitDates } from "./plan-recurring-visit-dates";
 import { scheduleRecurringVisitPlan } from "./schedule-recurring-visit-plan";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
@@ -53,6 +54,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -85,6 +87,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -103,6 +106,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -121,6 +125,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const first = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -134,6 +139,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const second = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -189,6 +195,7 @@ describe("scheduleRecurringVisitPlan", () => {
     for (let i = 0; i < 4; i++) {
       const { visitId, prepaidPackageId } = await scheduleRecurringVisitPlan(repo, {
         recurringVisitPlanId: plans[i].id,
+        recurringScheduleId: schedule.id,
         customerId: "customer-1",
         cleaningType: "standard",
         serviceAddressLine1: null,
@@ -220,6 +227,7 @@ describe("scheduleRecurringVisitPlan", () => {
     const fifthPlan = remainingPlans.find((p) => p.visitNumber === 5)!;
     const fifth = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: fifthPlan.id,
+      recurringScheduleId: schedule.id,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -229,5 +237,220 @@ describe("scheduleRecurringVisitPlan", () => {
       serviceAddressIdentity: null,
     });
     expect(fifth.prepaidPackageId).toBeNull();
+  });
+
+  it("rejects when the submitted schedule/customer doesn't match the targeted plan — both at the friendly check and at the atomic claim itself", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const { schedule, plans } = await seedScheduleAndPlans(repo, null);
+
+    const otherSchedule = await repo.insertRecurringSchedule({
+      customerId: "customer-2",
+      bookingOrderId: "booking-2",
+      prepaidPackageId: null,
+      cadence: "weekly",
+      preferredDayOfWeek: 1,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-08-24",
+      supersedesId: null,
+    });
+
+    // Wrong recurringScheduleId, correct customerId.
+    await expect(
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: otherSchedule.id,
+        customerId: "customer-1",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // Correct recurringScheduleId, wrong customerId.
+    await expect(
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: schedule.id,
+        customerId: "customer-2",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // The authoritative, row-locked claim itself also rejects the mismatch —
+    // called directly here to prove the guarantee doesn't rely solely on the
+    // friendly pre-check above (which production's RPC enforces atomically
+    // under `select ... for update`; the fake mirrors that same rejection).
+    await expect(
+      repo.claimAndScheduleRecurringVisitPlan({
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: otherSchedule.id,
+        customerId: "customer-1",
+        prepaidPackageId: null,
+        cleaningType: "standard",
+        requestedStartAt: new Date("2026-08-24T15:00:00Z"),
+        timezone: "America/Chicago",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // Nothing was ever created or mutated by any of the rejected attempts.
+    const untouched = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(untouched?.status).toBe("planned");
+    expect(untouched?.serviceVisitId).toBeNull();
+  });
+
+  it("creates exactly one visit under genuinely concurrent double-submission of the same plan", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { plans } = await seedScheduleAndPlans(repo, null);
+
+    const submit = () =>
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: plans[0].recurringScheduleId,
+        customerId: "customer-1",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      });
+
+    // Two genuinely interleaved calls — not sequential awaits — racing for
+    // the same plan's row lock, the same way two simultaneous admin
+    // button-clicks (or a retried request) would.
+    const [first, second] = await Promise.all([submit(), submit()]);
+
+    expect([first.alreadyLinked, second.alreadyLinked].sort()).toEqual([false, true]);
+    expect(first.visitId).toBe(second.visitId);
+    expect(state.serviceVisitsById.size).toBe(1);
+  });
+
+  it("rolls back and retries cleanly when recurring_visit_plan_history insert fails", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { plans } = await seedScheduleAndPlans(repo, null);
+
+    const originalInsertHistory = repo.insertRecurringVisitPlanHistory.bind(repo);
+    let shouldFail = true;
+    repo.insertRecurringVisitPlanHistory = async (row) => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("Simulated failure: recurring_visit_plan_history insert");
+      }
+      return originalInsertHistory(row);
+    };
+
+    const scheduleInput = {
+      recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
+      customerId: "customer-1",
+      cleaningType: "standard" as const,
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    };
+
+    await expect(scheduleRecurringVisitPlan(repo, scheduleInput)).rejects.toThrow(
+      "Simulated failure: recurring_visit_plan_history insert"
+    );
+
+    // The failed attempt left no trace beyond the pre-existing
+    // "initial_plan" history row seeded when the plan was first
+    // generated: no visit, no linked_to_visit history, plan still planned.
+    expect(state.serviceVisitsById.size).toBe(0);
+    const historyForPlan = () => state.recurringVisitPlanHistory.filter((h) => h.recurringVisitPlanId === plans[0].id);
+    expect(historyForPlan()).toHaveLength(1);
+    expect(historyForPlan()[0].changeReason).toBe("initial_plan");
+    const afterFailure = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(afterFailure?.status).toBe("planned");
+    expect(afterFailure?.serviceVisitId).toBeNull();
+
+    const retried = await scheduleRecurringVisitPlan(repo, scheduleInput);
+    expect(retried.alreadyLinked).toBe(false);
+
+    expect(state.serviceVisitsById.size).toBe(1);
+    expect(historyForPlan()).toHaveLength(2);
+    expect(historyForPlan().find((h) => h.changeReason === "linked_to_visit")).toBeDefined();
+    expect(state.events.filter((e) => e.serviceVisitId === retried.visitId)).toHaveLength(1);
+    const afterRetry = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(afterRetry?.status).toBe("linked");
+    expect(afterRetry?.serviceVisitId).toBe(retried.visitId);
+  });
+
+  it("rolls back and retries cleanly when the service_visit_events insert fails", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { plans } = await seedScheduleAndPlans(repo, null);
+
+    const originalInsertEvent = repo.insertServiceVisitEvent.bind(repo);
+    let shouldFail = true;
+    repo.insertServiceVisitEvent = async (row) => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("Simulated failure: service_visit_events insert");
+      }
+      return originalInsertEvent(row);
+    };
+
+    const scheduleInput = {
+      recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
+      customerId: "customer-1",
+      cleaningType: "standard" as const,
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    };
+
+    await expect(scheduleRecurringVisitPlan(repo, scheduleInput)).rejects.toThrow(
+      "Simulated failure: service_visit_events insert"
+    );
+
+    // The failed attempt left no trace beyond the pre-existing
+    // "initial_plan" history row: no visit, no linked_to_visit history, no
+    // event, plan still planned — the history insert that DID succeed
+    // before the event insert threw was rolled back too (all-or-nothing).
+    expect(state.serviceVisitsById.size).toBe(0);
+    const historyForPlan = () => state.recurringVisitPlanHistory.filter((h) => h.recurringVisitPlanId === plans[0].id);
+    expect(historyForPlan()).toHaveLength(1);
+    expect(historyForPlan()[0].changeReason).toBe("initial_plan");
+    expect(state.events.length).toBe(0);
+    const afterFailure = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(afterFailure?.status).toBe("planned");
+
+    const retried = await scheduleRecurringVisitPlan(repo, scheduleInput);
+    expect(retried.alreadyLinked).toBe(false);
+
+    expect(state.serviceVisitsById.size).toBe(1);
+    expect(historyForPlan()).toHaveLength(2);
+    expect(state.events.filter((e) => e.serviceVisitId === retried.visitId)).toHaveLength(1);
+    const afterRetry = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(afterRetry?.status).toBe("linked");
+    expect(afterRetry?.serviceVisitId).toBe(retried.visitId);
+
+    // A second retry (now already linked) must not create a duplicate
+    // visit or duplicate audit rows.
+    const secondRetry = await scheduleRecurringVisitPlan(repo, scheduleInput);
+    expect(secondRetry.alreadyLinked).toBe(true);
+    expect(secondRetry.visitId).toBe(retried.visitId);
+    expect(state.serviceVisitsById.size).toBe(1);
+    expect(historyForPlan()).toHaveLength(2);
+    expect(state.events.filter((e) => e.serviceVisitId === retried.visitId)).toHaveLength(1);
   });
 });

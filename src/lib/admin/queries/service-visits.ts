@@ -124,6 +124,68 @@ export async function listServiceVisitsInRange(rangeStartUtc: Date, rangeEndUtc:
   return attachCustomerNames((data ?? []) as unknown as RawVisitRow[]);
 }
 
+/**
+ * A "planned" universal-calendar occurrence that has no real service_visit
+ * yet (recurring_visit_plans.status='planned') — a display projection,
+ * same convention as AdminScheduleVisit above. Deliberately a separate
+ * shape, not merged into AdminScheduleVisit: this isn't an operational
+ * visit at all yet, just a future calendar slot (see
+ * schedule-recurring-visit-plan.ts's own doc comment).
+ */
+export interface AdminSchedulePlannedOccurrence {
+  recurringVisitPlanId: string;
+  recurringScheduleId: string;
+  visitNumber: number;
+  plannedDate: string;
+  plannedStartTime: string;
+  customerId: string;
+  customerName: string;
+}
+
+/**
+ * Planned (never-yet-linked) recurring occurrences whose planned_date
+ * falls within [rangeStartDate, rangeEndDate) — plain calendar-date
+ * comparison, no UTC conversion needed (planned_date/planned_start_time
+ * are already stored in the schedule's own local timezone, unlike
+ * service_visits.confirmed_start_at/requested_start_at). Pure read — never
+ * creates a visit or sends anything; see scheduleRecurringVisitPlanAction
+ * for the one explicit admin action that does.
+ */
+export async function listPlannedRecurringVisitPlansInRange(rangeStartDate: string, rangeEndDate: string): Promise<AdminSchedulePlannedOccurrence[]> {
+  const supabase = createSupabaseAdminClient();
+  const { data, error } = await supabase
+    .from("recurring_visit_plans")
+    .select("id,recurring_schedule_id,customer_id,visit_number,planned_date,planned_start_time")
+    .eq("status", "planned")
+    .gte("planned_date", rangeStartDate)
+    .lt("planned_date", rangeEndDate)
+    .order("planned_date", { ascending: true });
+  if (error) {
+    throw new Error(`[admin] recurring_visit_plans range lookup failed: ${error.message}`);
+  }
+
+  const rows = data ?? [];
+  const customerIds = [...new Set(rows.map((r) => r.customer_id))];
+  const customerNameById = new Map<string, string>();
+  if (customerIds.length > 0) {
+    const { data: customers, error: custErr } = await supabase.from("customers").select("id,name").in("id", customerIds);
+    if (custErr) {
+      throw new Error(`[admin] customers lookup failed: ${custErr.message}`);
+    }
+    for (const c of customers ?? []) customerNameById.set(c.id, c.name);
+  }
+
+  return rows.map((r) => ({
+    recurringVisitPlanId: r.id,
+    recurringScheduleId: r.recurring_schedule_id,
+    visitNumber: r.visit_number,
+    plannedDate: r.planned_date,
+    plannedStartTime: r.planned_start_time,
+    customerId: r.customer_id,
+    customerName: customerNameById.get(r.customer_id) ?? "Unknown customer",
+  }));
+}
+
 /** Every visit still in 'requested' status, oldest request first — the Requests queue. */
 export async function listRequestedServiceVisits(): Promise<AdminScheduleVisit[]> {
   const supabase = createSupabaseAdminClient();

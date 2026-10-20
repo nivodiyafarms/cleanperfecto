@@ -21,8 +21,22 @@ vi.mock("@/lib/booking/supabase-booking-repository", () => ({
   createSupabaseBookingRepository: () => fakeBooking.repo,
 }));
 
+let resolveRecurringSchedulingContextResult: unknown = {
+  customerId: "customer-1",
+  cleaningType: "standard",
+  serviceAddressLine1: null,
+  serviceAddressLine2: null,
+  serviceCity: null,
+  serviceState: null,
+  serviceAddressIdentity: null,
+  timezone: "America/Chicago",
+};
+vi.mock("@/lib/admin/queries/visit-scope", () => ({
+  resolveRecurringSchedulingContext: async () => resolveRecurringSchedulingContextResult,
+}));
+
 const { requireAdmin } = await import("@/lib/admin/require-admin");
-const { editRecurringVisitDateAction, editRecurringCadenceAction, confirmVisitPricingAction } = await import("./recurring-actions");
+const { editRecurringVisitDateAction, editRecurringCadenceAction, confirmVisitPricingAction, scheduleRecurringVisitPlanAction } = await import("./recurring-actions");
 
 function mockAuthorized() {
   vi.mocked(requireAdmin).mockResolvedValue({ adminUserId: "admin-1", supabaseUserId: "user-1", role: "admin" });
@@ -46,6 +60,16 @@ function formData(entries: Record<string, string | string[]>): FormData {
 beforeEach(() => {
   fake = createFakeSchedulingRepository();
   vi.mocked(requireAdmin).mockReset();
+  resolveRecurringSchedulingContextResult = {
+    customerId: "customer-1",
+    cleaningType: "standard",
+    serviceAddressLine1: null,
+    serviceAddressLine2: null,
+    serviceCity: null,
+    serviceState: null,
+    serviceAddressIdentity: null,
+    timezone: "America/Chicago",
+  };
 });
 
 describe("editRecurringVisitDateAction", () => {
@@ -277,6 +301,165 @@ describe("confirmVisitPricingAction", () => {
   it("requires a visit id", async () => {
     mockAuthorized();
     const result = await confirmVisitPricingAction(null, formData({}));
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("scheduleRecurringVisitPlanAction", () => {
+  it("rejects when unauthorized", async () => {
+    mockUnauthorized();
+    await expect(
+      scheduleRecurringVisitPlanAction(null, formData({ recurringVisitPlanId: "p1", recurringScheduleId: "s1", customerId: "customer-1" }))
+    ).rejects.toThrow(AdminUnauthorizedError);
+  });
+
+  it("requires the plan and schedule ids", async () => {
+    mockAuthorized();
+    const result = await scheduleRecurringVisitPlanAction(null, formData({}));
+    expect(result.ok).toBe(false);
+  });
+
+  it("never trusts a client-submitted customerId — always uses the schedule's own real customer, derived server-side", async () => {
+    mockAuthorized();
+    const schedule = await fake.repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "biweekly",
+      preferredDayOfWeek: 0,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-11-01",
+      supersedesId: null,
+    });
+    const { plan } = await fake.repo.insertRecurringVisitPlan({
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      visitNumber: 2,
+      plannedDate: "2026-11-15",
+      plannedStartTime: "10:00",
+    });
+    resolveRecurringSchedulingContextResult = {
+      customerId: "customer-1",
+      cleaningType: "standard",
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+      timezone: "America/Chicago",
+    };
+
+    // A tampered/mismatched customerId in the submitted form must have no
+    // effect at all — the action doesn't even read this field.
+    const result = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "attacker-customer-id" })
+    );
+
+    expect(result.ok).toBe(true);
+    const updatedPlan = fake.state.recurringVisitPlansById.get(plan.id);
+    const visit = await fake.repo.findServiceVisitById(updatedPlan!.serviceVisitId!);
+    expect(visit?.customerId).toBe("customer-1"); // the real customer, never "attacker-customer-id"
+  });
+
+  it("turns a planned calendar occurrence into a real 'requested' service_visit — the admin Schedule calendar's 'Schedule this visit'", async () => {
+    mockAuthorized();
+    const schedule = await fake.repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "biweekly",
+      preferredDayOfWeek: 0,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-11-01",
+      supersedesId: null,
+    });
+    const { plan } = await fake.repo.insertRecurringVisitPlan({
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      visitNumber: 2,
+      plannedDate: "2026-11-15",
+      plannedStartTime: "10:00",
+    });
+
+    const result = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "customer-1" })
+    );
+
+    expect(result.ok).toBe(true);
+    const updatedPlan = fake.state.recurringVisitPlansById.get(plan.id);
+    expect(updatedPlan?.status).toBe("linked");
+    expect(updatedPlan?.serviceVisitId).toBeTruthy();
+    const visit = await fake.repo.findServiceVisitById(updatedPlan!.serviceVisitId!);
+    expect(visit?.status).toBe("requested");
+  });
+
+  it("is idempotent — scheduling an already-linked plan returns a friendly message instead of creating a second visit", async () => {
+    mockAuthorized();
+    const schedule = await fake.repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "biweekly",
+      preferredDayOfWeek: 0,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-11-01",
+      supersedesId: null,
+    });
+    const { plan } = await fake.repo.insertRecurringVisitPlan({
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      visitNumber: 2,
+      plannedDate: "2026-11-15",
+      plannedStartTime: "10:00",
+    });
+
+    const first = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "customer-1" })
+    );
+    const second = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "customer-1" })
+    );
+
+    expect(first.ok).toBe(true);
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.message).toContain("already linked");
+    const visitsForCustomer = await fake.repo.listServiceVisitsForCustomer("customer-1");
+    expect(visitsForCustomer).toHaveLength(1); // never a second visit
+  });
+
+  it("surfaces a friendly error when the schedule's originating booking can't be resolved", async () => {
+    mockAuthorized();
+    resolveRecurringSchedulingContextResult = null;
+    const schedule = await fake.repo.insertRecurringSchedule({
+      customerId: "customer-1",
+      bookingOrderId: "booking-1",
+      prepaidPackageId: null,
+      cadence: "biweekly",
+      preferredDayOfWeek: 0,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-11-01",
+      supersedesId: null,
+    });
+    const { plan } = await fake.repo.insertRecurringVisitPlan({
+      recurringScheduleId: schedule.id,
+      customerId: "customer-1",
+      visitNumber: 2,
+      plannedDate: "2026-11-15",
+      plannedStartTime: "10:00",
+    });
+
+    const result = await scheduleRecurringVisitPlanAction(
+      null,
+      formData({ recurringVisitPlanId: plan.id, recurringScheduleId: schedule.id, customerId: "customer-1" })
+    );
     expect(result.ok).toBe(false);
   });
 });

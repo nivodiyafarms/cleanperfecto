@@ -1,13 +1,14 @@
 import type { CleaningType } from "@/lib/pricing/types";
 import { InvalidVisitStateError } from "./errors";
 import type { SchedulingRepository } from "./repository";
-import { syncPackagePlanFromRecurringPlan } from "./sync-linked-recurring-package-plan";
 import { zonedDateTimeToUtc } from "./timezone";
 
 const DEFAULT_TIMEZONE = "America/Chicago";
 
 export interface ScheduleRecurringVisitPlanInput {
   recurringVisitPlanId: string;
+  /** Verified server-side (both here and, atomically, inside claimAndScheduleRecurringVisitPlan's own row-locked check) against the plan's own recurring_schedule_id — never trusted as-is. */
+  recurringScheduleId: string;
   customerId: string;
   cleaningType: CleaningType;
   serviceAddressLine1: string | null;
@@ -34,24 +35,32 @@ export interface ScheduleRecurringVisitPlanInput {
  * the schedule/calendar is the constant; payment model is a per-visit
  * financial fact layered on top.
  *
- * Idempotent: a plan already 'linked' to a service_visit returns that
- * existing visit rather than creating a second one.
+ * Idempotent AND concurrency-safe: the entire claim — check status, insert
+ * the visit, link the plan, record recurring_visit_plan_history +
+ * service_visit_events, and sync any linked package_visit_plans row —
+ * happens atomically inside repo.claimAndScheduleRecurringVisitPlan (a
+ * single, row-locked Postgres transaction — see its own migrations). A
+ * plan already 'linked', whether from a prior call or a genuinely
+ * concurrent one that committed first, returns that existing visit rather
+ * than ever creating a second one or re-running any of those side effects
+ * — by construction, every one of them already committed together with
+ * that prior claim, so there is nothing left to retry on the
+ * already-linked path.
  */
 export async function scheduleRecurringVisitPlan(
   repo: SchedulingRepository,
   input: ScheduleRecurringVisitPlanInput
 ): Promise<{ visitId: string; alreadyLinked: boolean; prepaidPackageId: string | null }> {
+  // Friendly, early (non-atomic) check — the claim RPC below re-verifies
+  // the same thing, atomically under its row lock, which is the actual
+  // authoritative guarantee. This just gives a fast, clear error without
+  // waiting on that lock for an obviously-mismatched request.
   const plan = await repo.findRecurringVisitPlanById(input.recurringVisitPlanId);
   if (!plan) {
     throw new InvalidVisitStateError(`recurring_visit_plan ${input.recurringVisitPlanId} not found`);
   }
-  if (plan.status === "linked" && plan.serviceVisitId) {
-    const existingVisit = await repo.findServiceVisitById(plan.serviceVisitId);
-    return {
-      visitId: plan.serviceVisitId,
-      alreadyLinked: true,
-      prepaidPackageId: existingVisit?.prepaidPackageId ?? null,
-    };
+  if (plan.recurringScheduleId !== input.recurringScheduleId || plan.customerId !== input.customerId) {
+    throw new InvalidVisitStateError(`recurring_visit_plan ${input.recurringVisitPlanId} does not belong to the given schedule/customer`);
   }
 
   const timezone = input.timezone ?? DEFAULT_TIMEZONE;
@@ -59,15 +68,12 @@ export async function scheduleRecurringVisitPlan(
 
   const coveringPackage = await repo.findActivePrepaidPackageForCustomer(input.customerId);
 
-  const visit = await repo.insertServiceVisit({
+  const claim = await repo.claimAndScheduleRecurringVisitPlan({
+    recurringVisitPlanId: input.recurringVisitPlanId,
+    recurringScheduleId: input.recurringScheduleId,
     customerId: input.customerId,
-    quoteRequestId: null,
-    bookingOrderId: null,
     prepaidPackageId: coveringPackage?.id ?? null,
-    recurringScheduleId: plan.recurringScheduleId,
-    visitNumber: plan.visitNumber,
     cleaningType: input.cleaningType,
-    frequency: null,
     requestedStartAt,
     timezone,
     serviceAddressLine1: input.serviceAddressLine1,
@@ -77,35 +83,10 @@ export async function scheduleRecurringVisitPlan(
     serviceAddressIdentity: input.serviceAddressIdentity,
   });
 
-  await repo.updateRecurringVisitPlan(plan.id, { status: "linked", serviceVisitId: visit.id });
+  if (claim.alreadyLinked) {
+    const existingVisit = await repo.findServiceVisitById(claim.visitId);
+    return { visitId: claim.visitId, alreadyLinked: true, prepaidPackageId: existingVisit?.prepaidPackageId ?? null };
+  }
 
-  await repo.insertRecurringVisitPlanHistory({
-    recurringVisitPlanId: plan.id,
-    recurringScheduleId: plan.recurringScheduleId,
-    visitNumber: plan.visitNumber,
-    previousPlannedDate: plan.plannedDate,
-    previousPlannedStartTime: plan.plannedStartTime,
-    previousStatus: "planned",
-    newPlannedDate: plan.plannedDate,
-    newPlannedStartTime: plan.plannedStartTime,
-    newStatus: "linked",
-    changeReason: "linked_to_visit",
-  });
-
-  await repo.insertServiceVisitEvent({
-    serviceVisitId: visit.id,
-    eventType: "requested",
-    actor: "system",
-    previousState: null,
-    newState: {
-      requestedStartAt: requestedStartAt.toISOString(),
-      recurringVisitPlanId: plan.id,
-      prepaidPackageId: coveringPackage?.id ?? null,
-    },
-    notes: null,
-  });
-
-  await syncPackagePlanFromRecurringPlan(repo, { ...plan, status: "linked", serviceVisitId: visit.id }, "linked_to_visit");
-
-  return { visitId: visit.id, alreadyLinked: false, prepaidPackageId: coveringPackage?.id ?? null };
+  return { visitId: claim.visitId, alreadyLinked: false, prepaidPackageId: coveringPackage?.id ?? null };
 }

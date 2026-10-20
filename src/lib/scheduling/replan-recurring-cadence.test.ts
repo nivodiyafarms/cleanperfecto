@@ -88,6 +88,7 @@ describe("replanRecurringCadence", () => {
 
     const { visitId } = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,

@@ -1,6 +1,8 @@
 import Link from "next/link";
+import ActionForm from "@/components/admin/ActionForm";
 import StatusBadge from "@/components/admin/StatusBadge";
-import { listServiceVisitsInRange, type AdminScheduleVisit } from "@/lib/admin/queries/service-visits";
+import { listServiceVisitsInRange, listPlannedRecurringVisitPlansInRange, type AdminScheduleVisit, type AdminSchedulePlannedOccurrence } from "@/lib/admin/queries/service-visits";
+import { scheduleRecurringVisitPlanAction } from "@/lib/admin/actions/recurring-actions";
 import { formatCadenceLabel, formatTimeOfDay, formatVisitStatusLabel } from "@/lib/admin/format";
 import { dayOfWeekForDate } from "@/lib/scheduling/recurrence-dates";
 import { utcToZonedDateTime, zonedDateTimeToUtc } from "@/lib/scheduling/timezone";
@@ -38,17 +40,31 @@ export default async function AdminSchedulePage({ searchParams }: SchedulePagePr
   const rangeStartUtc = zonedDateTimeToUtc(rangeStart, "00:00", TIMEZONE);
   const rangeEndUtc = zonedDateTimeToUtc(rangeEnd, "00:00", TIMEZONE);
 
-  const visits = await listServiceVisitsInRange(rangeStartUtc, rangeEndUtc);
+  const [visits, plannedOccurrences] = await Promise.all([
+    listServiceVisitsInRange(rangeStartUtc, rangeEndUtc),
+    // Plain calendar-date range — planned_date/planned_start_time are
+    // already stored in the schedule's own local timezone, no UTC
+    // conversion needed (unlike the real-visit query above). A pure read:
+    // viewing this calendar never creates a visit or sends anything.
+    listPlannedRecurringVisitPlansInRange(rangeStart, rangeEnd),
+  ]);
 
   const days: CalendarDate[] = view === "week" ? Array.from({ length: 7 }, (_, i) => addDays(date, i)) : [date];
 
   const visitsByDate = new Map<CalendarDate, AdminScheduleVisit[]>();
-  for (const d of days) visitsByDate.set(d, []);
+  const plannedByDate = new Map<CalendarDate, AdminSchedulePlannedOccurrence[]>();
+  for (const d of days) {
+    visitsByDate.set(d, []);
+    plannedByDate.set(d, []);
+  }
   for (const visit of visits) {
     const at = visit.confirmedStartAt ?? visit.requestedStartAt;
     if (!at) continue;
     const localDate = utcToZonedDateTime(new Date(at), TIMEZONE).date;
     visitsByDate.get(localDate)?.push(visit);
+  }
+  for (const occurrence of plannedOccurrences) {
+    plannedByDate.get(occurrence.plannedDate)?.push(occurrence);
   }
 
   const prevDate = view === "week" ? addDays(date, -7) : addDays(date, -1);
@@ -92,18 +108,24 @@ export default async function AdminSchedulePage({ searchParams }: SchedulePagePr
             const bAt = b.confirmedStartAt ?? b.requestedStartAt ?? "";
             return aAt.localeCompare(bAt);
           });
+          const dayPlanned = (plannedByDate.get(d) ?? []).slice().sort((a, b) => a.plannedStartTime.localeCompare(b.plannedStartTime));
           return (
             <div key={d} className="rounded-2xl border border-border bg-surface p-4">
               <h2 className="text-sm font-semibold text-foreground">
                 {DAY_NAMES[dayOfWeekForDate(d)]} {d}
               </h2>
-              {dayVisits.length === 0 ? (
+              {dayVisits.length === 0 && dayPlanned.length === 0 ? (
                 <p className="mt-3 text-sm text-muted">No visits.</p>
               ) : (
                 <ul className="mt-3 space-y-2">
                   {dayVisits.map((visit) => (
                     <li key={visit.id}>
                       <ScheduleVisitCard visit={visit} />
+                    </li>
+                  ))}
+                  {dayPlanned.map((occurrence) => (
+                    <li key={occurrence.recurringVisitPlanId}>
+                      <PlannedOccurrenceCard occurrence={occurrence} />
                     </li>
                   ))}
                 </ul>
@@ -151,6 +173,41 @@ function ScheduleVisitCard({ visit }: { visit: AdminScheduleVisit }) {
         <p className="text-muted">Cleaner(s): {visit.assignedCleaners.map((c) => c.cleanerName).join(", ")}</p>
       )}
     </Link>
+  );
+}
+
+/**
+ * A future recurring occurrence with no real service_visit yet — "open"
+ * means right here, inline, via <details>: the card itself shows name/
+ * date/time/the Planned label (rendering this never creates anything or
+ * notifies anyone — a pure read), and expanding it reveals "Schedule this
+ * visit", which calls the same scheduleRecurringVisitPlan domain function
+ * the admin visit page's package-visit counterpart already uses, with the
+ * same requireAdmin() permission check. Scheduling only creates a
+ * 'requested' service_visit — the existing Requests queue (with its own
+ * existing cleaner-availability check) is still what confirms a time/
+ * cleaner afterward, unchanged. Once linked, this card simply stops being
+ * returned by listPlannedRecurringVisitPlansInRange (status is no longer
+ * 'planned'), and the real visit appears via listServiceVisitsInRange
+ * instead — never both at once.
+ */
+function PlannedOccurrenceCard({ occurrence }: { occurrence: AdminSchedulePlannedOccurrence }) {
+  return (
+    <details className="rounded-lg border border-dashed border-muted bg-background-alt p-3 text-sm">
+      <summary className="flex cursor-pointer items-center justify-between">
+        <span className="font-medium text-foreground">{formatTimeOfDay(occurrence.plannedStartTime)}</span>
+        <span className="rounded-full border border-muted px-2 py-0.5 text-xs font-medium text-muted">Planned</span>
+      </summary>
+      <p className="mt-2 text-foreground">{occurrence.customerName}</p>
+      <p className="text-muted">Visit {occurrence.visitNumber} of a recurring schedule — not yet a real appointment.</p>
+      <ActionForm action={scheduleRecurringVisitPlanAction} className="mt-2">
+        <input type="hidden" name="recurringVisitPlanId" value={occurrence.recurringVisitPlanId} />
+        <input type="hidden" name="recurringScheduleId" value={occurrence.recurringScheduleId} />
+        <button type="submit" className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground hover:bg-background-alt">
+          Schedule this visit
+        </button>
+      </ActionForm>
+    </details>
   );
 }
 

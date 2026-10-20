@@ -1228,6 +1228,32 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
       if (error) throw new Error(`[scheduling] recurring_visit_plan_history insert failed: ${error.message}`);
     },
 
+    async claimAndScheduleRecurringVisitPlan(input) {
+      const { data, error } = await supabase.rpc("claim_and_schedule_recurring_visit_plan", {
+        p_recurring_visit_plan_id: input.recurringVisitPlanId,
+        p_recurring_schedule_id: input.recurringScheduleId,
+        p_customer_id: input.customerId,
+        p_prepaid_package_id: input.prepaidPackageId,
+        p_cleaning_type: input.cleaningType,
+        p_requested_start_at: input.requestedStartAt.toISOString(),
+        p_timezone: input.timezone,
+        p_service_address_line1: input.serviceAddressLine1,
+        p_service_address_line2: input.serviceAddressLine2,
+        p_service_city: input.serviceCity,
+        p_service_state: input.serviceState,
+        p_service_address_identity: input.serviceAddressIdentity,
+      });
+      if (error) {
+        if (error.message.includes("plan_schedule_mismatch")) {
+          throw new InvalidVisitStateError(`recurring_visit_plan ${input.recurringVisitPlanId} does not belong to the given schedule/customer`);
+        }
+        throw new Error(`[scheduling] claim_and_schedule_recurring_visit_plan failed: ${error.message}`);
+      }
+      // Postgres RETURNS TABLE comes back as a one-row array via PostgREST.
+      const row = (Array.isArray(data) ? data[0] : data) as { visit_id: string; already_linked: boolean };
+      return { visitId: row.visit_id, alreadyLinked: row.already_linked };
+    },
+
     async findActiveRecurringScopeVersion(recurringScheduleId) {
       const { data, error } = await supabase
         .from("recurring_scope_versions")

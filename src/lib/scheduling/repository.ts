@@ -1,3 +1,4 @@
+import type { CleaningType } from "@/lib/pricing/types";
 import type {
   ActiveAssignmentIntervalRow,
   CleanerAvailabilityExceptionRow,
@@ -314,6 +315,37 @@ export interface SchedulingRepository {
     }
   ): Promise<void>;
   insertRecurringVisitPlanHistory(row: NewRecurringVisitPlanHistoryRow): Promise<void>;
+  /**
+   * Atomic "schedule this visit" for a planned recurring_visit_plans
+   * occurrence, via the claim_and_schedule_recurring_visit_plan RPC — locks
+   * the targeted plan row for the duration of the call (the actual
+   * mutual-exclusion guarantee against a genuine concurrent double-submit,
+   * not merely a read-then-write check), verifies it belongs to the given
+   * schedule/customer, and — only if still 'planned' — inserts the real
+   * service_visits row and links the plan to it in one transaction.
+   * Returns the existing visit (`alreadyLinked: true`) when the plan was
+   * already linked, whether from a prior call or a concurrent winner that
+   * committed first. Raises a plain 'plan_schedule_mismatch' exception
+   * (matched by message, same convention as every other business-rule
+   * rejection RPC in this schema) if the plan doesn't belong to the given
+   * schedule/customer. See src/lib/scheduling/schedule-recurring-visit-plan.ts,
+   * the sole caller, which runs recurring_visit_plan_history/
+   * service_visit_events/package-plan-sync only on the genuine-winner path.
+   */
+  claimAndScheduleRecurringVisitPlan(input: {
+    recurringVisitPlanId: string;
+    recurringScheduleId: string;
+    customerId: string;
+    prepaidPackageId: string | null;
+    cleaningType: CleaningType;
+    requestedStartAt: Date;
+    timezone: string;
+    serviceAddressLine1: string | null;
+    serviceAddressLine2: string | null;
+    serviceCity: string | null;
+    serviceState: string | null;
+    serviceAddressIdentity: string | null;
+  }): Promise<{ visitId: string; alreadyLinked: boolean }>;
 
   // -- recurring_scope_versions (Customer Portal V1) -----------------------
   findActiveRecurringScopeVersion(recurringScheduleId: string): Promise<RecurringScopeVersionRow | null>;

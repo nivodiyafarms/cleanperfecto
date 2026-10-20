@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/admin/require-admin";
+import { resolveRecurringSchedulingContext } from "@/lib/admin/queries/visit-scope";
 import type { AddOnId } from "@/lib/pricing/types";
 import { createSupabaseBookingRepository } from "@/lib/booking/supabase-booking-repository";
 import { confirmVisitPricing } from "@/lib/scheduling/confirm-visit-pricing";
@@ -9,6 +10,7 @@ import { InvalidVisitStateError, SchedulingConflictError } from "@/lib/schedulin
 import { estimateVisitPricing } from "@/lib/scheduling/estimate-visit-pricing";
 import { replanRecurringCadence } from "@/lib/scheduling/replan-recurring-cadence";
 import { replanRecurringVisit } from "@/lib/scheduling/replan-recurring-visit";
+import { scheduleRecurringVisitPlan } from "@/lib/scheduling/schedule-recurring-visit-plan";
 import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-scheduling-repository";
 import type { RecurringCadence } from "@/lib/scheduling/types";
 import { actionError, actionOk, type ActionResult } from "./types";
@@ -85,6 +87,63 @@ export async function editRecurringCadenceAction(_prevState: ActionResult | null
 
   revalidatePath("/admin");
   return actionOk("Cadence updated.");
+}
+
+/**
+ * Admin's "Schedule this visit" for a planned (never-yet-linked) universal
+ * calendar occurrence — surfaced on the admin Schedule calendar (Day/Week
+ * views) alongside real visits. The exact parallel of
+ * schedulePackageVisitPlanAction for the non-package (Pay Per Cleaning)
+ * recurring path: turns a planning-stage plan into a real 'requested'
+ * service_visit via the existing, already-tested scheduleRecurringVisitPlan
+ * domain function — the only thing that ever links a plan to an
+ * operational visit. Creates a 'requested' visit only (no time/cleaner
+ * confirmation, no availability check here) — admin still confirms it via
+ * the normal existing Requests queue flow afterward, which already does
+ * the cleaner-availability check. Idempotent: a plan already linked
+ * returns its existing visit rather than creating a second one.
+ */
+export async function scheduleRecurringVisitPlanAction(_prevState: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  await requireAdmin();
+  const recurringVisitPlanId = String(formData.get("recurringVisitPlanId") ?? "");
+  const recurringScheduleId = String(formData.get("recurringScheduleId") ?? "");
+  if (!recurringVisitPlanId || !recurringScheduleId) {
+    return actionError("Plan not found.");
+  }
+
+  const context = await resolveRecurringSchedulingContext(recurringScheduleId);
+  if (!context) return actionError("Could not resolve this schedule's originating booking.");
+
+  const repo = createSupabaseSchedulingRepository();
+  try {
+    const result = await scheduleRecurringVisitPlan(repo, {
+      recurringVisitPlanId,
+      // Verified server-side (both here and, atomically, inside the claim
+      // RPC's own row-locked check) against the targeted plan's OWN
+      // recurring_schedule_id — a mismatch means the submitted id doesn't
+      // actually belong to this plan, and is rejected rather than silently
+      // resolving the wrong customer/address context from it.
+      recurringScheduleId,
+      // Derived server-side from the schedule's own booking order, never
+      // trusted from the client — same discipline as
+      // schedulePackageVisitPlanAction's context.customerId.
+      customerId: context.customerId,
+      cleaningType: context.cleaningType,
+      serviceAddressLine1: context.serviceAddressLine1,
+      serviceAddressLine2: context.serviceAddressLine2,
+      serviceCity: context.serviceCity,
+      serviceState: context.serviceState,
+      serviceAddressIdentity: context.serviceAddressIdentity,
+      timezone: context.timezone,
+    });
+
+    revalidatePath("/admin");
+    revalidatePath(`/admin/visits/${result.visitId}`);
+    return actionOk(result.alreadyLinked ? "This plan was already linked to a visit." : "Visit scheduled from plan.");
+  } catch (error) {
+    if (error instanceof InvalidVisitStateError) return actionError(error.message);
+    throw error;
+  }
 }
 
 /**

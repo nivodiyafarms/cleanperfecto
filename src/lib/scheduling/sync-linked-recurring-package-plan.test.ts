@@ -101,6 +101,7 @@ describe("package_visit_plans <-> recurring_visit_plans synchronization", () => 
 
     const { visitId } = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: recurringPlans[1].id,
+      recurringScheduleId: recurringPlans[1].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -113,6 +114,69 @@ describe("package_visit_plans <-> recurring_visit_plans synchronization", () => 
     const linkedPackagePlan = await repo.findPackageVisitPlanById(packagePlans[1].id);
     expect(linkedPackagePlan?.status).toBe("linked");
     expect(linkedPackagePlan?.serviceVisitId).toBe(visitId);
+  });
+
+  it("linking at schedule time rolls back and retries cleanly when the package-plan sync fails", async () => {
+    const { repo, state } = seedActivePackage("pkg-1");
+    const { packagePlans, recurringPlans } = await seedLinkedCalendar(repo);
+
+    const originalInsertPackageHistory = repo.insertPackageVisitPlanHistory.bind(repo);
+    let shouldFail = true;
+    repo.insertPackageVisitPlanHistory = async (row) => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("Simulated failure: package_visit_plan_history insert");
+      }
+      return originalInsertPackageHistory(row);
+    };
+
+    const scheduleInput = {
+      recurringVisitPlanId: recurringPlans[1].id,
+      recurringScheduleId: recurringPlans[1].recurringScheduleId,
+      customerId: "customer-1",
+      cleaningType: "standard" as const,
+      serviceAddressLine1: null,
+      serviceAddressLine2: null,
+      serviceCity: null,
+      serviceState: null,
+      serviceAddressIdentity: null,
+    };
+
+    await expect(scheduleRecurringVisitPlan(repo, scheduleInput)).rejects.toThrow(
+      "Simulated failure: package_visit_plan_history insert"
+    );
+
+    // Nothing committed from the failed attempt: no visit, no recurring
+    // plan link, and the package plan is still exactly as it was planned.
+    expect(state.serviceVisitsById.size).toBe(0);
+    const recurringPlanAfterFailure = await repo.findRecurringVisitPlanById(recurringPlans[1].id);
+    expect(recurringPlanAfterFailure?.status).toBe("planned");
+    const packagePlanAfterFailure = await repo.findPackageVisitPlanById(packagePlans[1].id);
+    expect(packagePlanAfterFailure?.status).toBe("planned");
+    expect(packagePlanAfterFailure?.serviceVisitId).toBeNull();
+    // Only the pre-existing "initial_plan" history row from seeding — no
+    // linked_to_visit row from the failed attempt.
+    expect(state.packageVisitPlanHistory.filter((h) => h.packageVisitPlanId === packagePlans[1].id)).toHaveLength(1);
+
+    const retried = await scheduleRecurringVisitPlan(repo, scheduleInput);
+    expect(retried.alreadyLinked).toBe(false);
+
+    expect(state.serviceVisitsById.size).toBe(1);
+    const recurringPlanAfterRetry = await repo.findRecurringVisitPlanById(recurringPlans[1].id);
+    expect(recurringPlanAfterRetry?.status).toBe("linked");
+    expect(recurringPlanAfterRetry?.serviceVisitId).toBe(retried.visitId);
+    const packagePlanAfterRetry = await repo.findPackageVisitPlanById(packagePlans[1].id);
+    expect(packagePlanAfterRetry?.status).toBe("linked");
+    expect(packagePlanAfterRetry?.serviceVisitId).toBe(retried.visitId);
+    expect(state.packageVisitPlanHistory.filter((h) => h.packageVisitPlanId === packagePlans[1].id)).toHaveLength(2);
+
+    // A second retry (now already linked) must not create a duplicate
+    // visit or duplicate package-plan audit rows.
+    const secondRetry = await scheduleRecurringVisitPlan(repo, scheduleInput);
+    expect(secondRetry.alreadyLinked).toBe(true);
+    expect(secondRetry.visitId).toBe(retried.visitId);
+    expect(state.serviceVisitsById.size).toBe(1);
+    expect(state.packageVisitPlanHistory.filter((h) => h.packageVisitPlanId === packagePlans[1].id)).toHaveLength(2);
   });
 
   it("change-this-and-future via the admin package path (replanPackageCadence) updates every still-linked universal counterpart", async () => {
