@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { completeServiceVisit } from "./complete-service-visit";
 import { confirmServiceVisit } from "./confirm-service-visit";
+import { InvalidVisitStateError } from "./errors";
 import { planRecurringVisitDates } from "./plan-recurring-visit-dates";
 import { scheduleRecurringVisitPlan } from "./schedule-recurring-visit-plan";
 import { createFakeSchedulingRepository } from "./test-support/fake-scheduling-repository";
@@ -53,6 +54,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -85,6 +87,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -103,6 +106,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -121,6 +125,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const first = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -134,6 +139,7 @@ describe("scheduleRecurringVisitPlan", () => {
 
     const second = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: plans[0].id,
+      recurringScheduleId: plans[0].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -189,6 +195,7 @@ describe("scheduleRecurringVisitPlan", () => {
     for (let i = 0; i < 4; i++) {
       const { visitId, prepaidPackageId } = await scheduleRecurringVisitPlan(repo, {
         recurringVisitPlanId: plans[i].id,
+        recurringScheduleId: schedule.id,
         customerId: "customer-1",
         cleaningType: "standard",
         serviceAddressLine1: null,
@@ -220,6 +227,7 @@ describe("scheduleRecurringVisitPlan", () => {
     const fifthPlan = remainingPlans.find((p) => p.visitNumber === 5)!;
     const fifth = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: fifthPlan.id,
+      recurringScheduleId: schedule.id,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,
@@ -229,5 +237,105 @@ describe("scheduleRecurringVisitPlan", () => {
       serviceAddressIdentity: null,
     });
     expect(fifth.prepaidPackageId).toBeNull();
+  });
+
+  it("rejects when the submitted schedule/customer doesn't match the targeted plan — both at the friendly check and at the atomic claim itself", async () => {
+    const { repo } = createFakeSchedulingRepository();
+    const { schedule, plans } = await seedScheduleAndPlans(repo, null);
+
+    const otherSchedule = await repo.insertRecurringSchedule({
+      customerId: "customer-2",
+      bookingOrderId: "booking-2",
+      prepaidPackageId: null,
+      cadence: "weekly",
+      preferredDayOfWeek: 1,
+      preferredStartTime: "10:00",
+      timezone: "America/Chicago",
+      effectiveFrom: "2026-08-24",
+      supersedesId: null,
+    });
+
+    // Wrong recurringScheduleId, correct customerId.
+    await expect(
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: otherSchedule.id,
+        customerId: "customer-1",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // Correct recurringScheduleId, wrong customerId.
+    await expect(
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: schedule.id,
+        customerId: "customer-2",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // The authoritative, row-locked claim itself also rejects the mismatch —
+    // called directly here to prove the guarantee doesn't rely solely on the
+    // friendly pre-check above (which production's RPC enforces atomically
+    // under `select ... for update`; the fake mirrors that same rejection).
+    await expect(
+      repo.claimAndScheduleRecurringVisitPlan({
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: otherSchedule.id,
+        customerId: "customer-1",
+        prepaidPackageId: null,
+        cleaningType: "standard",
+        requestedStartAt: new Date("2026-08-24T15:00:00Z"),
+        timezone: "America/Chicago",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      })
+    ).rejects.toThrow(InvalidVisitStateError);
+
+    // Nothing was ever created or mutated by any of the rejected attempts.
+    const untouched = await repo.findRecurringVisitPlanById(plans[0].id);
+    expect(untouched?.status).toBe("planned");
+    expect(untouched?.serviceVisitId).toBeNull();
+  });
+
+  it("creates exactly one visit under genuinely concurrent double-submission of the same plan", async () => {
+    const { repo, state } = createFakeSchedulingRepository();
+    const { plans } = await seedScheduleAndPlans(repo, null);
+
+    const submit = () =>
+      scheduleRecurringVisitPlan(repo, {
+        recurringVisitPlanId: plans[0].id,
+        recurringScheduleId: plans[0].recurringScheduleId,
+        customerId: "customer-1",
+        cleaningType: "standard",
+        serviceAddressLine1: null,
+        serviceAddressLine2: null,
+        serviceCity: null,
+        serviceState: null,
+        serviceAddressIdentity: null,
+      });
+
+    // Two genuinely interleaved calls — not sequential awaits — racing for
+    // the same plan's row lock, the same way two simultaneous admin
+    // button-clicks (or a retried request) would.
+    const [first, second] = await Promise.all([submit(), submit()]);
+
+    expect([first.alreadyLinked, second.alreadyLinked].sort()).toEqual([false, true]);
+    expect(first.visitId).toBe(second.visitId);
+    expect(state.serviceVisitsById.size).toBe(1);
   });
 });

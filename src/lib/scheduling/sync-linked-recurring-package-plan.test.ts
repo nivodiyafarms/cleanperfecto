@@ -101,6 +101,7 @@ describe("package_visit_plans <-> recurring_visit_plans synchronization", () => 
 
     const { visitId } = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId: recurringPlans[1].id,
+      recurringScheduleId: recurringPlans[1].recurringScheduleId,
       customerId: "customer-1",
       cleaningType: "standard",
       serviceAddressLine1: null,

@@ -118,6 +118,12 @@ export async function scheduleRecurringVisitPlanAction(_prevState: ActionResult 
   try {
     const result = await scheduleRecurringVisitPlan(repo, {
       recurringVisitPlanId,
+      // Verified server-side (both here and, atomically, inside the claim
+      // RPC's own row-locked check) against the targeted plan's OWN
+      // recurring_schedule_id — a mismatch means the submitted id doesn't
+      // actually belong to this plan, and is rejected rather than silently
+      // resolving the wrong customer/address context from it.
+      recurringScheduleId,
       // Derived server-side from the schedule's own booking order, never
       // trusted from the client — same discipline as
       // schedulePackageVisitPlanAction's context.customerId.

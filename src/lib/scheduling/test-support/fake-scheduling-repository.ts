@@ -163,6 +163,28 @@ export function createFakeSchedulingRepository(
       release();
     }
   }
+  // Per-plan serialization queue mirroring the real
+  // claim_and_schedule_recurring_visit_plan RPC's `select ... for update`
+  // row lock — same technique as withVisitPaymentClaimLock above, for the
+  // same reason: a genuine concurrency test (Promise.all of two truly
+  // interleaved async calls against this one fake) needs a real
+  // mutual-exclusion guarantee, not just single-threaded call ordering.
+  const recurringVisitPlanClaimLocks = new Map<string, Promise<unknown>>();
+  async function withRecurringVisitPlanClaimLock<T>(recurringVisitPlanId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = recurringVisitPlanClaimLocks.get(recurringVisitPlanId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    recurringVisitPlanClaimLocks.set(
+      recurringVisitPlanId,
+      previous.then(() => gate)
+    );
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
   const recurringSchedulesById = new Map<string, RecurringScheduleRow>();
   const packageVisitPlansById = new Map<string, PackageVisitPlanRow>();
   const packageVisitPlanHistory: NewPackageVisitPlanHistoryRow[] = [];
@@ -889,6 +911,40 @@ export function createFakeSchedulingRepository(
     },
     async insertRecurringVisitPlanHistory(row) {
       recurringVisitPlanHistory.push(row);
+    },
+    async claimAndScheduleRecurringVisitPlan(input) {
+      return withRecurringVisitPlanClaimLock(input.recurringVisitPlanId, async () => {
+        const plan = recurringVisitPlansById.get(input.recurringVisitPlanId);
+        if (!plan) {
+          throw new Error(`[fake-scheduling] recurring_visit_plan ${input.recurringVisitPlanId} not found`);
+        }
+        if (plan.recurringScheduleId !== input.recurringScheduleId || plan.customerId !== input.customerId) {
+          throw new InvalidVisitStateError(`recurring_visit_plan ${input.recurringVisitPlanId} does not belong to the given schedule/customer`);
+        }
+        if (plan.status === "linked" && plan.serviceVisitId) {
+          return { visitId: plan.serviceVisitId, alreadyLinked: true };
+        }
+
+        const visit = await repo.insertServiceVisit({
+          customerId: input.customerId,
+          quoteRequestId: null,
+          bookingOrderId: null,
+          prepaidPackageId: input.prepaidPackageId,
+          recurringScheduleId: plan.recurringScheduleId,
+          visitNumber: plan.visitNumber,
+          cleaningType: input.cleaningType,
+          frequency: null,
+          requestedStartAt: input.requestedStartAt,
+          timezone: input.timezone,
+          serviceAddressLine1: input.serviceAddressLine1,
+          serviceAddressLine2: input.serviceAddressLine2,
+          serviceCity: input.serviceCity,
+          serviceState: input.serviceState,
+          serviceAddressIdentity: input.serviceAddressIdentity,
+        });
+        recurringVisitPlansById.set(plan.id, { ...plan, status: "linked", serviceVisitId: visit.id });
+        return { visitId: visit.id, alreadyLinked: false };
+      });
     },
 
     async findActiveRecurringScopeVersion(recurringScheduleId) {
