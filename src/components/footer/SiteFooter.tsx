@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { SERVICES } from "@/lib/services";
 import { SITE_CONTACT } from "@/lib/site-contact";
 
@@ -62,7 +63,16 @@ export default function SiteFooter() {
         </div>
       </div>
 
-      <p className="mx-auto mt-12 max-w-7xl text-sm text-background/50">
+      <nav aria-label="Legal" className="mx-auto mt-12 flex max-w-7xl flex-wrap gap-x-6 gap-y-2">
+        <Link href="/privacy" className="inline-flex min-h-11 items-center text-sm text-background/70 transition-colors hover:text-background">
+          Privacy Policy
+        </Link>
+        <Link href="/terms" className="inline-flex min-h-11 items-center text-sm text-background/70 transition-colors hover:text-background">
+          Terms of Service
+        </Link>
+      </nav>
+
+      <p className="mx-auto mt-4 max-w-7xl text-sm text-background/50">
         &copy; {year} CleanPerfecto. All rights reserved.
       </p>
     </footer>
