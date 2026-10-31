@@ -1,6 +1,6 @@
 # Google reviews activation
 
-Migrations install `expire_stale_google_reviews()`, `apply_google_reviews_sync()`, and `set_featured_google_reviews()`. They do not leave a recurring job scheduled. `20261031140000_separate_google_reviews_cleanup_schedule_and_harden_sync.sql` removes `expire-stale-google-reviews` if an older migration created it.
+Apply these files together, in order: `20261024090000`, `20261024091500`, `20261031140000`, and `20261031160000`. The last file replaces the review-id check. Postgres rejects the earlier `{1,512}` repeat, and a sync against that version aborts before it writes. Migrations install `expire_stale_google_reviews()`, `apply_google_reviews_sync()`, and `set_featured_google_reviews()`. They do not leave a recurring job scheduled. `20261031140000_separate_google_reviews_cleanup_schedule_and_harden_sync.sql` removes `expire-stale-google-reviews` if an older migration created it.
 
 Do not run the statements below until that environment should actually start recurring work. Preview verification does not include them. Production needs a separate sign-off, and these statements are not a substitute for applying the migrations.
 

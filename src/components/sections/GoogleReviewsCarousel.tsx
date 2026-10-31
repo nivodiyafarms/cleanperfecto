@@ -163,7 +163,7 @@ export default function GoogleReviewsCarousel({
               here — this is not every review, and not necessarily the newest.
             </p>
           </div>
-          <div className="flex items-center gap-2 text-sm text-foreground">
+          <div className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm text-foreground">
             <GoogleMonogram />
             <span className="font-semibold">{overallRating.toFixed(1)}</span>
             <Stars rating={Math.round(overallRating)} />
