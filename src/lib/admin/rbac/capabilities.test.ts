@@ -26,6 +26,7 @@ describe("hasCapability", () => {
     expect(hasCapability("owner_admin", "override_tax")).toBe(true);
     expect(hasCapability("owner_admin", "manage_roles")).toBe(true);
     expect(hasCapability("owner_admin", "manage_payment_configuration")).toBe(true);
+    expect(hasCapability("owner_admin", "manage_featured_google_reviews")).toBe(true);
     expect(hasCapability("owner_admin", "schedule_visit_operations")).toBe(true);
     expect(hasCapability("owner_admin", "record_external_payment")).toBe(true);
   });
@@ -51,6 +52,7 @@ describe("hasCapability", () => {
     expect(hasCapability("operations", "override_tax")).toBe(false);
     expect(hasCapability("operations", "manage_roles")).toBe(false);
     expect(hasCapability("operations", "manage_payment_configuration")).toBe(false);
+    expect(hasCapability("operations", "manage_featured_google_reviews")).toBe(false);
   });
 
   it("an unrecognized role has no capability at all — fails closed", () => {

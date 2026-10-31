@@ -2,6 +2,7 @@ import SiteNav from "@/components/nav/SiteNav";
 import StickyMobileCTA from "@/components/StickyMobileCTA";
 import { SelectionProvider } from "@/components/SelectionProvider";
 import Hero from "@/components/hero/Hero";
+import GoogleReviewsSection from "@/components/sections/GoogleReviewsSection";
 import CleaningServiceSelector from "@/components/sections/CleaningServiceSelector";
 import TrustIndicators from "@/components/sections/TrustIndicators";
 import HowItWorks from "@/components/sections/HowItWorks";
@@ -26,6 +27,7 @@ export default function Home() {
       <SiteNav />
       <main className="flex-1 pb-20 md:pb-0">
         <Hero />
+        <GoogleReviewsSection />
         <CleaningServiceSelector />
         <TrustIndicators />
         <HowItWorks />
