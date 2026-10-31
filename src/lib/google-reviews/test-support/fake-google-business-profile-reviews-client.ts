@@ -1,8 +1,8 @@
 import type { GoogleBusinessProfileReviewsClient } from "../client";
 import type { FetchAllReviewsResult } from "../types";
 
-type FakeFetchResult = Omit<FetchAllReviewsResult, "fetchedReviewIds" | "skippedReviewIds"> &
-  Partial<Pick<FetchAllReviewsResult, "fetchedReviewIds" | "skippedReviewIds">>;
+type FakeFetchResult = Omit<FetchAllReviewsResult, "fetchedReviewIds" | "skippedReviewIds" | "confirmEmptyReconciliation"> &
+  Partial<Pick<FetchAllReviewsResult, "fetchedReviewIds" | "skippedReviewIds" | "confirmEmptyReconciliation">>;
 
 /**
  * Test-only fixture client — never imported by any production code path
@@ -18,7 +18,8 @@ export function createFakeGoogleBusinessProfileReviewsClient(
       if ("error" in behavior) throw behavior.error;
       const fetchedReviewIds = behavior.result.fetchedReviewIds ?? behavior.result.reviews.map((review) => review.googleReviewId);
       const skippedReviewIds = behavior.result.skippedReviewIds ?? [];
-      return { ...behavior.result, fetchedReviewIds, skippedReviewIds };
+      const confirmEmptyReconciliation = behavior.result.confirmEmptyReconciliation ?? false;
+      return { ...behavior.result, fetchedReviewIds, skippedReviewIds, confirmEmptyReconciliation };
     },
   };
 }

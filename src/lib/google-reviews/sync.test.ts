@@ -303,4 +303,194 @@ describe("syncGoogleReviews", () => {
     expect((await repo.getAllCachedReviews()).map((r) => r.googleReviewId)).toEqual(["newer"]);
     expect((await repo.getSyncState()).totalReviewCount).toBe(10);
   });
+
+  it("rejects an empty id list when the total is positive and keeps cache, featured selections, and aggregate", async () => {
+    const repo = createFakeGoogleReviewsRepository();
+    await syncGoogleReviews(
+      createFakeGoogleBusinessProfileReviewsClient({
+        result: { reviews: [makeReview()], averageRating: 4.8, totalReviewCount: 42 },
+      }),
+      repo,
+      now
+    );
+    const cachedId = (await repo.getAllCachedReviews())[0]?.id;
+    await repo.setFeaturedReviews([{ reviewId: cachedId ?? "", displayOrder: 1 }]);
+
+    const result = await syncGoogleReviews(
+      createFakeGoogleBusinessProfileReviewsClient({
+        result: {
+          reviews: [],
+          fetchedReviewIds: [],
+          skippedReviewIds: [],
+          averageRating: 0,
+          totalReviewCount: 12,
+          confirmEmptyReconciliation: true,
+        },
+      }),
+      repo,
+      new Date(now.getTime() + 60_000)
+    );
+
+    expect(result).toMatchObject({
+      outcome: "fetch_failed",
+      reviewsDeletedByReconciliation: 0,
+      error: "google_reviews_empty_reconciliation_rejected",
+    });
+    expect((await repo.getAllCachedReviews()).map((review) => review.googleReviewId)).toEqual(["g-1"]);
+    expect(await repo.getFeaturedReviewSelections()).toEqual([{ reviewId: cachedId, displayOrder: 1 }]);
+    expect(await repo.getSyncState()).toMatchObject({
+      overallRating: 4.8,
+      totalReviewCount: 42,
+      lastSyncError: "google_reviews_empty_reconciliation_rejected",
+    });
+  });
+
+  it("does not reconcile an incomplete or failed fetch", async () => {
+    const repo = createFakeGoogleReviewsRepository({
+      reviews: [
+        {
+          id: "cached-1",
+          googleReviewId: "still-cached",
+          reviewerDisplayName: "Someone",
+          reviewerPhotoUrl: null,
+          starRating: 4,
+          reviewText: "fine",
+          reviewCreatedAt: "2026-10-20T00:00:00Z",
+          reviewUpdatedAt: "2026-10-20T00:00:00Z",
+          firstSyncedAt: "2026-10-20T00:00:00Z",
+          lastSeenAt: "2026-10-20T00:00:00Z",
+        },
+      ],
+    });
+
+    const result = await syncGoogleReviews(createFakeGoogleBusinessProfileReviewsClient({ error: new Error("page 2 failed") }), repo, now);
+
+    expect(result.outcome).toBe("fetch_failed");
+    expect(result.reviewsDeletedByReconciliation).toBe(0);
+    expect((await repo.getAllCachedReviews()).map((review) => review.googleReviewId)).toEqual(["still-cached"]);
+    expect((await repo.getSyncState()).overallRating).toBeNull();
+  });
+
+  it("clears cached reviews only when a complete fetch explicitly confirms zero reviews", async () => {
+    const repo = createFakeGoogleReviewsRepository();
+    await syncGoogleReviews(
+      createFakeGoogleBusinessProfileReviewsClient({
+        result: { reviews: [makeReview()], averageRating: 4.8, totalReviewCount: 1 },
+      }),
+      repo,
+      now
+    );
+    const cachedId = (await repo.getAllCachedReviews())[0]?.id;
+    await repo.setFeaturedReviews([{ reviewId: cachedId ?? "", displayOrder: 1 }]);
+
+    const result = await syncGoogleReviews(
+      createFakeGoogleBusinessProfileReviewsClient({
+        result: {
+          reviews: [],
+          fetchedReviewIds: [],
+          skippedReviewIds: [],
+          averageRating: 0,
+          totalReviewCount: 0,
+          confirmEmptyReconciliation: true,
+        },
+      }),
+      repo,
+      new Date(now.getTime() + 60_000)
+    );
+
+    expect(result).toMatchObject({ outcome: "synced", reviewsFetched: 0, reviewsDeletedByReconciliation: 1 });
+    expect(await repo.getAllCachedReviews()).toEqual([]);
+    expect(await repo.getFeaturedReviewSelections()).toEqual([]);
+    expect(await repo.getSyncState()).toMatchObject({ overallRating: 0, totalReviewCount: 0, lastSyncError: null });
+  });
+
+  it("refuses an empty write at the repository boundary unless zero reviews are explicitly confirmed", async () => {
+    const repo = createFakeGoogleReviewsRepository({
+      reviews: [
+        {
+          id: "cached-1",
+          googleReviewId: "still-cached",
+          reviewerDisplayName: "Someone",
+          reviewerPhotoUrl: null,
+          starRating: 5,
+          reviewText: "fine",
+          reviewCreatedAt: "2026-10-20T00:00:00Z",
+          reviewUpdatedAt: "2026-10-20T00:00:00Z",
+          firstSyncedAt: "2026-10-20T00:00:00Z",
+          lastSeenAt: "2026-10-20T00:00:00Z",
+        },
+      ],
+    });
+    await repo.setFeaturedReviews([{ reviewId: "cached-1", displayOrder: 1 }]);
+
+    await expect(
+      repo.applySyncResult(now, {
+        reviews: [],
+        fetchedReviewIds: [],
+        skippedReviewIds: [],
+        overallRating: 0,
+        totalReviewCount: 0,
+        confirmEmptyReconciliation: false,
+      })
+    ).rejects.toThrow(/google_reviews_empty_reconciliation_rejected/);
+
+    expect((await repo.getAllCachedReviews()).map((review) => review.googleReviewId)).toEqual(["still-cached"]);
+    expect(await repo.getFeaturedReviewSelections()).toEqual([{ reviewId: "cached-1", displayOrder: 1 }]);
+    expect((await repo.getSyncState()).overallRating).toBeNull();
+  });
+
+  it("still expires retained reviews when empty reconciliation is rejected", async () => {
+    const repo = createFakeGoogleReviewsRepository({
+      reviews: [
+        {
+          id: "fresh-1",
+          googleReviewId: "fresh",
+          reviewerDisplayName: "Fresh",
+          reviewerPhotoUrl: null,
+          starRating: 5,
+          reviewText: "new",
+          reviewCreatedAt: "2026-10-20T00:00:00Z",
+          reviewUpdatedAt: "2026-10-20T00:00:00Z",
+          firstSyncedAt: "2026-10-20T00:00:00Z",
+          lastSeenAt: "2026-10-20T00:00:00Z",
+        },
+        {
+          id: "stale-1",
+          googleReviewId: "stale",
+          reviewerDisplayName: "Stale",
+          reviewerPhotoUrl: null,
+          starRating: 2,
+          reviewText: "old",
+          reviewCreatedAt: "2026-01-01T00:00:00Z",
+          reviewUpdatedAt: "2026-01-01T00:00:00Z",
+          firstSyncedAt: "2026-01-01T00:00:00Z",
+          lastSeenAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    await repo.setFeaturedReviews([
+      { reviewId: "fresh-1", displayOrder: 1 },
+      { reviewId: "stale-1", displayOrder: 2 },
+    ]);
+
+    const result = await syncGoogleReviews(
+      createFakeGoogleBusinessProfileReviewsClient({
+        result: {
+          reviews: [],
+          fetchedReviewIds: [],
+          skippedReviewIds: [],
+          averageRating: 0,
+          totalReviewCount: 8,
+          confirmEmptyReconciliation: false,
+        },
+      }),
+      repo,
+      now,
+      30
+    );
+
+    expect(result).toMatchObject({ outcome: "fetch_failed", reviewsDeletedByReconciliation: 0, reviewsDeletedByRetentionExpiry: 1 });
+    expect((await repo.getAllCachedReviews()).map((review) => review.googleReviewId)).toEqual(["fresh"]);
+    expect(await repo.getFeaturedReviewSelections()).toEqual([{ reviewId: "fresh-1", displayOrder: 1 }]);
+  });
 });

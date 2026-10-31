@@ -1,7 +1,12 @@
 import "server-only";
 
 import type { GoogleBusinessProfileReviewsClient } from "./client";
-import { GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER, type GoogleReviewsRepository } from "./repository";
+import { isConfirmedEmptyReconciliation } from "./empty-reconciliation";
+import {
+  GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER,
+  GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER,
+  type GoogleReviewsRepository,
+} from "./repository";
 import { GOOGLE_REVIEW_CONTENT_RETENTION_DAYS } from "./config";
 import { sanitizeGoogleReviewsError } from "./errors";
 import { selectExpiredReviewIds } from "./retention";
@@ -17,6 +22,10 @@ import type { SyncGoogleReviewsResult } from "./types";
  *    update (see applySyncResult / apply_google_reviews_sync()) — a
  *    thrown fetch error is caught before applySyncResult is even called,
  *    so a failed/partial fetch can never reconcile or write anything.
+ *  - An empty fetched-id list is reconciled only when the fetch explicitly
+ *    confirms a complete zero-review result. Any other empty list is
+ *    recorded as a failure. apply_google_reviews_sync() repeats that
+ *    refusal and raises before it writes. Retention expiry still runs.
  *  - Deletion-by-retention-expiry runs unconditionally, on every path
  *    (success, failure, and superseded), because content must expire on
  *    schedule even if Google sync has stopped working entirely. This is
@@ -55,6 +64,10 @@ export async function syncGoogleReviews(
     };
   }
 
+  if (fetchResult.fetchedReviewIds.length === 0 && !isConfirmedEmptyReconciliation(fetchResult)) {
+    return rejectEmptyReconciliation(repo, now, effectiveRetentionDays);
+  }
+
   let reviewsDeletedByReconciliation: number;
   try {
     reviewsDeletedByReconciliation = await repo.applySyncResult(now, {
@@ -63,9 +76,13 @@ export async function syncGoogleReviews(
       skippedReviewIds: fetchResult.skippedReviewIds,
       overallRating: fetchResult.averageRating,
       totalReviewCount: fetchResult.totalReviewCount,
+      confirmEmptyReconciliation: isConfirmedEmptyReconciliation(fetchResult),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes(GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER)) {
+      return rejectEmptyReconciliation(repo, now, effectiveRetentionDays);
+    }
     if (message.includes(GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER)) {
       // Not a failure: a newer sync (concurrent run, or this one simply
       // took longer) already committed its result. Nothing to upsert or
@@ -99,6 +116,24 @@ export async function syncGoogleReviews(
     reviewsSkipped: fetchResult.skippedReviewIds.length,
     reviewsDeletedByReconciliation,
     reviewsDeletedByRetentionExpiry,
+  };
+}
+
+async function rejectEmptyReconciliation(
+  repo: GoogleReviewsRepository,
+  now: Date,
+  retentionDays: number
+): Promise<SyncGoogleReviewsResult> {
+  await repo.recordSyncFailure(now, GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER);
+  const reviewsDeletedByRetentionExpiry = await runRetentionExpiry(repo, now, retentionDays);
+  return {
+    outcome: "fetch_failed",
+    reviewsFetched: 0,
+    reviewsUpserted: 0,
+    reviewsSkipped: 0,
+    reviewsDeletedByReconciliation: 0,
+    reviewsDeletedByRetentionExpiry,
+    error: GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER,
   };
 }
 

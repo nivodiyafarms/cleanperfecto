@@ -113,6 +113,7 @@ describe("createGoogleBusinessProfileReviewsClient", () => {
     expect(result.reviews.map((review) => review.googleReviewId)).toEqual(["valid-1"]);
     expect(result.fetchedReviewIds).toEqual(["valid-1", "skipped-1"]);
     expect(result.skippedReviewIds).toEqual(["skipped-1"]);
+    expect(result.confirmEmptyReconciliation).toBe(false);
     expect(result.reviews[0]?.reviewerPhotoUrl).toBe("https://lh3.googleusercontent.com/a/photo");
   });
 
@@ -203,5 +204,63 @@ describe("createGoogleBusinessProfileReviewsClient", () => {
 
     const reviewCalls = fetchImpl.mock.calls.filter((call) => String(call[0]).includes("/reviews"));
     expect(reviewCalls).toHaveLength(1);
+  });
+
+  it("confirms an empty reconciliation only when the completed response says there are zero reviews", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth")) return tokenResponse();
+      return jsonResponse({ reviews: [], averageRating: 0, totalReviewCount: 0 });
+    });
+
+    const result = await createGoogleBusinessProfileReviewsClient(config, { fetchImpl }).fetchAllReviews();
+
+    expect(result.fetchedReviewIds).toEqual([]);
+    expect(result.confirmEmptyReconciliation).toBe(true);
+    expect(result.totalReviewCount).toBe(0);
+  });
+
+  it("rejects an empty id list when Google reports a positive total", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth")) return tokenResponse();
+      return jsonResponse({ reviews: [], averageRating: 5, totalReviewCount: 4 });
+    });
+
+    await expect(createGoogleBusinessProfileReviewsClient(config, { fetchImpl }).fetchAllReviews()).rejects.toMatchObject({
+      message: "empty_reconciliation_rejected",
+    });
+  });
+
+  it("rejects a malformed reviews payload instead of treating a missing count as zero", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth")) return tokenResponse();
+      return jsonResponse({ reviews: [], averageRating: 0 });
+    });
+
+    await expect(createGoogleBusinessProfileReviewsClient(config, { fetchImpl }).fetchAllReviews()).rejects.toMatchObject({
+      message: "reviews_list_invalid",
+    });
+  });
+
+  it("rejects a non-array reviews field and a non-string page token", async () => {
+    const malformedReviews = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth")) return tokenResponse();
+      return jsonResponse({ reviews: { unexpected: true }, averageRating: 5, totalReviewCount: 1 });
+    });
+    await expect(createGoogleBusinessProfileReviewsClient(config, { fetchImpl: malformedReviews }).fetchAllReviews()).rejects.toMatchObject({
+      message: "reviews_list_invalid",
+    });
+
+    const malformedToken = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth")) return tokenResponse();
+      return jsonResponse({
+        reviews: [],
+        averageRating: 0,
+        totalReviewCount: 0,
+        nextPageToken: 15,
+      });
+    });
+    await expect(createGoogleBusinessProfileReviewsClient(config, { fetchImpl: malformedToken }).fetchAllReviews()).rejects.toMatchObject({
+      message: "reviews_list_invalid",
+    });
   });
 });

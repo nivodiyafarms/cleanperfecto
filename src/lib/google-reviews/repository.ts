@@ -10,9 +10,16 @@ export interface GoogleReviewsSyncWrite {
   skippedReviewIds: string[];
   overallRating: number;
   totalReviewCount: number;
+  /**
+   * Must be true to delete every cached review. The database rejects the
+   * write unless this is true, the fetched-id list is empty, and
+   * totalReviewCount is 0.
+   */
+  confirmEmptyReconciliation: boolean;
 }
 
 export const GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER = "google_reviews_sync_superseded";
+export const GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER = "google_reviews_empty_reconciliation_rejected";
 
 export interface GoogleReviewsRepository {
   getAllCachedReviews(): Promise<CachedGoogleReview[]>;
@@ -23,8 +30,11 @@ export interface GoogleReviewsRepository {
    * and records the aggregate — all in one transaction (see
    * apply_google_reviews_sync()). Throws an error whose message contains
    * GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER when a sync that started later
-   * than `syncStartedAt` already committed. Resolves to the number of
-   * cached reviews removed by reconciliation.
+   * than `syncStartedAt` already committed. Throws an error whose message
+   * contains GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER, before
+   * any write, when an empty fetched-id list is not an explicitly
+   * confirmed zero-review fetch. Resolves to the number of cached reviews
+   * removed by reconciliation.
    */
   applySyncResult(syncStartedAt: Date, write: GoogleReviewsSyncWrite): Promise<number>;
   recordSyncFailure(now: Date, error: string): Promise<void>;
@@ -93,6 +103,7 @@ export function createSupabaseGoogleReviewsRepository(client: SupabaseAdminClien
         p_fetched_review_ids: write.fetchedReviewIds,
         p_overall_rating: write.overallRating,
         p_total_review_count: write.totalReviewCount,
+        p_confirm_empty_reconciliation: write.confirmEmptyReconciliation,
       });
       if (error) throw new Error(`[google-reviews] applySyncResult failed: ${error.message}`);
       return (data as number | null) ?? 0;

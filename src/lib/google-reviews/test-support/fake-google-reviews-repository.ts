@@ -1,6 +1,12 @@
+import { isConfirmedEmptyReconciliation } from "../empty-reconciliation";
 import { boundSyncErrorCode } from "../errors";
 import { normalizeGoogleReviewId } from "../review-id";
-import { GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER, type GoogleReviewsRepository, type GoogleReviewsSyncWrite } from "../repository";
+import {
+  GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER,
+  GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER,
+  type GoogleReviewsRepository,
+  type GoogleReviewsSyncWrite,
+} from "../repository";
 import type { CachedGoogleReview, GoogleReviewsSyncState, PublicFeaturedReview, PublicGoogleRatingSummary } from "../types";
 
 const RETENTION_DAYS_FOR_PUBLIC_VIEWS = 30;
@@ -61,6 +67,11 @@ export function createFakeGoogleReviewsRepository(initial?: { reviews?: CachedGo
         throw new Error(GOOGLE_REVIEWS_SYNC_SUPERSEDED_MARKER);
       }
       assertSyncWrite(write);
+      if (write.fetchedReviewIds.length === 0 || write.confirmEmptyReconciliation) {
+        if (!isConfirmedEmptyReconciliation(write)) {
+          throw new Error(GOOGLE_REVIEWS_EMPTY_RECONCILIATION_REJECTED_MARKER);
+        }
+      }
 
       const nextReviews = reviews.map((review) => ({ ...review }));
       for (const review of write.reviews) {

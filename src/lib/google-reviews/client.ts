@@ -1,6 +1,7 @@
 import "server-only";
 
 import { googleBusinessProfileReviewsUrl, type GoogleBusinessProfileConfig } from "./config";
+import { isConfirmedEmptyReconciliation } from "./empty-reconciliation";
 import { SanitizedGoogleReviewsError, sanitizeGoogleReviewsError } from "./errors";
 import { GOOGLE_REVIEWS_MAX_PAGES, GOOGLE_REVIEWS_REQUEST_TIMEOUT_MS, GOOGLE_REVIEWS_SYNC_DEADLINE_MS, requestTimeoutMs } from "./limits";
 import { normalizeGoogleReviewId } from "./review-id";
@@ -127,8 +128,30 @@ async function fetchAccessToken(
   return data.access_token;
 }
 
-function readFiniteNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function readRequiredRating(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new SanitizedGoogleReviewsError("reviews_list_invalid");
+  }
+  return value;
+}
+
+function readRequiredReviewCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new SanitizedGoogleReviewsError("reviews_list_invalid");
+  }
+  return value;
+}
+
+/**
+ * A missing or non-string page token is not "no further pages." Treating
+ * it as the end of the list would let a truncated response reconcile.
+ */
+function readNextPageToken(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw new SanitizedGoogleReviewsError("reviews_list_invalid");
+  }
+  return value;
 }
 
 /**
@@ -174,7 +197,11 @@ export function classifyGoogleReview(payload: GoogleReviewPayload): { kind: "val
  * Real client against the Business Profile API v4
  * (mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/reviews).
  * Walks every page before returning. averageRating and totalReviewCount
- * come from the last page, which carries the location aggregate.
+ * come from the last page, which carries the location aggregate. Both
+ * must be present and numeric; a missing count is not treated as zero.
+ * An empty id list is returned only when that count is exactly 0, and
+ * then confirmEmptyReconciliation is true. Any other empty result throws
+ * so the caller cannot reconcile it.
  * Each request has its own timeout, and the whole walk shares one deadline.
  * There are no retries: a retry would have to fit in the same deadline, and
  * a failed page already means the fetch is incomplete.
@@ -225,6 +252,9 @@ export function createGoogleBusinessProfileReviewsClient(
           "reviews_list_failed"
         );
         const payload = (await readJson(response, "reviews_list_invalid")) as ListReviewsResponsePayload;
+        if (payload.reviews !== undefined && !Array.isArray(payload.reviews)) {
+          throw new SanitizedGoogleReviewsError("reviews_list_invalid");
+        }
 
         for (const review of payload.reviews ?? []) {
           const classified = classifyGoogleReview(review);
@@ -236,13 +266,24 @@ export function createGoogleBusinessProfileReviewsClient(
           }
         }
 
-        averageRating = readFiniteNumber(payload.averageRating, averageRating);
-        totalReviewCount = readFiniteNumber(payload.totalReviewCount, totalReviewCount);
-        pageToken = typeof payload.nextPageToken === "string" && payload.nextPageToken ? payload.nextPageToken : undefined;
+        averageRating = readRequiredRating(payload.averageRating);
+        totalReviewCount = readRequiredReviewCount(payload.totalReviewCount);
+        pageToken = readNextPageToken(payload.nextPageToken);
         pageCount += 1;
       } while (pageToken);
 
-      return { reviews, fetchedReviewIds, skippedReviewIds, averageRating, totalReviewCount };
+      const confirmEmptyReconciliation = isConfirmedEmptyReconciliation({
+        confirmEmptyReconciliation: true,
+        fetchedReviewIds,
+        reviews,
+        skippedReviewIds,
+        totalReviewCount,
+      });
+      if (fetchedReviewIds.length === 0 && !confirmEmptyReconciliation) {
+        throw new SanitizedGoogleReviewsError("empty_reconciliation_rejected");
+      }
+
+      return { reviews, fetchedReviewIds, skippedReviewIds, averageRating, totalReviewCount, confirmEmptyReconciliation };
     },
   };
 }

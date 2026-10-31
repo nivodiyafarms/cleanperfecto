@@ -28,6 +28,12 @@ export interface FetchAllReviewsResult {
   skippedReviewIds: string[];
   averageRating: number;
   totalReviewCount: number;
+  /**
+   * True only after a complete, well-formed fetch whose id list and
+   * totalReviewCount are both exactly zero. The database refuses to
+   * delete every cached review unless this is true.
+   */
+  confirmEmptyReconciliation: boolean;
 }
 
 /** A row as cached in google_business_profile_reviews. */
