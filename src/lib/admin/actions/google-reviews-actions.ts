@@ -63,8 +63,8 @@ export async function setFeaturedGoogleReviewsAction(_prevState: ActionResult | 
     await repo.setFeaturedReviews(requested);
   } catch (error) {
     if (error instanceof AdminForbiddenError || error instanceof AdminUnauthorizedError) throw error;
-    const { code, message } = featuredReviewsLogFields(error);
-    console.error("[google-reviews] setFeaturedReviews failed", { code, message });
+    const fields = featuredReviewsLogFields(error);
+    console.error("[google-reviews] setFeaturedReviews failed", fields);
     return actionError("Could not save featured reviews. The previous selection was left unchanged.");
   }
 
