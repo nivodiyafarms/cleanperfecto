@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdminUnauthorizedError } from "@/lib/admin/require-admin";
 import { AdminForbiddenError } from "@/lib/admin/rbac/capabilities";
+import { FeaturedReviewsWriteError } from "@/lib/google-reviews/featured-write-error";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -137,10 +138,30 @@ describe("setFeaturedGoogleReviewsAction", () => {
 
   it("reports a failed save without claiming the selection changed", async () => {
     mockOwner();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     setFeaturedReviews.mockRejectedValue(new Error("database down, token=should-not-leak"));
     const result = await setFeaturedGoogleReviewsAction(null, formData({ "order-r1": "1" }));
     expect(result).toEqual({ ok: false, error: "Could not save featured reviews. The previous selection was left unchanged." });
     expect(JSON.stringify(result)).not.toContain("token");
+    expect(errorSpy).toHaveBeenCalledWith("[google-reviews] setFeaturedReviews failed", {
+      code: "unknown",
+      message: "redacted",
+    });
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("token");
+    errorSpy.mockRestore();
+  });
+
+  it("logs the Postgres code and message when the featured write fails", async () => {
+    mockOwner();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setFeaturedReviews.mockRejectedValue(new FeaturedReviewsWriteError("21000", "DELETE requires a WHERE clause"));
+    const result = await setFeaturedGoogleReviewsAction(null, formData({ "order-r1": "1" }));
+    expect(result.ok).toBe(false);
+    expect(errorSpy).toHaveBeenCalledWith("[google-reviews] setFeaturedReviews failed", {
+      code: "21000",
+      message: "DELETE requires a WHERE clause",
+    });
+    errorSpy.mockRestore();
   });
 
   it("clears the featured set when every order field is blank", async () => {

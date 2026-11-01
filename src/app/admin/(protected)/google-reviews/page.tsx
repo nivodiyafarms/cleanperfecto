@@ -3,13 +3,9 @@ import { setFeaturedGoogleReviewsAction } from "@/lib/admin/actions/google-revie
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { hasCapability } from "@/lib/admin/rbac/capabilities";
 import { GOOGLE_REVIEW_CONTENT_RETENTION_DAYS, getGoogleBusinessProfileConfig } from "@/lib/google-reviews/config";
+import { formatGoogleReviewsAdminTimestamp } from "@/lib/google-reviews/format-admin-timestamp";
 import { createSupabaseGoogleReviewsRepository } from "@/lib/google-reviews/repository";
 import { isReviewEligibleForFeaturing } from "@/lib/google-reviews/retention";
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "Never";
-  return new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
-}
 
 export default async function AdminGoogleReviewsPage() {
   const admin = await requireAdmin();
@@ -39,7 +35,7 @@ export default async function AdminGoogleReviewsPage() {
                 </span>
               </p>
               <p className="mt-0.5 line-clamp-2 text-sm text-muted">{review.reviewText ?? "(no written review)"}</p>
-              <p className="mt-0.5 text-xs text-muted">{formatDate(review.reviewCreatedAt)}</p>
+              <p className="mt-0.5 text-xs text-muted">{formatGoogleReviewsAdminTimestamp(review.reviewCreatedAt)}</p>
               {!eligible && <p className="mt-0.5 text-xs text-muted">Not eligible to feature until a successful sync validates it.</p>}
             </div>
             {canManageFeatured && eligible && (
@@ -85,9 +81,9 @@ export default async function AdminGoogleReviewsPage() {
         )}
         <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
           <dt className="text-muted">Last successful sync</dt>
-          <dd className="text-foreground">{formatDate(syncState.lastSuccessfulSyncAt)}</dd>
+          <dd className="text-foreground">{formatGoogleReviewsAdminTimestamp(syncState.lastSuccessfulSyncAt)}</dd>
           <dt className="text-muted">Last sync attempt</dt>
-          <dd className="text-foreground">{formatDate(syncState.lastSyncAttemptAt)}</dd>
+          <dd className="text-foreground">{formatGoogleReviewsAdminTimestamp(syncState.lastSyncAttemptAt)}</dd>
           <dt className="text-muted">Overall Google rating</dt>
           <dd className="text-foreground">{syncState.overallRating ?? "—"}</dd>
           <dt className="text-muted">Total Google review count</dt>

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin, AdminUnauthorizedError } from "@/lib/admin/require-admin";
 import { AdminForbiddenError, assertCapability } from "@/lib/admin/rbac/capabilities";
 import { GOOGLE_REVIEW_CONTENT_RETENTION_DAYS } from "@/lib/google-reviews/config";
+import { featuredReviewsLogFields } from "@/lib/google-reviews/featured-write-error";
 import { createSupabaseGoogleReviewsRepository } from "@/lib/google-reviews/repository";
 import { isReviewEligibleForFeaturing } from "@/lib/google-reviews/retention";
 import { actionError, actionOk, type ActionResult } from "./types";
@@ -62,6 +63,8 @@ export async function setFeaturedGoogleReviewsAction(_prevState: ActionResult | 
     await repo.setFeaturedReviews(requested);
   } catch (error) {
     if (error instanceof AdminForbiddenError || error instanceof AdminUnauthorizedError) throw error;
+    const { code, message } = featuredReviewsLogFields(error);
+    console.error("[google-reviews] setFeaturedReviews failed", { code, message });
     return actionError("Could not save featured reviews. The previous selection was left unchanged.");
   }
 

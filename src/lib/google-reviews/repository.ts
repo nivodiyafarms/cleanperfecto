@@ -2,6 +2,7 @@ import "server-only";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { boundSyncErrorCode } from "./errors";
+import { FeaturedReviewsWriteError } from "./featured-write-error";
 import type { CachedGoogleReview, GoogleReviewsSyncState, PublicFeaturedReview, PublicGoogleRatingSummary, RawGoogleReview } from "./types";
 
 export interface GoogleReviewsSyncWrite {
@@ -170,7 +171,7 @@ export function createSupabaseGoogleReviewsRepository(client: SupabaseAdminClien
       const { error } = await client.rpc("set_featured_google_reviews", {
         p_selections: selections.map((selection) => ({ reviewId: selection.reviewId, displayOrder: selection.displayOrder })),
       });
-      if (error) throw new Error(`[google-reviews] setFeaturedReviews failed: ${error.message}`);
+      if (error) throw new FeaturedReviewsWriteError(error.code, error.message);
     },
   };
 }
