@@ -5,7 +5,9 @@ import SiteNav from "@/components/nav/SiteNav";
 import {
   HOMEPAGE_REFERRAL_CTA,
   HOMEPAGE_REFERRAL_HEADLINE,
-  NEW_CUSTOMER_REFERRAL_CTA,
+  EXISTING_CUSTOMER_REFERRAL_PROMPT,
+  NEW_CUSTOMER_REFERRAL_ACTION,
+  NEW_CUSTOMER_REFERRAL_PROMPT,
   NEW_CUSTOMER_REFERRAL_HREF,
   REFERRAL_CODE_HREF,
   REFERRAL_TERMS_LINK,
@@ -29,22 +31,24 @@ export default function RewardsPage() {
             <li key={bullet}>{bullet}</li>
           ))}
         </ul>
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-stretch">
           <Link
             href={NEW_CUSTOMER_REFERRAL_HREF}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-foreground px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 sm:w-auto"
+            className="inline-flex min-h-11 w-full flex-col items-center justify-center rounded-full px-4 py-2 text-center text-sm leading-tight sm:min-w-0 sm:flex-1 bg-foreground font-semibold text-white transition-opacity hover:opacity-90"
           >
-            {NEW_CUSTOMER_REFERRAL_CTA}
+            <span className="block">{NEW_CUSTOMER_REFERRAL_PROMPT}</span>
+            <span className="block">{NEW_CUSTOMER_REFERRAL_ACTION}</span>
           </Link>
           <Link
             href={REFERRAL_CODE_HREF}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary sm:w-auto"
+            className="inline-flex min-h-11 w-full flex-col items-center justify-center rounded-full px-4 py-2 text-center text-sm leading-tight sm:min-w-0 sm:flex-1 bg-primary font-medium text-foreground transition-colors hover:bg-secondary"
           >
-            Already a customer? {HOMEPAGE_REFERRAL_CTA}
+            <span className="block">{EXISTING_CUSTOMER_REFERRAL_PROMPT}</span>
+            <span className="block">{HOMEPAGE_REFERRAL_CTA}</span>
           </Link>
           <Link
             href={REFERRAL_TERMS_LINK}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-full border border-border px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-secondary sm:w-auto"
+            className="inline-flex min-h-11 w-full flex-col items-center justify-center rounded-full px-4 py-2 text-center text-sm leading-tight sm:min-w-0 sm:flex-1 whitespace-nowrap border border-border font-medium text-foreground transition-colors hover:border-secondary"
           >
             {SEE_FULL_TERMS_LABEL}
           </Link>

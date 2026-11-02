@@ -4,9 +4,11 @@ import {
   BOOKING_REFERRAL_HEADLINE,
   HOMEPAGE_REFERRAL_CTA,
   HOMEPAGE_REFERRAL_HEADLINE,
-  HOMEPAGE_BANNER_CTA,
   HOMEPAGE_BANNER_HEADLINE,
   NEW_CUSTOMER_REFERRAL_CTA,
+  NEW_CUSTOMER_REFERRAL_PROMPT,
+  NEW_CUSTOMER_REFERRAL_ACTION,
+  EXISTING_CUSTOMER_REFERRAL_PROMPT,
   NEW_CUSTOMER_REFERRAL_HREF,
   REWARDS_PAGE_HREF,
   OFFERS_AND_REWARDS_LABEL,
@@ -24,9 +26,11 @@ describe("referral copy", () => {
     expect(PORTAL_REFERRAL_HEADLINE).toBe("Give $15. Get $15.");
     expect(HOMEPAGE_REFERRAL_HEADLINE).toBe("Give $15, Get $15");
     expect(HOMEPAGE_BANNER_HEADLINE).toBe("Refer a friend. You both get $15 off.");
-    expect(HOMEPAGE_BANNER_CTA).toBe("See offers & rewards");
     expect(REWARDS_PAGE_HREF).toBe("/rewards");
     expect(NEW_CUSTOMER_REFERRAL_CTA).toBe("Have a referral code? Book now");
+    expect(NEW_CUSTOMER_REFERRAL_PROMPT).toBe("Have a referral code?");
+    expect(NEW_CUSTOMER_REFERRAL_ACTION).toBe("Book now");
+    expect(EXISTING_CUSTOMER_REFERRAL_PROMPT).toBe("Already a customer?");
     expect(NEW_CUSTOMER_REFERRAL_HREF).toBe("/quote");
     expect(HOMEPAGE_REFERRAL_CTA).toBe("Get my referral code");
     expect(REFERRAL_CODE_HREF).toBe("/my/rewards");

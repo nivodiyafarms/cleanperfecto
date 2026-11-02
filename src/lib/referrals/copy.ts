@@ -13,12 +13,16 @@ export const HOMEPAGE_REFERRAL_CTA = "Get my referral code";
 
 export const HOMEPAGE_BANNER_HEADLINE = "Refer a friend. You both get $15 off.";
 
-export const HOMEPAGE_BANNER_CTA = "See offers & rewards";
-
 export const REWARDS_PAGE_HREF = "/rewards";
 
 /** For visitors without an account: go straight to the quote/booking flow, where the code is entered. */
-export const NEW_CUSTOMER_REFERRAL_CTA = "Have a referral code? Book now";
+export const NEW_CUSTOMER_REFERRAL_PROMPT = "Have a referral code?";
+
+export const NEW_CUSTOMER_REFERRAL_ACTION = "Book now";
+
+export const NEW_CUSTOMER_REFERRAL_CTA = `${NEW_CUSTOMER_REFERRAL_PROMPT} ${NEW_CUSTOMER_REFERRAL_ACTION}`;
+
+export const EXISTING_CUSTOMER_REFERRAL_PROMPT = "Already a customer?";
 
 export const NEW_CUSTOMER_REFERRAL_HREF = "/quote";
 
