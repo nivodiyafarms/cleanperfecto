@@ -12,6 +12,8 @@ export const metadata: Metadata = {
     "Tell us about your cleaning and get a personalized estimate from CleanPerfecto in under a minute.",
 };
 
-export default function QuotePage() {
-  return <QuoteWizard nowIso={new Date().toISOString()} />;
+export default async function QuotePage({ searchParams }: { searchParams: Promise<{ ref?: string | string[] }> }) {
+  const params = await searchParams;
+  const ref = typeof params.ref === "string" ? params.ref : "";
+  return <QuoteWizard nowIso={new Date().toISOString()} initialReferralCode={ref} />;
 }

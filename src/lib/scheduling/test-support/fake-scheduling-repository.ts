@@ -1383,6 +1383,7 @@ export function createFakeSchedulingRepository(
         stripeTaxCalculationId: patch.stripeTaxCalculationId,
         taxCalculationExpiresAt: patch.taxCalculationExpiresAt,
         taxLocationSnapshot: patch.taxLocationSnapshot,
+        referralCreditAmount: patch.referralCreditAmount ?? existing.referralCreditAmount ?? 0,
         tipSelectedAt: new Date(),
       };
       paymentsByVisitId.set(existing.serviceVisitId, updated);

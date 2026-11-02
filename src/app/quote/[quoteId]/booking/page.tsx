@@ -109,6 +109,7 @@ export default async function QuoteBookingPage({ params, searchParams }: Booking
         achPackageOptions={achPackageOptions}
         stripeSetupAvailable={canCreateStripeSetup()}
         stripeChargeAvailable={canCreateStripeCharge()}
+        initialReferralCode={quote.referralCode ?? (typeof resolvedSearchParams.ref === "string" ? resolvedSearchParams.ref : "")}
         activeConsentVersion={
           activeVersion
             ? {

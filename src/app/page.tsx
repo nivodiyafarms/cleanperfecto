@@ -11,6 +11,7 @@ import ServiceComparison from "@/components/sections/ServiceComparison";
 import StartingPrices from "@/components/sections/StartingPrices";
 import PropertySpecializations from "@/components/sections/PropertySpecializations";
 import ServiceArea from "@/components/sections/ServiceArea";
+import ReferralOffer from "@/components/sections/ReferralOffer";
 import QuoteSection from "@/components/sections/QuoteSection";
 import SiteFooter from "@/components/footer/SiteFooter";
 
@@ -36,6 +37,7 @@ export default function Home() {
         <StartingPrices />
         <PropertySpecializations />
         <ServiceArea />
+        <ReferralOffer />
         <QuoteSection />
       </main>
       <SiteFooter />

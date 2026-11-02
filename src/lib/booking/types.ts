@@ -59,6 +59,7 @@ export interface QuoteRequestForBookingRow {
   serviceAddressLine2: string | null;
   serviceCity: string | null;
   serviceState: string | null;
+  referralCode?: string | null;
 }
 
 export type NotBookableReason = "not_found" | "manual_review" | "customer_identity_conflict";
@@ -86,6 +87,7 @@ export interface BookableQuote {
   serviceAddressLine2: string | null;
   serviceCity: string | null;
   serviceState: string | null;
+  referralCode?: string | null;
 }
 
 /**
@@ -123,6 +125,8 @@ export interface NormalBookingSelectionInput {
   consentAccepted: boolean;
   /** The consent_versions.id actually rendered to the customer alongside the checkbox — validated server-side against the current active version, never trusted blindly. See acceptConsentClickwrap. */
   presentedConsentVersionId: string;
+  /** Optional. Validated server-side. Empty means no referral on this submission. */
+  referralCode?: string;
 }
 
 export interface PrepaidBookingSelectionInput {
@@ -133,6 +137,7 @@ export interface PrepaidBookingSelectionInput {
   /** Required clickwrap acceptance — same semantics as NormalBookingSelectionInput, worded for the prepaid payment model. */
   consentAccepted: boolean;
   presentedConsentVersionId: string;
+  referralCode?: string;
 }
 
 export interface BookingOrderRow {
@@ -174,6 +179,8 @@ export interface BookingOrderRow {
   consentVersionId: string | null;
   /** The exact cancellation/rescheduling/no-access wording shown for THIS booking, frozen verbatim (see formatCancellationPolicySnapshot). cancellationPolicyVersion alone is only a version tag, not durably-versioned text. Null for rows created before this evidence was captured. */
   cancellationPolicyTextSnapshot: string | null;
+  referralCodeId?: string | null;
+  referralId?: string | null;
 }
 
 export interface NewBookingOrderRow {
@@ -210,6 +217,8 @@ export interface NewBookingOrderRow {
   consentVersionId?: string | null;
   /** Optional — defaults to null when omitted. Server-derived only (formatCancellationPolicySnapshot) — never accepted as raw client input. */
   cancellationPolicyTextSnapshot?: string | null;
+  referralCodeId?: string | null;
+  referralId?: string | null;
 }
 
 export interface PaymentAttemptRow {

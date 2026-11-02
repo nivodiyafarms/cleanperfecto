@@ -2,6 +2,8 @@ import { classifyAddOns } from "@/lib/pricing/add-ons";
 import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { resolveTipBasisAmount } from "./resolve-tip-basis";
+import { roundToCents } from "@/lib/pricing/money";
+import { previewReferralCreditAmount } from "@/lib/referrals/production-hooks";
 import { previewServiceAmountAndTax } from "./preview-service-amount-and-tax";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
@@ -91,7 +93,12 @@ export async function prepareVisitPaymentReview(repo: SchedulingRepository, gate
       ? await repo.resyncServiceVisitPaymentApprovedAmount(inserted.id, pricing.amountDueFromCustomer)
       : inserted;
 
-  const { taxAmount: previewTaxAmount, previewTotal: previewAmountDueBeforeTip } = await previewServiceAmountAndTax(gateway, visit, pricing);
+  const referralCreditAmount = await previewReferralCreditAmount(serviceVisitId);
+  const pricingForPreview =
+    referralCreditAmount > 0
+      ? { ...pricing, amountDueFromCustomer: roundToCents(Math.max(0, pricing.amountDueFromCustomer - referralCreditAmount)) }
+      : pricing;
+  const { taxAmount: previewTaxAmount, previewTotal: previewAmountDueBeforeTip } = await previewServiceAmountAndTax(gateway, visit, pricingForPreview);
 
   const lineItems: VisitPaymentReviewLineItem[] = [
     ...classifyAddOns(pricing.addOnIds).priced.map((addOn) => ({ description: addOn.label, amount: addOn.amount })),
@@ -99,6 +106,7 @@ export async function prepareVisitPaymentReview(repo: SchedulingRepository, gate
       description: adjustment.description,
       amount: adjustment.type === "custom_discount" ? -adjustment.amount : adjustment.amount,
     })),
+    ...(referralCreditAmount > 0 ? [{ description: "Referral reward", amount: -referralCreditAmount }] : []),
   ];
 
   return {

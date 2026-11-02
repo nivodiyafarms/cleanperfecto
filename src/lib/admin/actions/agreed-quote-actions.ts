@@ -78,6 +78,7 @@ function parseCreateAgreedQuoteInput(formData: FormData, createdByAdminUserId: s
     agreedRequestedDate: parseOptionalString(formData, "agreedRequestedDate"),
     agreedRequestedStartTime: parseOptionalString(formData, "agreedRequestedStartTime"),
     supersedesInvitationId: parseOptionalString(formData, "supersedesInvitationId"),
+    referralCode: parseOptionalString(formData, "referralCode"),
     createdByAdminUserId,
   };
 }

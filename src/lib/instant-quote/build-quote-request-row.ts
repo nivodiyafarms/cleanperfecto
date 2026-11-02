@@ -26,6 +26,7 @@ export interface BuildQuoteRequestRowParams {
    * estimate_type flag is overridden.
    */
   forceManualReview?: boolean;
+  referralCode?: string | null;
 }
 
 /**
@@ -100,6 +101,7 @@ export function buildQuoteRequestRow(params: BuildQuoteRequestRowParams) {
     first_cleaning_offer_applied: result.discountProgram === "first_cleaning",
 
     pricing_snapshot: { input: calculationInput, result },
+    referral_code: params.referralCode ?? validated.referralCode ?? null,
   };
 }
 

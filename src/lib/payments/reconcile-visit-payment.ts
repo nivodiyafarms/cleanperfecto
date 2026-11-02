@@ -3,6 +3,7 @@ import type { ServiceVisitPaymentStatus } from "@/lib/scheduling/types";
 import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { issueDocumentsForVisitPayment } from "@/lib/invoicing/issue-documents-for-visit-payment";
 import { allowedFromStatusesFor } from "./payment-status-transitions";
+import { onQualifyingPaymentReversed, onVisitMayQualify } from "@/lib/referrals/production-hooks";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 const NOTIFICATION_TYPE_BY_STATUS: Partial<Record<ServiceVisitPaymentStatus, "payment_succeeded" | "payment_failed" | "payment_action_required">> = {
@@ -57,6 +58,7 @@ export async function reconcileVisitPayment(
   }
 
   if (isFirstPaidTransition) {
+    await onVisitMayQualify(updated.serviceVisitId);
     // Best-effort — issuing the invoice/receipt paperwork must never be
     // mistaken for (or roll back) the payment itself, which already
     // committed above. Same convention as the notification enqueue below.
@@ -97,6 +99,7 @@ export async function reconcileVisitPaymentRefund(repo: SchedulingRepository, pa
   );
   if (updated) {
     await repo.updateServiceVisitPricingPaymentStatus(updated.serviceVisitId, status);
+    if (status === "refunded") await onQualifyingPaymentReversed(updated.serviceVisitId);
   } else {
     // A refund event whose current status isn't paid/partially_refunded
     // (e.g. arriving before payment_intent.succeeded reconciled, or after

@@ -94,6 +94,7 @@ export interface InstantQuoteRawInput {
 
   leadSource?: LeadSource;
   leadSourceDetail?: string;
+  referralCode?: string;
 }
 
 export interface ValidatedServiceAddress {
@@ -133,4 +134,5 @@ export interface ValidatedInstantQuoteInput {
 
   leadSource: LeadSource | null;
   leadSourceDetail: string | null;
+  referralCode?: string | null;
 }

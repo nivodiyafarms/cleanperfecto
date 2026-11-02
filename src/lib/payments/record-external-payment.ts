@@ -2,6 +2,7 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { assertCanRecordExternalPayment } from "@/lib/config/payment-capabilities";
 import { issueDocumentsForVisitPayment } from "@/lib/invoicing/issue-documents-for-visit-payment";
+import { onVisitMayQualify } from "@/lib/referrals/production-hooks";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RecordExternalPaymentInput {
@@ -76,6 +77,7 @@ export async function recordExternalPayment(repo: SchedulingRepository, gateway:
   // Best-effort — issuing the invoice/receipt paperwork must never be
   // mistaken for (or roll back) the payment itself, which already
   // committed above (phase 1).
+  await onVisitMayQualify(input.serviceVisitId);
   await issueDocumentsForVisitPayment(repo, settled).catch((error) => {
     console.error(`[payments] failed to issue invoice/receipt for service_visit_payments ${settled.id}:`, error);
   });

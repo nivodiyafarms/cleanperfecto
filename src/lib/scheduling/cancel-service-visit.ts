@@ -2,6 +2,7 @@ import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { assessFee, type FeeAssessmentResult } from "./assess-cancellation-fee";
 import { InvalidVisitStateError } from "./errors";
 import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
+import { onVisitCancelled } from "@/lib/referrals/production-hooks";
 import type { SchedulingRepository } from "./repository";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
 
@@ -101,6 +102,8 @@ export async function cancelServiceVisit(repo: SchedulingRepository, input: Canc
   if (recurringScheduleId) {
     await replenishRecurringVisitPlans(repo, recurringScheduleId);
   }
+
+  await onVisitCancelled(input.serviceVisitId);
 
   return { changed: true, fee };
 }

@@ -36,6 +36,7 @@ function toInvitationRow(row: Record<string, unknown>): AgreedQuoteInvitationRow
     cancelledByAdminUserId: (row.cancelled_by_admin_user_id as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+    referralCode: (row.referral_code as string | null) ?? null,
   };
 }
 
@@ -84,6 +85,7 @@ export function createSupabaseAgreedQuoteInvitationRepository(): AgreedQuoteInvi
           agreed_requested_start_time: row.agreedRequestedStartTime,
           expires_at: row.expiresAt,
           supersedes_invitation_id: row.supersedesInvitationId,
+          referral_code: row.referralCode ?? null,
         })
         .select()
         .single();

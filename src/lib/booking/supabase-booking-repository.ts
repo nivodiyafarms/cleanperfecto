@@ -62,6 +62,8 @@ function toBookingOrderRow(row: Record<string, unknown>): BookingOrderRow {
     paymentAuthorizationTextSnapshot: (row.payment_authorization_text_snapshot as string | null) ?? null,
     consentVersionId: (row.consent_version_id as string | null) ?? null,
     cancellationPolicyTextSnapshot: (row.cancellation_policy_text_snapshot as string | null) ?? null,
+    referralCodeId: (row.referral_code_id as string | null) ?? null,
+    referralId: (row.referral_id as string | null) ?? null,
   };
 }
 
@@ -110,7 +112,7 @@ export function createSupabaseBookingRepository(): BookingRepository {
       const { data, error } = await supabase
         .from("quote_requests")
         .select(
-          "id,customer_id,estimate_type,cleaning_type,pricing_snapshot,email_normalized,phone_normalized,service_address_identity,service_address_line1,service_address_line2,service_city,service_state"
+          "id,customer_id,estimate_type,cleaning_type,pricing_snapshot,email_normalized,phone_normalized,service_address_identity,service_address_line1,service_address_line2,service_city,service_state,referral_code"
         )
         .eq("id", id)
         .maybeSingle();
@@ -133,6 +135,7 @@ export function createSupabaseBookingRepository(): BookingRepository {
         serviceAddressLine2: data.service_address_line2,
         serviceCity: data.service_city,
         serviceState: data.service_state,
+        referralCode: (data.referral_code as string | null) ?? null,
       };
     },
 
@@ -218,6 +221,8 @@ export function createSupabaseBookingRepository(): BookingRepository {
         payment_authorization_text_snapshot: row.paymentAuthorizationTextSnapshot ?? null,
         consent_version_id: row.consentVersionId ?? null,
         cancellation_policy_text_snapshot: row.cancellationPolicyTextSnapshot ?? null,
+        referral_code_id: row.referralCodeId ?? null,
+        referral_id: row.referralId ?? null,
       };
 
       // Insert-or-fetch by client_request_id: `upsert` with

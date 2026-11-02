@@ -50,6 +50,7 @@ export interface CreateAgreedQuoteInput {
 
   /** Revision flow: supersedes an existing invitation (which must currently be pending_send/sent). */
   supersedesInvitationId?: string;
+  referralCode?: string | null;
 
   createdByAdminUserId: string;
 }
@@ -124,6 +125,7 @@ function toValidatedShape(input: CreateAgreedQuoteInput, contactOverride?: { nam
     message: null,
     leadSource: null,
     leadSourceDetail: null,
+    referralCode: input.referralCode ?? null,
   };
 }
 
@@ -268,6 +270,7 @@ export async function createAgreedQuote(
     legacyServiceId,
     calculationInput,
     calculationResult,
+    referralCode: input.referralCode ?? null,
   });
 
   const insertResult = await repo.insertQuoteRequest(row);
@@ -301,6 +304,7 @@ export async function createAgreedQuote(
     agreedRequestedStartTime: input.agreedRequestedStartTime ?? null,
     expiresAt: expiresAt.toISOString(),
     supersedesInvitationId: input.supersedesInvitationId ?? null,
+    referralCode: input.referralCode ?? null,
   });
 
   return { ok: true, quoteId, customerId, invitationId: invitation.id };

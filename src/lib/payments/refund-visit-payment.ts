@@ -5,6 +5,7 @@ import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
 import { roundToCents } from "@/lib/pricing/money";
 import { attemptTaxReversal } from "./attempt-tax-reversal";
+import { onQualifyingPaymentReversed } from "@/lib/referrals/production-hooks";
 import type { VisitPaymentGateway } from "./visit-payment-gateway";
 
 export interface RefundVisitPaymentInput {
@@ -115,6 +116,8 @@ export async function refundVisitPayment(
     });
     await attemptTaxReversal(repo, gateway, reconciliation, { actorAdminUserId: input.actorAdminUserId, actorRole: input.actorRole });
   }
+
+  if (updated.status === "refunded") await onQualifyingPaymentReversed(input.serviceVisitId);
 
   return updated;
 }

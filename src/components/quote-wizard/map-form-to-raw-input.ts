@@ -87,6 +87,7 @@ export function mapWizardFormToRawInput(
 
     leadSource: postEstimate?.leadSource ? postEstimate.leadSource : undefined,
     leadSourceDetail: leadSourceDetail && leadSourceDetail.length > 0 ? leadSourceDetail : undefined,
+    referralCode: formState.referralCode.trim() || undefined,
   };
 }
 

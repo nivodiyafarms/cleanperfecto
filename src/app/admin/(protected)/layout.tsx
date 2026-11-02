@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: "/admin/packages", label: "Packages" },
   { href: "/admin/availability", label: "Availability" },
   { href: "/admin/google-reviews", label: "Google Reviews" },
+  { href: "/admin/referrals", label: "Referrals" },
 ];
 
 /**

@@ -45,6 +45,7 @@ export async function acceptAgreedQuoteAction(_prevState: AcceptAgreedQuoteActio
     requestedDate,
     requestedStartTime,
     paymentMethod,
+    referralCode: formData.get("referralCode") ? String(formData.get("referralCode")) : undefined,
   });
 
   if (result.stage === "claim_failed") {

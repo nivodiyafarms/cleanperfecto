@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: "/my/receipts", label: "Receipts" },
   { href: "/my/consent", label: "Consent" },
   { href: "/my/profile", label: "Profile" },
+  { href: "/my/rewards", label: "Rewards" },
 ];
 
 /**

@@ -26,6 +26,7 @@ export interface CustomizationSelectionSearchParams {
   movePackageLevel?: string | string[];
   outdoor?: string | string[];
   windows?: string | string[];
+  ref?: string | string[];
 }
 
 function firstValue(raw: string | string[] | undefined): string | undefined {

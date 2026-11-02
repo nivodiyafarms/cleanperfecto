@@ -2,6 +2,7 @@ import { enqueueNotification } from "@/lib/notifications/enqueue-notification";
 import { enqueueReviewRequest } from "@/lib/review/enqueue-review-request";
 import { replenishRecurringVisitPlans } from "./replenish-recurring-visit-plans";
 import { cancelPendingReminder } from "./schedule-visit-reminder";
+import { onVisitMayQualify } from "@/lib/referrals/production-hooks";
 import type { SchedulingRepository } from "./repository";
 
 export interface CompleteServiceVisitOptions {
@@ -113,6 +114,7 @@ export async function completeServiceVisit(
     if (recurringScheduleId) {
       await replenishRecurringVisitPlans(repo, recurringScheduleId);
     }
+    await onVisitMayQualify(serviceVisitId);
   }
 
   return changed;

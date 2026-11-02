@@ -49,7 +49,8 @@ export type AdminCapability =
   | "override_tax" // reserved — no tax-override action exists yet; retryExternalTaxSync is NOT this, see the ambiguous-classification note in payment-actions.ts
   | "manage_roles" // reserved — no role-management UI exists yet
   | "manage_payment_configuration" // reserved — PAYMENT_MODE/TAX_MODE/Stripe keys are env-configured, not admin-UI-configured, in this milestone
-  | "manage_featured_google_reviews"; // choose and order the homepage's featured Google reviews — owner-only curation, not a routine operations task
+  | "manage_featured_google_reviews" // choose and order the homepage's featured Google reviews — owner-only curation, not a routine operations task
+  | "manage_referral_program"; // owner-only: issue or disable admin referral codes and review attribution, credits, and reversals
 
 const OPERATIONS_CAPABILITIES: ReadonlySet<AdminCapability> = new Set<AdminCapability>([
   "schedule_visit_operations",

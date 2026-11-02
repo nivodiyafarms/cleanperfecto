@@ -30,6 +30,7 @@ export interface AgreedQuoteInvitationRow {
   cancelledByAdminUserId: string | null;
   createdAt: string;
   updatedAt: string;
+  referralCode?: string | null;
 }
 
 export interface NewAgreedQuoteInvitationRow {
@@ -43,6 +44,7 @@ export interface NewAgreedQuoteInvitationRow {
   agreedRequestedStartTime: string | null;
   expiresAt: string;
   supersedesInvitationId: string | null;
+  referralCode?: string | null;
 }
 
 export interface AgreedQuoteInvitationSendRow {

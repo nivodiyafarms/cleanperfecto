@@ -44,6 +44,7 @@ export async function getQuoteForBooking(quoteId: string, repo: BookingRepositor
       serviceAddressLine2: row.serviceAddressLine2,
       serviceCity: row.serviceCity,
       serviceState: row.serviceState,
+      referralCode: row.referralCode ?? null,
     },
   };
 }

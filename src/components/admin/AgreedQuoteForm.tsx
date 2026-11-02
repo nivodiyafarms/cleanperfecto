@@ -150,6 +150,12 @@ export default function AgreedQuoteForm({ existingCustomerId, existingCustomerNa
       </section>
 
       <section className="rounded-2xl border border-border bg-surface p-6">
+        <h2 className="text-sm font-semibold text-foreground">Referral code (optional)</h2>
+        <p className="mt-1 text-xs text-muted">An owner-issued or customer code. It does not change the agreed price. The friend&apos;s credit applies to a later cleaning.</p>
+        <input name="referralCode" type="text" autoComplete="off" className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm" />
+      </section>
+
+      <section className="rounded-2xl border border-border bg-surface p-6">
         <h2 className="text-sm font-semibold text-foreground">Pre-agreed appointment (optional)</h2>
         <p className="mt-1 text-xs text-muted">If a specific date/time was already agreed externally, enter it here — the customer will see it as a requested (not confirmed) visit. Leave blank to let the customer pick.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">

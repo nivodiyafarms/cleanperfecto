@@ -25,11 +25,12 @@ const GENERIC_ERROR_MESSAGE = `We couldn't calculate your estimate right now. Pl
 interface QuoteWizardProps {
   /** Server-rendered instant, seeds the first-cleaning offer badge so hydration never mismatches (same pattern as Hero.tsx). */
   nowIso: string;
+  initialReferralCode?: string;
 }
 
-export default function QuoteWizard({ nowIso }: QuoteWizardProps) {
+export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteWizardProps) {
   const [phase, setPhase] = useState<WizardPhase>("step1");
-  const [formState, setFormState] = useState<WizardFormState>(DEFAULT_WIZARD_FORM_STATE);
+  const [formState, setFormState] = useState<WizardFormState>({ ...DEFAULT_WIZARD_FORM_STATE, referralCode: initialReferralCode });
   const [step1Attempted, setStep1Attempted] = useState(false);
   const [step2Attempted, setStep2Attempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);

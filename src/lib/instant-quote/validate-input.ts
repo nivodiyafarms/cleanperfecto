@@ -8,6 +8,7 @@ import type {
   QuantifiedAddOnSelection,
   SpecialRoomId,
 } from "@/lib/pricing/types";
+import { normalizeReferralCode } from "@/lib/referrals/codes";
 import { normalizePhone } from "./normalize-phone";
 import type { InstantQuoteRawInput, LeadSource, ValidatedInstantQuoteInput } from "./types";
 
@@ -187,6 +188,12 @@ export function validateInstantQuoteInput(raw: InstantQuoteRawInput): ValidateIn
     }
   }
 
+  let referralCode: string | null = null;
+  if (raw.referralCode?.trim()) {
+    referralCode = normalizeReferralCode(raw.referralCode);
+    if (!referralCode) errors.push("Enter a valid referral code.");
+  }
+
   let leadSource: LeadSource | null = null;
   if (raw.leadSource !== undefined) {
     if (!LEAD_SOURCES.has(raw.leadSource)) {
@@ -329,6 +336,7 @@ export function validateInstantQuoteInput(raw: InstantQuoteRawInput): ValidateIn
       message,
       leadSource,
       leadSourceDetail,
+      referralCode,
     },
   };
 }
