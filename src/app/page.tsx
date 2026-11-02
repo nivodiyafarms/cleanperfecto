@@ -11,7 +11,6 @@ import ServiceComparison from "@/components/sections/ServiceComparison";
 import StartingPrices from "@/components/sections/StartingPrices";
 import PropertySpecializations from "@/components/sections/PropertySpecializations";
 import ServiceArea from "@/components/sections/ServiceArea";
-import ReferralOffer from "@/components/sections/ReferralOffer";
 import QuoteSection from "@/components/sections/QuoteSection";
 import SiteFooter from "@/components/footer/SiteFooter";
 
@@ -28,7 +27,6 @@ export default function Home() {
       <SiteNav />
       <main className="flex-1 pb-20 md:pb-0">
         <Hero />
-        <ReferralOffer />
         <GoogleReviewsSection />
         <CleaningServiceSelector />
         <TrustIndicators />

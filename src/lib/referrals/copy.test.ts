@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   BOOKING_REFERRAL_HEADLINE,
   HOMEPAGE_REFERRAL_CTA,
-  HOMEPAGE_REFERRAL_FINE_PRINT,
   HOMEPAGE_REFERRAL_HEADLINE,
-  HOMEPAGE_REFERRAL_SUBTEXT,
+  HOMEPAGE_BANNER_CTA,
+  HOMEPAGE_BANNER_HEADLINE,
+  NEW_CUSTOMER_REFERRAL_CTA,
+  NEW_CUSTOMER_REFERRAL_HREF,
+  REWARDS_PAGE_HREF,
   OFFERS_AND_REWARDS_LABEL,
   PORTAL_REFERRAL_HEADLINE,
   REFERRAL_CODE_HREF,
@@ -20,11 +23,12 @@ describe("referral copy", () => {
   it("uses the approved headlines and states every program rule without the minimum-service or first-cleaning offer", () => {
     expect(PORTAL_REFERRAL_HEADLINE).toBe("Give $15. Get $15.");
     expect(HOMEPAGE_REFERRAL_HEADLINE).toBe("Give $15, Get $15");
-    expect(HOMEPAGE_REFERRAL_SUBTEXT).toBe("Your friend saves $15 on their second cleaning. You save $15 on your next.");
+    expect(HOMEPAGE_BANNER_HEADLINE).toBe("Refer a friend. You both get $15 off.");
+    expect(HOMEPAGE_BANNER_CTA).toBe("See offers & rewards");
+    expect(REWARDS_PAGE_HREF).toBe("/rewards");
+    expect(NEW_CUSTOMER_REFERRAL_CTA).toBe("Have a referral code? Book now");
+    expect(NEW_CUSTOMER_REFERRAL_HREF).toBe("/quote");
     expect(HOMEPAGE_REFERRAL_CTA).toBe("Get my referral code");
-    expect(HOMEPAGE_REFERRAL_FINE_PRINT).toBe(
-      "Rewards unlock after your friend's first completed, paid cleaning. $150 minimum · Valid 60 days ·",
-    );
     expect(REFERRAL_CODE_HREF).toBe("/my/rewards");
     expect(BOOKING_REFERRAL_HEADLINE).toBe("Get $15 off your 2nd cleaning with a referral code.");
     expect(REFERRAL_TERMS_LINK).toBe("/terms#referral-rewards");
@@ -56,7 +60,7 @@ describe("referral copy", () => {
 
   it("places the homepage banner under the hero, the offers link in the footer, and the terms section on the terms page", () => {
     const home = readFileSync("src/app/page.tsx", "utf8");
-    const banner = readFileSync("src/components/sections/ReferralOffer.tsx", "utf8");
+    const hero = readFileSync("src/components/hero/Hero.tsx", "utf8");
     const rewards = readFileSync("src/app/rewards/page.tsx", "utf8");
     const termsPage = readFileSync("src/app/terms/page.tsx", "utf8");
     const footer = readFileSync("src/components/footer/SiteFooter.tsx", "utf8");
@@ -65,18 +69,17 @@ describe("referral copy", () => {
     const booking = readFileSync("src/components/booking/BookingPaymentClient.tsx", "utf8");
     const wizard = readFileSync("src/components/quote-wizard/StepTwoContact.tsx", "utf8");
 
-    expect(home.indexOf("<Hero />")).toBeGreaterThan(-1);
-    expect(home.indexOf("<Hero />")).toBeLessThan(home.indexOf("<ReferralOffer />"));
-    expect(home.indexOf("<ReferralOffer />")).toBeLessThan(home.indexOf("<GoogleReviewsSection />"));
-    expect(home.match(/<ReferralOffer \/>/g)).toHaveLength(1);
-    expect(banner).toContain("bg-primary");
-    expect(banner).toContain("w-full");
-    expect(banner).toContain("REFERRAL_CODE_HREF");
-    expect(banner).toContain("See terms");
+    expect(home).toContain("<Hero />");
+    expect(home).not.toContain("ReferralOffer");
+    expect(hero).toContain("HOMEPAGE_BANNER_HEADLINE");
+    expect(hero).toContain("REWARDS_PAGE_HREF");
+    expect(hero).toContain("Learn more");
+    expect(hero.indexOf("<FirstCleaningOfferBadge")).toBeLessThan(hero.indexOf("{HOMEPAGE_BANNER_HEADLINE}"));
 
     expect(rewards).toContain("REWARDS_PAGE_BULLETS");
     expect(rewards).toContain("SEE_FULL_TERMS_LABEL");
     expect(rewards).toContain("REFERRAL_CODE_HREF");
+    expect(rewards).toContain("NEW_CUSTOMER_REFERRAL_HREF");
     expect(rewards).not.toContain("REFERRAL_TERMS_PARAGRAPHS");
 
     expect(footer).toContain("Offers & Rewards");

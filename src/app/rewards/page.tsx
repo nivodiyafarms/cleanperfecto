@@ -5,6 +5,8 @@ import SiteNav from "@/components/nav/SiteNav";
 import {
   HOMEPAGE_REFERRAL_CTA,
   HOMEPAGE_REFERRAL_HEADLINE,
+  NEW_CUSTOMER_REFERRAL_CTA,
+  NEW_CUSTOMER_REFERRAL_HREF,
   REFERRAL_CODE_HREF,
   REFERRAL_TERMS_LINK,
   REWARDS_PAGE_BULLETS,
@@ -29,10 +31,16 @@ export default function RewardsPage() {
         </ul>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
           <Link
+            href={NEW_CUSTOMER_REFERRAL_HREF}
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-foreground px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 sm:w-auto"
+          >
+            {NEW_CUSTOMER_REFERRAL_CTA}
+          </Link>
+          <Link
             href={REFERRAL_CODE_HREF}
             className="inline-flex min-h-11 w-full items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary sm:w-auto"
           >
-            {HOMEPAGE_REFERRAL_CTA}
+            Already a customer? {HOMEPAGE_REFERRAL_CTA}
           </Link>
           <Link
             href={REFERRAL_TERMS_LINK}

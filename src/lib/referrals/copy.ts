@@ -9,12 +9,18 @@ export const PORTAL_REFERRAL_HEADLINE = "Give $15. Get $15.";
 
 export const HOMEPAGE_REFERRAL_HEADLINE = "Give $15, Get $15";
 
-export const HOMEPAGE_REFERRAL_SUBTEXT = "Your friend saves $15 on their second cleaning. You save $15 on your next.";
-
 export const HOMEPAGE_REFERRAL_CTA = "Get my referral code";
 
-export const HOMEPAGE_REFERRAL_FINE_PRINT =
-  "Rewards unlock after your friend's first completed, paid cleaning. $150 minimum · Valid 60 days ·";
+export const HOMEPAGE_BANNER_HEADLINE = "Refer a friend. You both get $15 off.";
+
+export const HOMEPAGE_BANNER_CTA = "See offers & rewards";
+
+export const REWARDS_PAGE_HREF = "/rewards";
+
+/** For visitors without an account: go straight to the quote/booking flow, where the code is entered. */
+export const NEW_CUSTOMER_REFERRAL_CTA = "Have a referral code? Book now";
+
+export const NEW_CUSTOMER_REFERRAL_HREF = "/quote";
 
 export const BOOKING_REFERRAL_HEADLINE = "Get $15 off your 2nd cleaning with a referral code.";
 
