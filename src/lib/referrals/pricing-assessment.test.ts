@@ -311,3 +311,20 @@ describe("referral code grants", () => {
     expect(sql).toContain("grant execute on function public.set_referral_code_active(uuid, boolean, uuid, text) to service_role");
   });
 });
+
+describe("referral migration isolation", () => {
+  it("does not replace pre-existing shared functions", () => {
+    const sql = readFileSync("supabase/migrations/20261101120000_create_referral_program.sql", "utf8");
+    expect(sql).not.toMatch(/create\s+or\s+replace\s+function/i);
+    expect(sql).not.toContain("function public.protect_service_visit_payments_financial_facts");
+    expect(sql).not.toMatch(/public\.current_customer_id\(|public\.current_admin_is_owner\(/);
+    expect(sql).toContain("create trigger service_visit_payments_protect_referral_credit_amount");
+    expect(sql).toMatch(/new\.referral_credit_amount is distinct from old\.referral_credit_amount/);
+  });
+
+  it("apply script guards on the exact prior migration version", () => {
+    const sql = readFileSync("docs/apply-referral-production-sql-editor.sql", "utf8");
+    expect(sql).toContain("v_latest is distinct from '20261031200000'");
+    expect(sql).toContain("end\n$guard$;");
+  });
+});

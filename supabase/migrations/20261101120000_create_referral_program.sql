@@ -151,7 +151,7 @@ create trigger referral_redemptions_set_updated_at
 before update on public.referral_redemptions
 for each row execute function public.set_updated_at();
 
-create or replace function public.current_customer_id()
+create function public.referral_current_customer_id()
 returns uuid
 language sql
 stable
@@ -164,7 +164,7 @@ as $$
     and active = true
 $$;
 
-create or replace function public.current_admin_is_owner()
+create function public.referral_current_admin_is_owner()
 returns boolean
 language sql
 stable
@@ -180,10 +180,10 @@ as $$
   )
 $$;
 
-revoke all on function public.current_customer_id() from public, anon;
-revoke all on function public.current_admin_is_owner() from public, anon;
-grant execute on function public.current_customer_id() to authenticated, service_role;
-grant execute on function public.current_admin_is_owner() to authenticated, service_role;
+revoke all on function public.referral_current_customer_id() from public, anon;
+revoke all on function public.referral_current_admin_is_owner() from public, anon;
+grant execute on function public.referral_current_customer_id() to authenticated, service_role;
+grant execute on function public.referral_current_admin_is_owner() to authenticated, service_role;
 
 alter table public.referral_codes enable row level security;
 alter table public.referrals enable row level security;
@@ -205,45 +205,45 @@ to service_role;
 create policy referral_codes_select on public.referral_codes
 for select to authenticated
 using (
-  referrer_customer_id = public.current_customer_id()
-  or public.current_admin_is_owner()
+  referrer_customer_id = public.referral_current_customer_id()
+  or public.referral_current_admin_is_owner()
 );
 
 create policy referrals_select on public.referrals
 for select to authenticated
 using (
-  public.current_admin_is_owner()
-  or referred_customer_id = public.current_customer_id()
+  public.referral_current_admin_is_owner()
+  or referred_customer_id = public.referral_current_customer_id()
   or exists (
     select 1 from public.referral_codes
     where referral_codes.id = referrals.referral_code_id
-      and referral_codes.referrer_customer_id = public.current_customer_id()
+      and referral_codes.referrer_customer_id = public.referral_current_customer_id()
   )
 );
 
 create policy referral_credits_select on public.referral_credits
 for select to authenticated
 using (
-  beneficiary_customer_id = public.current_customer_id()
-  or public.current_admin_is_owner()
+  beneficiary_customer_id = public.referral_current_customer_id()
+  or public.referral_current_admin_is_owner()
 );
 
 create policy referral_redemptions_select on public.referral_redemptions
 for select to authenticated
 using (
-  public.current_admin_is_owner()
+  public.referral_current_admin_is_owner()
   or exists (
     select 1 from public.referral_credits
     where referral_credits.id = referral_redemptions.referral_credit_id
-      and referral_credits.beneficiary_customer_id = public.current_customer_id()
+      and referral_credits.beneficiary_customer_id = public.referral_current_customer_id()
   )
 );
 
 create policy referral_program_audit_select on public.referral_program_audit
 for select to authenticated
-using (public.current_admin_is_owner());
+using (public.referral_current_admin_is_owner());
 
-create or replace function public.create_customer_referral_code(p_customer_id uuid, p_code text)
+create function public.create_customer_referral_code(p_customer_id uuid, p_code text)
 returns jsonb
 language plpgsql
 security definer
@@ -278,7 +278,7 @@ exception when unique_violation then
 end;
 $$;
 
-create or replace function public.create_admin_referral_code(p_admin_user_id uuid, p_code text)
+create function public.create_admin_referral_code(p_admin_user_id uuid, p_code text)
 returns jsonb
 language plpgsql
 security definer
@@ -300,7 +300,7 @@ exception when unique_violation then
 end;
 $$;
 
-create or replace function public.set_referral_code_active(
+create function public.set_referral_code_active(
   p_code_id uuid,
   p_active boolean,
   p_admin_user_id uuid,
@@ -321,7 +321,7 @@ begin
 end;
 $$;
 
-create or replace function public.attribute_referral(
+create function public.attribute_referral(
   p_code text,
   p_friend_customer_id uuid,
   p_friend_email text,
@@ -413,7 +413,7 @@ begin
 end;
 $$;
 
-create or replace function public.sync_referral_qualification(p_service_visit_id uuid)
+create function public.sync_referral_qualification(p_service_visit_id uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -542,7 +542,7 @@ $$;
 -- can include travel, supplies, add-ons, and customization, so it is used
 -- only when the visit has no calculation result. Add-on, custom-charge,
 -- tax, and tip columns are never added in.
-create or replace function public.referral_pricing_facts(p_service_visit_id uuid)
+create function public.referral_pricing_facts(p_service_visit_id uuid)
 returns jsonb
 language plpgsql
 stable
@@ -663,7 +663,7 @@ begin
 end;
 $$;
 
-create or replace function public.referral_visit_is_eligible(
+create function public.referral_visit_is_eligible(
   p_service_visit_id uuid,
   p_role text,
   p_qualifying_visit_id uuid
@@ -708,7 +708,7 @@ begin
 end;
 $$;
 
-create or replace function public.reserve_referral_credit(p_service_visit_id uuid)
+create function public.reserve_referral_credit(p_service_visit_id uuid)
 returns numeric
 language plpgsql
 security definer
@@ -764,7 +764,7 @@ begin
 end;
 $$;
 
-create or replace function public.preview_referral_credit(p_service_visit_id uuid)
+create function public.preview_referral_credit(p_service_visit_id uuid)
 returns numeric
 language plpgsql
 stable
@@ -804,7 +804,7 @@ begin
 end;
 $$;
 
-create or replace function public.consume_referral_redemption(p_service_visit_id uuid)
+create function public.consume_referral_redemption(p_service_visit_id uuid)
 returns void
 language plpgsql
 security definer
@@ -826,7 +826,7 @@ begin
 end;
 $$;
 
-create or replace function public.restore_referral_redemption(p_service_visit_id uuid)
+create function public.restore_referral_redemption(p_service_visit_id uuid)
 returns void
 language plpgsql
 security definer
@@ -854,7 +854,7 @@ begin
 end;
 $$;
 
-create or replace function public.reverse_referral_for_visit(p_service_visit_id uuid)
+create function public.reverse_referral_for_visit(p_service_visit_id uuid)
 returns void
 language plpgsql
 security definer
@@ -889,7 +889,7 @@ begin
 end;
 $$;
 
-create or replace function public.flag_shared_payment_method(p_customer_id uuid, p_payment_method_id text)
+create function public.flag_shared_payment_method(p_customer_id uuid, p_payment_method_id text)
 returns void
 language plpgsql
 security definer
@@ -952,52 +952,40 @@ grant execute on function public.restore_referral_redemption(uuid) to service_ro
 grant execute on function public.reverse_referral_for_visit(uuid) to service_role;
 grant execute on function public.flag_shared_payment_method(uuid, text) to service_role;
 
-create or replace function public.protect_service_visit_payments_financial_facts()
+-- Referral-specific guard. The shared protect_service_visit_payments_financial_facts()
+-- function is intentionally NOT replaced; this separate BEFORE UPDATE trigger freezes
+-- referral_credit_amount under exactly the same rule (frozen once tip_confirmed_at is set,
+-- except the start_visit_pricing_revision full-reset shape).
+create function public.protect_referral_credit_amount()
 returns trigger
 language plpgsql
 set search_path = public
 as $$
 begin
-  if old.tip_confirmed_at is not null then
-    if (
-        new.service_visit_id is distinct from old.service_visit_id
-        or new.service_visit_pricing_id is distinct from old.service_visit_pricing_id
-        or new.approved_amount is distinct from old.approved_amount
-        or new.tip_basis_amount is distinct from old.tip_basis_amount
-        or new.tip_selection_type is distinct from old.tip_selection_type
-        or new.tip_percentage is distinct from old.tip_percentage
-        or new.tip_amount is distinct from old.tip_amount
-        or new.tax_amount is distinct from old.tax_amount
-        or new.total_amount is distinct from old.total_amount
-        or new.referral_credit_amount is distinct from old.referral_credit_amount
-        or new.tip_confirmed_at is distinct from old.tip_confirmed_at
-      )
-      and not (
-        current_setting('app.allow_payment_revision_reset', true) = 'true'
-        and new.status = 'created'
-        and new.tip_confirmed_at is null
-      )
-    then
-      raise exception
-        'service_visit_payments financial facts are immutable once tip_confirmed_at is set (id=%)', old.id;
-    end if;
-  end if;
-
-  if old.stripe_payment_intent_id is not null
-    and new.stripe_payment_intent_id is distinct from old.stripe_payment_intent_id
-    and old.status is distinct from 'payment_failed'
-    and not (current_setting('app.allow_payment_revision_reset', true) = 'true' and new.stripe_payment_intent_id is null)
-    and not (current_setting('app.allow_payment_retry_intent_clear', true) = 'true' and new.stripe_payment_intent_id is null)
+  if old.tip_confirmed_at is not null
+    and new.referral_credit_amount is distinct from old.referral_credit_amount
+    and not (
+      current_setting('app.allow_payment_revision_reset', true) = 'true'
+      and new.status = 'created'
+      and new.tip_confirmed_at is null
+    )
   then
     raise exception
-      'service_visit_payments.stripe_payment_intent_id can only be replaced when the prior attempt is dead (status=payment_failed), or cleared via start_visit_pricing_revision/begin_visit_payment_retry; current status=% (id=%)', old.status, old.id;
+      'service_visit_payments financial facts are immutable once tip_confirmed_at is set (id=%)', old.id;
   end if;
-
   return new;
 end;
 $$;
 
-create or replace function public.clear_referral_credit_when_payment_resets()
+revoke all on function public.protect_referral_credit_amount() from public, anon, authenticated;
+
+drop trigger if exists service_visit_payments_protect_referral_credit_amount on public.service_visit_payments;
+
+create trigger service_visit_payments_protect_referral_credit_amount
+before update on public.service_visit_payments
+for each row execute function public.protect_referral_credit_amount();
+
+create function public.clear_referral_credit_when_payment_resets()
 returns trigger
 language plpgsql
 set search_path = public

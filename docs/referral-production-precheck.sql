@@ -1,21 +1,29 @@
--- READ-ONLY precheck for production numabqpfnigejtdwpxng. Expect: latest version 20261031200000,
--- all 5 referral tables present=false, no referral definer functions, last query returns 0 rows.
+-- READ-ONLY precheck for production numabqpfnigejtdwpxng. Changes nothing.
+-- Expect: first query ok=true on every row. Anything false = STOP, do not run the apply script.
+
+select 'latest migration is exactly 20261031200000' as check_name,
+  (select max(version) from supabase_migrations.schema_migrations) = '20261031200000' as ok
+union all
+select 'protect_service_visit_payments_financial_facts() exists',
+  to_regprocedure('public.protect_service_visit_payments_financial_facts()') is not null
+union all
+select 'set_updated_at() exists', to_regprocedure('public.set_updated_at()') is not null
+union all
+select 'service_visit_payments table exists', to_regclass('public.service_visit_payments') is not null
+union all
+select 'payments financial-facts trigger bound',
+  exists (select 1 from pg_trigger where tgrelid = to_regclass('public.service_visit_payments')
+          and tgname = 'service_visit_payments_protect_financial_facts' and not tgisinternal)
+union all
+select 'no referral function names exist yet',
+  not exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and proname in ('attribute_referral','clear_referral_credit_when_payment_resets','consume_referral_redemption','create_admin_referral_code','create_customer_referral_code','flag_shared_payment_method','preview_referral_credit','protect_referral_credit_amount','referral_current_admin_is_owner','referral_current_customer_id','referral_pricing_facts','referral_visit_is_eligible','reserve_referral_credit','restore_referral_redemption','reverse_referral_for_visit','set_referral_code_active','sync_referral_qualification'))
+union all
+select 'no referral tables exist yet',
+  not exists (select 1 from pg_class where relnamespace = 'public'::regnamespace
+              and relname in ('referral_codes','referrals','referral_credits','referral_redemptions','referral_program_audit'))
+union all
+select 'service_visit_payments.referral_credit_amount column not yet present',
+  not exists (select 1 from information_schema.columns where table_schema='public'
+              and table_name='service_visit_payments' and column_name='referral_credit_amount');
 
 select version, name from supabase_migrations.schema_migrations order by version desc limit 3;
-
-select t.tbl, c.oid is not null as present, coalesce(c.relrowsecurity,false) as rls_enabled
-from unnest(array['referral_codes','referrals','referral_credits','referral_redemptions','referral_program_audit']) t(tbl)
-left join pg_class c on c.relname = t.tbl and c.relnamespace = 'public'::regnamespace;
-
-select p.proname,
-  has_function_privilege('anon', p.oid, 'execute') as anon_exec,
-  has_function_privilege('authenticated', p.oid, 'execute') as authenticated_exec
-from pg_proc p
-where p.pronamespace = 'public'::regnamespace and p.prosecdef
-  and (p.proname like '%referral%' or p.proname in ('current_customer_id','current_admin_is_owner','flag_shared_payment_method'))
-order by 1;
-
-select
-  has_table_privilege('authenticated','public.referral_codes','insert') as auth_insert,
-  has_table_privilege('authenticated','public.referral_codes','update') as auth_update
-where to_regclass('public.referral_codes') is not null;

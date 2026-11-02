@@ -15,10 +15,15 @@ select p.proname,
   has_function_privilege('authenticated', p.oid, 'execute') as authenticated_exec
 from pg_proc p
 where p.pronamespace = 'public'::regnamespace and p.prosecdef
-  and (p.proname like '%referral%' or p.proname in ('current_customer_id','current_admin_is_owner','flag_shared_payment_method'))
+  and (p.proname like '%referral%' or p.proname in ('flag_shared_payment_method'))
 order by 1;
 
 select
   has_table_privilege('authenticated','public.referral_codes','insert') as auth_insert,
   has_table_privilege('authenticated','public.referral_codes','update') as auth_update
 where to_regclass('public.referral_codes') is not null;
+-- Shared payments guard must be unchanged (still the 20261018090200 body, no referral_credit_amount),
+-- and the separate referral guard trigger must be bound. Expect: false, true.
+select pg_get_functiondef('public.protect_service_visit_payments_financial_facts()'::regprocedure) like '%referral_credit_amount%' as shared_fn_modified,
+  exists (select 1 from pg_trigger where tgname='service_visit_payments_protect_referral_credit_amount'
+          and tgrelid='public.service_visit_payments'::regclass) as referral_guard_bound;
