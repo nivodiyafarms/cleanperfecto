@@ -1,0 +1,21 @@
+-- READ-ONLY precheck for production numabqpfnigejtdwpxng. Expect: latest version 20261031200000,
+-- all 5 referral tables present=false, no referral definer functions, last query returns 0 rows.
+
+select version, name from supabase_migrations.schema_migrations order by version desc limit 3;
+
+select t.tbl, c.oid is not null as present, coalesce(c.relrowsecurity,false) as rls_enabled
+from unnest(array['referral_codes','referrals','referral_credits','referral_redemptions','referral_program_audit']) t(tbl)
+left join pg_class c on c.relname = t.tbl and c.relnamespace = 'public'::regnamespace;
+
+select p.proname,
+  has_function_privilege('anon', p.oid, 'execute') as anon_exec,
+  has_function_privilege('authenticated', p.oid, 'execute') as authenticated_exec
+from pg_proc p
+where p.pronamespace = 'public'::regnamespace and p.prosecdef
+  and (p.proname like '%referral%' or p.proname in ('current_customer_id','current_admin_is_owner','flag_shared_payment_method'))
+order by 1;
+
+select
+  has_table_privilege('authenticated','public.referral_codes','insert') as auth_insert,
+  has_table_privilege('authenticated','public.referral_codes','update') as auth_update
+where to_regclass('public.referral_codes') is not null;
