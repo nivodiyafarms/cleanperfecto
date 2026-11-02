@@ -50,7 +50,7 @@ export type AdminCapability =
   | "manage_roles" // reserved — no role-management UI exists yet
   | "manage_payment_configuration" // reserved — PAYMENT_MODE/TAX_MODE/Stripe keys are env-configured, not admin-UI-configured, in this milestone
   | "manage_featured_google_reviews" // choose and order the homepage's featured Google reviews — owner-only curation, not a routine operations task
-  | "manage_referral_program"; // owner-only: issue or disable admin referral codes and review attribution, credits, and reversals
+  | "manage_referral_program"; // owner-only: issue or disable admin referral codes, record who a Type B code was given to, and review attribution, credits, and reversals
 
 const OPERATIONS_CAPABILITIES: ReadonlySet<AdminCapability> = new Set<AdminCapability>([
   "schedule_visit_operations",
