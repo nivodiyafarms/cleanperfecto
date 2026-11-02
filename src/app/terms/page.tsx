@@ -11,7 +11,7 @@ import {
 } from "@/lib/booking/cancellation-policy";
 import { SERVICE_CONSENT_TEMPLATE } from "@/lib/legal/service-consent-template";
 import { MINIMUM_SERVICE_TOTAL } from "@/lib/pricing/config";
-import { REFERRAL_TERMS_PARAGRAPHS } from "@/lib/referrals/copy";
+import { REFERRAL_TERMS_ITEMS } from "@/lib/referrals/copy";
 import { SITE_CONTACT } from "@/lib/site-contact";
 
 export const metadata: Metadata = {
@@ -73,9 +73,13 @@ export default function TermsPage() {
       </LegalSection>
 
       <LegalSection id="referral-rewards" title="Referral rewards">
-        {REFERRAL_TERMS_PARAGRAPHS.map((paragraph) => (
-          <p key={paragraph}>{paragraph}</p>
-        ))}
+        <ul className="list-disc space-y-3 pl-5">
+          {REFERRAL_TERMS_ITEMS.map((item) => (
+            <li key={item.label}>
+              <strong className="font-semibold">{item.label}:</strong> {item.body}
+            </li>
+          ))}
+        </ul>
       </LegalSection>
 
       <LegalSection id="make-it-right" title="24-Hour Make-It-Right Promise">

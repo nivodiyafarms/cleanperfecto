@@ -28,6 +28,7 @@ export default function Home() {
       <SiteNav />
       <main className="flex-1 pb-20 md:pb-0">
         <Hero />
+        <ReferralOffer />
         <GoogleReviewsSection />
         <CleaningServiceSelector />
         <TrustIndicators />
@@ -37,7 +38,6 @@ export default function Home() {
         <StartingPrices />
         <PropertySpecializations />
         <ServiceArea />
-        <ReferralOffer />
         <QuoteSection />
       </main>
       <SiteFooter />
