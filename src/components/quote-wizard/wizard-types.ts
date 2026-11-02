@@ -40,6 +40,7 @@ export interface WizardFormState {
   addressLine1: string;
   addressLine2: string;
   city: string;
+  referralCode: string;
 }
 
 export const DEFAULT_WIZARD_FORM_STATE: WizardFormState = {
@@ -59,6 +60,7 @@ export const DEFAULT_WIZARD_FORM_STATE: WizardFormState = {
   addressLine1: "",
   addressLine2: "",
   city: "",
+  referralCode: "",
 };
 
 /**

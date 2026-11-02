@@ -2,6 +2,8 @@ import type { SchedulingRepository } from "@/lib/scheduling/repository";
 import type { TipSelectionType } from "@/lib/scheduling/types";
 import { InvalidVisitStateError } from "@/lib/scheduling/errors";
 import { toStripeCents } from "@/lib/booking/stripe/money";
+import { roundToCents } from "@/lib/pricing/money";
+import { reserveReferralCreditAmount } from "@/lib/referrals/production-hooks";
 import { resolveTipAmount } from "./tip-rules";
 import { resolveTipBasisAmount } from "./resolve-tip-basis";
 import { resolveTaxLocationAddress } from "./resolve-tax-location";
@@ -12,6 +14,8 @@ export interface SelectVisitTipInput {
   tipSelectionType: TipSelectionType;
   /** Only used when tipSelectionType is "custom" — never read for a percentage selection, so a client can never forge a percentage's dollar amount. */
   customAmount?: number;
+  /** Test override. Production omits this and reserves a referral credit server-side. */
+  referralCreditAmount?: number;
 }
 
 export interface SelectVisitTipResult {
@@ -59,7 +63,11 @@ export async function selectVisitTip(repo: SchedulingRepository, gateway: VisitP
     customAmount: input.customAmount,
   });
 
-  const collectibleTotal = payment.approvedAmount + tipAmount;
+  const referralCreditAmount = roundToCents(
+    Math.max(0, Math.min(payment.approvedAmount, input.referralCreditAmount ?? (await reserveReferralCreditAmount(input.serviceVisitId))))
+  );
+  const serviceAmount = roundToCents(Math.max(0, payment.approvedAmount - referralCreditAmount));
+  const collectibleTotal = serviceAmount + tipAmount;
   let taxAmount = 0;
   let totalAmount = collectibleTotal;
   let stripeTaxCalculationId: string | null = null;
@@ -68,7 +76,7 @@ export async function selectVisitTip(repo: SchedulingRepository, gateway: VisitP
   if (collectibleTotal > 0) {
     const address = resolveTaxLocationAddress(visit);
     const calculation = await gateway.createTaxCalculation({
-      serviceAmountCents: toStripeCents(payment.approvedAmount),
+      serviceAmountCents: toStripeCents(serviceAmount),
       tipAmountCents: toStripeCents(tipAmount),
       address,
     });
@@ -88,6 +96,7 @@ export async function selectVisitTip(repo: SchedulingRepository, gateway: VisitP
     stripeTaxCalculationId,
     taxCalculationExpiresAt,
     taxLocationSnapshot: collectibleTotal > 0 ? (resolveTaxLocationAddress(visit) as unknown as Record<string, unknown>) : {},
+    referralCreditAmount,
   });
 
   return {

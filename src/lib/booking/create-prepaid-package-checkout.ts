@@ -17,6 +17,7 @@ import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { PREPAID_FREQUENCY_LABELS } from "./labels";
 import { getSiteUrl } from "./site-url";
+import { attachReferralFromCheckout, linkReferralAfterBooking } from "@/lib/referrals/resolve-booking-referral";
 import { createPrepaidAchCheckoutSession, createPrepaidCardCheckoutSession } from "./stripe/checkout-sessions";
 import { getStripeClient } from "./stripe/client";
 import { resolveStripeCustomerId } from "./stripe/customers";
@@ -108,6 +109,21 @@ export async function createPrepaidPackageCheckout(
       userAgent,
     });
 
+    const referral = await attachReferralFromCheckout({
+      code: raw.referralCode,
+      storedCode: quote.referralCode,
+      customerId: quote.customerId,
+      friendEmail: quote.emailNormalized,
+      friendPhone: quote.phoneNormalized,
+      householdKey: quote.serviceAddressIdentity,
+      friendHasCompletedService: !eligibility.eligible,
+      quoteRequestId: quote.quoteId,
+      loadPaymentMethodId: async () => (await repo.getCustomerForStripe(quote.customerId))?.stripeDefaultPaymentMethodId ?? null,
+    });
+    if (!referral.ok) {
+      return { ok: false, stage: "validation", errors: [referral.message] };
+    }
+
     const bookingOrder = await repo.insertBookingOrder({
       customerId: quote.customerId,
       quoteRequestId: quote.quoteId,
@@ -154,7 +170,10 @@ export async function createPrepaidPackageCheckout(
       paymentAuthorizationTextSnapshot: PREPAID_PAYMENT_AUTHORIZATION_COPY,
       consentVersionId: consentAcceptance.consentVersionId,
       cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(true),
+      referralCodeId: referral.referralCodeId,
+      referralId: referral.referralId,
     });
+    await linkReferralAfterBooking(referral.referralId, bookingOrder.id);
 
     const stripe = getStripeClient();
     const stripeCustomerId = await resolveStripeCustomerId(

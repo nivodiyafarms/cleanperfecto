@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { HOMEPAGE_BANNER_HEADLINE, REWARDS_PAGE_HREF } from "@/lib/referrals/copy";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import FirstCleaningOfferBadge from "./FirstCleaningOfferBadge";
 import HeroVideoBackground from "./HeroVideoBackground";
@@ -79,6 +80,13 @@ export default function Hero() {
       <div className="relative mx-auto w-full max-w-7xl">
         <div className="max-w-xl text-left">
           <FirstCleaningOfferBadge nowIso={new Date().toISOString()} />
+
+          <p className="mt-3 text-sm text-white/85">
+            <Link href={REWARDS_PAGE_HREF} className="underline-offset-2 hover:underline">
+              {HOMEPAGE_BANNER_HEADLINE}{" "}
+              <span className="font-semibold text-primary underline underline-offset-2">Learn more</span>
+            </Link>
+          </p>
 
           <h1 className="mt-6 text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl lg:text-6xl">
             From lived-in to{" "}

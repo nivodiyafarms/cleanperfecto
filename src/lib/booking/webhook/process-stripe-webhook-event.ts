@@ -16,6 +16,7 @@ import { reconcileVisitPayment, reconcileVisitPaymentRefund } from "@/lib/paymen
 import type { VisitPaymentGateway } from "@/lib/payments/visit-payment-gateway";
 import { issueDocumentsForPackagePurchase } from "@/lib/invoicing/issue-documents-for-package-purchase";
 import { formatPaymentMethodDisplayFromStripe } from "@/lib/invoicing/format-payment-method-display";
+import { onPaymentMethodSaved, onQualifyingPaymentReversed } from "@/lib/referrals/production-hooks";
 import { resolveWebhookFulfillmentDecision } from "./webhook-fulfillment-guard";
 
 const PREPAID_FREQUENCIES = new Set<PrepaidFrequency>(["weekly", "biweekly", "every_4_weeks"]);
@@ -63,6 +64,7 @@ async function capturePaymentMethodFromSetupIntent(stripe: Stripe, repo: Booking
     expMonth: paymentMethod.card?.exp_month ?? null,
     expYear: paymentMethod.card?.exp_year ?? null,
   });
+  await onPaymentMethodSaved(customerId, paymentMethodId);
 
   const stripeCustomerId = intentIdOf(setupIntent.customer as string | { id: string } | null);
   if (stripeCustomerId) {
@@ -530,6 +532,13 @@ export async function processStripeWebhookEvent(
         // re-derived guess at which status strings mean "closed".
         isClosed: event.type === "charge.dispute.closed",
       });
+      if (event.type === "charge.dispute.closed" && dispute.status === "lost") {
+        const paymentIntentId = intentIdOf(dispute.payment_intent as string | { id: string } | null);
+        if (paymentIntentId) {
+          const payment = await schedulingRepo.findServiceVisitPaymentByStripePaymentIntentId(paymentIntentId);
+          if (payment) await onQualifyingPaymentReversed(payment.serviceVisitId);
+        }
+      }
       return;
     }
 

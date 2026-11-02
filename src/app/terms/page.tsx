@@ -11,6 +11,7 @@ import {
 } from "@/lib/booking/cancellation-policy";
 import { SERVICE_CONSENT_TEMPLATE } from "@/lib/legal/service-consent-template";
 import { MINIMUM_SERVICE_TOTAL } from "@/lib/pricing/config";
+import { REFERRAL_TERMS_ITEMS } from "@/lib/referrals/copy";
 import { SITE_CONTACT } from "@/lib/site-contact";
 
 export const metadata: Metadata = {
@@ -22,7 +23,7 @@ export default function TermsPage() {
   return (
     <LegalDocument
       title="Terms of Service"
-      description="These are the service terms for a CleanPerfecto cleaning. You accept them when you book, or in your account. Last updated October 30, 2026."
+      description="These are the service terms for a CleanPerfecto cleaning. You accept them when you book, or in your account. Last updated November 1, 2026."
     >
       <LegalSection id="agreement" title={SERVICE_CONSENT_TEMPLATE.title}>
         <p>The agreement you accept is kept with your booking.</p>
@@ -69,6 +70,16 @@ export default function TermsPage() {
           that service. An add-on shown as “starting at,” and any price range on a quote, is an estimate until that rate is confirmed. A fixed rate is available after your first
           service. Restaurant and office quotes are confirmed with us before service.
         </p>
+      </LegalSection>
+
+      <LegalSection id="referral-rewards" title="Referral rewards">
+        <ul className="list-disc space-y-3 pl-5">
+          {REFERRAL_TERMS_ITEMS.map((item) => (
+            <li key={item.label}>
+              <strong className="font-semibold">{item.label}:</strong> {item.body}
+            </li>
+          ))}
+        </ul>
       </LegalSection>
 
       <LegalSection id="make-it-right" title="24-Hour Make-It-Right Promise">

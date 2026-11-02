@@ -48,10 +48,14 @@ export function buildServiceVisitInvoiceAndReceipt(params: {
   const customChargesDetail: InvoiceCustomAdjustmentLine[] = (pricing?.customAdjustments ?? [])
     .filter((a) => a.type === "custom_charge")
     .map((a) => ({ description: a.description, amount: a.amount }));
-  const discountAmount = pricing?.customDiscountAmount ?? 0;
-  const discountDetail: InvoiceCustomAdjustmentLine[] = (pricing?.customAdjustments ?? [])
-    .filter((a) => a.type === "custom_discount")
-    .map((a) => ({ description: a.description, amount: a.amount }));
+  const referralCreditAmount = payment.referralCreditAmount ?? 0;
+  const discountAmount = (pricing?.customDiscountAmount ?? 0) + referralCreditAmount;
+  const discountDetail: InvoiceCustomAdjustmentLine[] = [
+    ...(pricing?.customAdjustments ?? [])
+      .filter((a) => a.type === "custom_discount")
+      .map((a) => ({ description: a.description, amount: a.amount })),
+    ...(referralCreditAmount > 0 ? [{ description: "Referral reward", amount: referralCreditAmount }] : []),
+  ];
   const taxAmount = payment.taxAmount ?? 0;
   // No room-adjustment/travel/supplies breakdown exists yet on
   // service_visit_pricing today (admin-entered flow, not yet wired to the

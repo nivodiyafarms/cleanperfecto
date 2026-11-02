@@ -619,6 +619,8 @@ export interface ServiceVisitPaymentRow {
   serviceVisitPricingId: string;
 
   approvedAmount: number;
+  /** Referral credit reserved for this payment. Omitted on rows created before the column existed. */
+  referralCreditAmount?: number;
   tipBasisAmount: number | null;
   tipSelectionType: TipSelectionType | null;
   tipPercentage: number | null;
@@ -677,6 +679,7 @@ export interface ServiceVisitPaymentTipPatch {
   stripeTaxCalculationId: string | null;
   taxCalculationExpiresAt: Date | null;
   taxLocationSnapshot: Record<string, unknown>;
+  referralCreditAmount?: number;
 }
 
 /** Freezes the row for the stripe_card rail — sets tipConfirmedAt, so must only be called once per row (the repository enforces via the trigger + a state-guarded WHERE clause). */

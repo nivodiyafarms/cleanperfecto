@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { BOOKING_REFERRAL_HEADLINE, REFERRAL_TERMS_LINK } from "@/lib/referrals/copy";
 import { createNormalBookingCheckout } from "@/lib/booking/create-normal-booking-checkout";
 import { createPrepaidPackageCheckout } from "@/lib/booking/create-prepaid-package-checkout";
 import {
@@ -72,6 +74,7 @@ interface BookingPaymentClientProps {
   stripeChargeAvailable: boolean;
   /** The currently active consent_versions row, resolved server-side (see the booking page) — never fetched client-side. Null when no consent template is configured, in which case booking is unavailable rather than silently skipping the required acceptance. */
   activeConsentVersion: ConsentVersionSummary | null;
+  initialReferralCode?: string;
 }
 
 interface RequiredConsentCheckboxProps {
@@ -129,7 +132,9 @@ export default function BookingPaymentClient({
   stripeSetupAvailable,
   stripeChargeAvailable,
   activeConsentVersion,
+  initialReferralCode = "",
 }: BookingPaymentClientProps) {
+  const [referralCode, setReferralCode] = useState(initialReferralCode);
   // One token per visit to this page — resent unchanged on every retry of
   // the same submission (double click, slow network) so the server can
   // never create two booking orders for one submission. A genuinely
@@ -215,6 +220,7 @@ export default function BookingPaymentClient({
         paymentMethodSaveAuthorized: normalConsentChecked,
         consentAccepted: normalConsentChecked,
         presentedConsentVersionId: consentVersion.id,
+        referralCode,
       });
       // A successful call redirects server-side and never returns here.
       if (result.stage === "validation") {
@@ -255,6 +261,7 @@ export default function BookingPaymentClient({
         paymentMethod: selectedPaymentMethod,
         consentAccepted: packageConsentChecked,
         presentedConsentVersionId: consentVersion.id,
+        referralCode,
       });
       if (result.stage === "manual_review_required") {
         setPackageError(
@@ -292,6 +299,27 @@ export default function BookingPaymentClient({
       <div>
         <p className="text-sm font-medium text-muted">CleanPerfecto</p>
         <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Booking &amp; Payment</h1>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-background-alt p-4">
+        <label htmlFor="booking-referral-code" className="text-sm font-medium text-foreground">
+          Referral code <span className="font-normal text-muted">(optional)</span>
+        </label>
+        <input
+          id="booking-referral-code"
+          value={referralCode}
+          onChange={(event) => setReferralCode(event.target.value)}
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          className="mt-2 w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-foreground"
+        />
+        <p className="mt-2 text-sm text-foreground">
+          {BOOKING_REFERRAL_HEADLINE}{" "}
+          <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
+            See terms
+          </Link>
+        </p>
       </div>
 
       {/* A. Pay Per Cleaning */}

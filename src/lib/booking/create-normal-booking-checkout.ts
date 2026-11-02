@@ -22,6 +22,7 @@ import { resolveStripeCustomerId } from "./stripe/customers";
 import { createSupabaseBookingRepository } from "./supabase-booking-repository";
 import type { ConsentVersionSummary, NormalBookingSelectionInput, NotBookableReason } from "./types";
 import { validateNormalBookingSelection } from "./validate-normal-booking-selection";
+import { attachReferralFromCheckout, linkReferralAfterBooking } from "@/lib/referrals/resolve-booking-referral";
 import {
   validateAddOnIds,
   validateMovePackageLevel,
@@ -123,6 +124,21 @@ export async function createNormalBookingCheckout(
       userAgent,
     });
 
+    const referral = await attachReferralFromCheckout({
+      code: raw.referralCode,
+      storedCode: quote.referralCode,
+      customerId: quote.customerId,
+      friendEmail: quote.emailNormalized,
+      friendPhone: quote.phoneNormalized,
+      householdKey: quote.serviceAddressIdentity,
+      friendHasCompletedService: !eligibility.eligible,
+      quoteRequestId: quote.quoteId,
+      loadPaymentMethodId: async () => (await repo.getCustomerForStripe(quote.customerId))?.stripeDefaultPaymentMethodId ?? null,
+    });
+    if (!referral.ok) {
+      return { ok: false, stage: "validation", errors: [referral.message] };
+    }
+
     const bookingOrder = await repo.insertBookingOrder({
       customerId: quote.customerId,
       quoteRequestId: quote.quoteId,
@@ -170,7 +186,10 @@ export async function createNormalBookingCheckout(
       // server-derived, never accepted from raw client input.
       consentVersionId: consentAcceptance.consentVersionId,
       cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(false),
+      referralCodeId: referral.referralCodeId,
+      referralId: referral.referralId,
     });
+    await linkReferralAfterBooking(referral.referralId, bookingOrder.id);
 
     const stripe = getStripeClient();
     const stripeCustomerId = await resolveStripeCustomerId(

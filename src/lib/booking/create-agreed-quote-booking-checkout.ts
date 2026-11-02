@@ -13,6 +13,8 @@ import { createSupabaseSchedulingRepository } from "@/lib/scheduling/supabase-sc
 import { applyAchIncentive } from "./ach-incentive";
 import { CANCELLATION_POLICY_VERSION, PREPAID_PAYMENT_AUTHORIZATION_COPY, SAVED_PAYMENT_AUTHORIZATION_COPY, formatCancellationPolicySnapshot } from "./cancellation-policy";
 import { getOrCreateCheckoutSessionUrl } from "./create-checkout-attempt";
+import { checkFirstCleaningEligibility } from "@/lib/instant-quote/first-cleaning-eligibility";
+import { attachReferralFromCheckout, linkReferralAfterBooking } from "@/lib/referrals/resolve-booking-referral";
 import { getQuoteForBooking } from "./get-quote-for-booking";
 import { PREPAID_FREQUENCY_LABELS } from "./labels";
 import { isWithinOperatingHours } from "./operating-hours";
@@ -40,6 +42,7 @@ export interface AgreedQuoteAcceptanceInput {
   requestedStartTime?: string;
   /** Required only when the invitation's booking is a prepaid package. */
   paymentMethod?: PaymentMethodType;
+  referralCode?: string;
 }
 
 export type AgreedQuoteClaimFailureReason = "not_found" | "wrong_customer" | "expired" | "cancelled" | "superseded" | "completed" | "unknown";
@@ -138,6 +141,30 @@ export async function createAgreedQuoteBookingCheckout(
       userAgent,
     });
 
+    const eligibility = await checkFirstCleaningEligibility(
+      {
+        emailNormalized: quote.emailNormalized,
+        phoneNormalized: quote.phoneNormalized,
+        serviceAddressIdentity: quote.serviceAddressIdentity,
+      },
+      bookingRepo
+    );
+    const referral = await attachReferralFromCheckout({
+      code: input.referralCode,
+      storedCode: quote.referralCode,
+      customerId: quote.customerId,
+      friendEmail: quote.emailNormalized,
+      friendPhone: quote.phoneNormalized,
+      householdKey: quote.serviceAddressIdentity,
+      friendHasCompletedService: !eligibility.eligible,
+      quoteRequestId: quote.quoteId,
+      agreedQuoteInvitationId: input.invitationId,
+      loadPaymentMethodId: async () => (await bookingRepo.getCustomerForStripe(quote.customerId))?.stripeDefaultPaymentMethodId ?? null,
+    });
+    if (!referral.ok) {
+      return { ok: false, stage: "validation", errors: [referral.message] };
+    }
+
     const bookingOrder = await bookingRepo.insertBookingOrder({
       customerId: quote.customerId,
       quoteRequestId: quote.quoteId,
@@ -170,7 +197,10 @@ export async function createAgreedQuoteBookingCheckout(
       paymentAuthorizationTextSnapshot: isPrepaidPackage ? PREPAID_PAYMENT_AUTHORIZATION_COPY : SAVED_PAYMENT_AUTHORIZATION_COPY,
       consentVersionId: consentAcceptance.consentVersionId,
       cancellationPolicyTextSnapshot: formatCancellationPolicySnapshot(isPrepaidPackage),
+      referralCodeId: referral.referralCodeId,
+      referralId: referral.referralId,
     });
+    await linkReferralAfterBooking(referral.referralId, bookingOrder.id);
 
     // §3 step 6: link, and re-confirm status is still 'checkout_in_progress'
     // — null means an admin's Cancel won the race since step 1's claim.

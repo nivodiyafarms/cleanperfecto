@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
+import { BOOKING_REFERRAL_HEADLINE, REFERRAL_TERMS_LINK } from "@/lib/referrals/copy";
 import { validateStepTwo } from "./step-validation";
 import type { WizardFormState } from "./wizard-types";
 
@@ -167,6 +169,29 @@ export default function StepTwoContact({
             className={fieldClass}
           />
           {showErrors && errors.city && <p className={errorClass}>{errors.city}</p>}
+        </div>
+
+        <div>
+          <label htmlFor="wizard-referral-code" className={labelClass}>
+            Referral code <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <input
+            id="wizard-referral-code"
+            name="referral-code"
+            type="text"
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            value={formState.referralCode}
+            onChange={(event) => onFieldChange("referralCode", event.target.value)}
+            className={fieldClass}
+          />
+          <p className="mt-1.5 text-sm text-foreground">
+            {BOOKING_REFERRAL_HEADLINE}{" "}
+            <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
+              See terms
+            </Link>
+          </p>
         </div>
 
         <div>

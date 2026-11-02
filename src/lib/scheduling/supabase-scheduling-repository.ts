@@ -226,6 +226,7 @@ function toServiceVisitPaymentRow(row: Record<string, unknown>): ServiceVisitPay
     serviceVisitId: row.service_visit_id as string,
     serviceVisitPricingId: row.service_visit_pricing_id as string,
     approvedAmount: Number(row.approved_amount),
+    referralCreditAmount: row.referral_credit_amount == null ? 0 : Number(row.referral_credit_amount),
     tipBasisAmount: row.tip_basis_amount === null ? null : Number(row.tip_basis_amount),
     tipSelectionType: (row.tip_selection_type as ServiceVisitPaymentRow["tipSelectionType"]) ?? null,
     tipPercentage: row.tip_percentage === null ? null : Number(row.tip_percentage),
@@ -1480,6 +1481,7 @@ export function createSupabaseSchedulingRepository(): SchedulingRepository {
           stripe_tax_calculation_id: patch.stripeTaxCalculationId,
           tax_calculation_expires_at: patch.taxCalculationExpiresAt,
           tax_location_snapshot: patch.taxLocationSnapshot,
+          referral_credit_amount: patch.referralCreditAmount ?? 0,
           tip_selected_at: new Date().toISOString(),
         })
         .eq("id", id)

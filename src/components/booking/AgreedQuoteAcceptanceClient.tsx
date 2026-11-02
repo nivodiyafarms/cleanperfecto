@@ -1,6 +1,8 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import Link from "next/link";
+import { BOOKING_REFERRAL_HEADLINE, REFERRAL_TERMS_LINK } from "@/lib/referrals/copy";
 import { acceptAgreedQuoteAction, type AcceptAgreedQuoteActionResult } from "@/lib/customer-portal/actions/agreed-quote-actions";
 import {
   CANCELLATION_POLICY_TIERS,
@@ -34,6 +36,7 @@ export interface AgreedQuoteAcceptanceClientProps {
   activeConsentVersion: ConsentVersionSummary | null;
   /** Resume mode: the customer already started checkout — re-submits the same claim/accept flow, which converges on the same booking order/session rather than starting over. */
   resuming?: boolean;
+  initialReferralCode?: string;
 }
 
 export default function AgreedQuoteAcceptanceClient({
@@ -44,6 +47,7 @@ export default function AgreedQuoteAcceptanceClient({
   agreedRequestedStartTime,
   activeConsentVersion,
   resuming = false,
+  initialReferralCode = "",
 }: AgreedQuoteAcceptanceClientProps) {
   const [state, formAction, pending] = useActionState<AcceptAgreedQuoteActionResult | null, FormData>(acceptAgreedQuoteAction, null);
   const [consentChecked, setConsentChecked] = useState(false);
@@ -51,6 +55,7 @@ export default function AgreedQuoteAcceptanceClient({
   const [requestedDate, setRequestedDate] = useState(todayIsoDate());
   const [requestedStartTime, setRequestedStartTime] = useState(OPERATING_HOURS_START);
   const [paymentMethod, setPaymentMethod] = useState<"card" | "us_bank_account">("card");
+  const [referralCode, setReferralCode] = useState(initialReferralCode);
   const [showValidationError, setShowValidationError] = useState(false);
 
   const isPrepaidPackage = calculationInput.isPrepaidPackage;
@@ -74,6 +79,7 @@ export default function AgreedQuoteAcceptanceClient({
     if (isPrepaidPackage) {
       formData.set("paymentMethod", paymentMethod);
     }
+    formData.set("referralCode", referralCode);
     formAction(formData);
   }
 
@@ -177,6 +183,27 @@ export default function AgreedQuoteAcceptanceClient({
           packageCancellationNote={isPrepaidPackage ? PREPAID_PACKAGE_CANCELLATION_NOTE : undefined}
         />
       )}
+
+      <div className="rounded-2xl border border-border bg-surface p-4">
+        <label htmlFor="agreed-referral-code" className="text-sm font-medium text-foreground">
+          Referral code <span className="font-normal text-muted">(optional)</span>
+        </label>
+        <input
+          id="agreed-referral-code"
+          value={referralCode}
+          onChange={(event) => setReferralCode(event.target.value)}
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          className="mt-2 w-full rounded-lg border border-border px-3 py-2 text-sm"
+        />
+        <p className="mt-2 text-sm text-foreground">
+          {BOOKING_REFERRAL_HEADLINE}{" "}
+          <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
+            See terms
+          </Link>
+        </p>
+      </div>
 
       <form action={handleSubmit}>
         <button type="submit" disabled={pending} className="w-full rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">

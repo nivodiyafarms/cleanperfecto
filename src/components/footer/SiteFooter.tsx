@@ -70,6 +70,9 @@ export default function SiteFooter() {
         <Link href="/terms" className="inline-flex min-h-11 items-center text-sm text-background/70 transition-colors hover:text-background">
           Terms of Service
         </Link>
+        <Link href="/rewards" className="inline-flex min-h-11 items-center text-sm text-background/70 transition-colors hover:text-background">
+          Offers & Rewards
+        </Link>
       </nav>
 
       <p className="mx-auto mt-4 max-w-7xl text-sm text-background/50">
