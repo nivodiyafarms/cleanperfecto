@@ -28,6 +28,19 @@ export const NEW_CUSTOMER_REFERRAL_HREF = "/quote";
 
 export const BOOKING_REFERRAL_HEADLINE = "Get $15 off your 2nd cleaning with a referral code.";
 
+/** Shown under the quote-wizard referral field when a code is confirmed active. */
+export const REFERRAL_CODE_APPLIED_MESSAGE =
+  "Referral code applied — $15 off your 2nd cleaning, subject to eligibility.";
+
+/** Missing, malformed, or disabled codes share this message — never distinguish them. */
+export const REFERRAL_CODE_INACTIVE_MESSAGE =
+  "That referral code isn't active. Change it or continue without a referral.";
+
+/** Lookup/rate-limit/outage failures — never labeled as an invalid code. */
+export const REFERRAL_CODE_CHECK_FAILED_MESSAGE = "We couldn't check your code. Try again.";
+
+export const CONTINUE_WITHOUT_REFERRAL_LABEL = "Continue without referral";
+
 export const OFFERS_AND_REWARDS_LABEL = "Offers & Rewards";
 
 export const SEE_FULL_TERMS_LABEL = "See full terms";

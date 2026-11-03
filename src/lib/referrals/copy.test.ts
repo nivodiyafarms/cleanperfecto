@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   BOOKING_REFERRAL_HEADLINE,
+  CONTINUE_WITHOUT_REFERRAL_LABEL,
   HOMEPAGE_REFERRAL_CTA,
   HOMEPAGE_REFERRAL_HEADLINE,
   HOMEPAGE_BANNER_HEADLINE,
@@ -13,7 +14,10 @@ import {
   REWARDS_PAGE_HREF,
   OFFERS_AND_REWARDS_LABEL,
   PORTAL_REFERRAL_HEADLINE,
+  REFERRAL_CODE_APPLIED_MESSAGE,
+  REFERRAL_CODE_CHECK_FAILED_MESSAGE,
   REFERRAL_CODE_HREF,
+  REFERRAL_CODE_INACTIVE_MESSAGE,
   REFERRAL_TERMS_ITEMS,
   REFERRAL_TERMS_LINK,
   REWARDS_PAGE_BULLETS,
@@ -35,6 +39,14 @@ describe("referral copy", () => {
     expect(HOMEPAGE_REFERRAL_CTA).toBe("Get my referral code");
     expect(REFERRAL_CODE_HREF).toBe("/my/rewards");
     expect(BOOKING_REFERRAL_HEADLINE).toBe("Get $15 off your 2nd cleaning with a referral code.");
+    expect(REFERRAL_CODE_APPLIED_MESSAGE).toBe(
+      "Referral code applied — $15 off your 2nd cleaning, subject to eligibility."
+    );
+    expect(REFERRAL_CODE_INACTIVE_MESSAGE).toBe(
+      "That referral code isn't active. Change it or continue without a referral."
+    );
+    expect(REFERRAL_CODE_CHECK_FAILED_MESSAGE).toBe("We couldn't check your code. Try again.");
+    expect(CONTINUE_WITHOUT_REFERRAL_LABEL).toBe("Continue without referral");
     expect(REFERRAL_TERMS_LINK).toBe("/terms#referral-rewards");
     expect(SEE_FULL_TERMS_LABEL).toBe("See full terms");
     expect(OFFERS_AND_REWARDS_LABEL).toBe("Offers & Rewards");
@@ -100,6 +112,11 @@ describe("referral copy", () => {
     expect(booking).toContain("BOOKING_REFERRAL_HEADLINE");
     expect(booking).toContain("See terms");
     expect(wizard).toContain("BOOKING_REFERRAL_HEADLINE");
+    expect(wizard).toContain("REFERRAL_CODE_APPLIED_MESSAGE");
+    expect(wizard).toContain("REFERRAL_CODE_INACTIVE_MESSAGE");
+    expect(wizard).toContain("REFERRAL_CODE_CHECK_FAILED_MESSAGE");
+    expect(wizard).toContain("CONTINUE_WITHOUT_REFERRAL_LABEL");
     expect(wizard).toContain("See terms");
+    expect(wizard).toContain('href={REFERRAL_TERMS_LINK}');
   });
 });

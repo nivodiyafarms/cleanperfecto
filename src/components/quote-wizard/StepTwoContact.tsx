@@ -2,7 +2,15 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { BOOKING_REFERRAL_HEADLINE, REFERRAL_TERMS_LINK } from "@/lib/referrals/copy";
+import {
+  BOOKING_REFERRAL_HEADLINE,
+  CONTINUE_WITHOUT_REFERRAL_LABEL,
+  REFERRAL_CODE_APPLIED_MESSAGE,
+  REFERRAL_CODE_CHECK_FAILED_MESSAGE,
+  REFERRAL_CODE_INACTIVE_MESSAGE,
+  REFERRAL_TERMS_LINK,
+} from "@/lib/referrals/copy";
+import type { ReferralCodeCheckStatus } from "@/lib/referrals/check-referral-code-status";
 import { validateStepTwo } from "./step-validation";
 import type { WizardFormState } from "./wizard-types";
 
@@ -18,6 +26,11 @@ interface StepTwoContactProps {
   onSubmit: () => void;
   submitting: boolean;
   showErrors: boolean;
+  referralFeedback: ReferralCodeCheckStatus | null;
+  referralChecking: boolean;
+  showContinueWithoutReferral: boolean;
+  onReferralBlur: () => void;
+  onContinueWithoutReferral: () => void;
 }
 
 const FIELD_FOCUS_ORDER = ["firstName", "phone", "email", "addressLine1", "city"] as const;
@@ -36,6 +49,11 @@ export default function StepTwoContact({
   onSubmit,
   submitting,
   showErrors,
+  referralFeedback,
+  referralChecking,
+  showContinueWithoutReferral,
+  onReferralBlur,
+  onContinueWithoutReferral,
 }: StepTwoContactProps) {
   const errors = validateStepTwo(formState);
 
@@ -184,14 +202,45 @@ export default function StepTwoContact({
             spellCheck={false}
             value={formState.referralCode}
             onChange={(event) => onFieldChange("referralCode", event.target.value)}
+            onBlur={onReferralBlur}
+            aria-describedby="wizard-referral-code-feedback"
             className={fieldClass}
           />
-          <p className="mt-1.5 text-sm text-foreground">
-            {BOOKING_REFERRAL_HEADLINE}{" "}
-            <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
-              See terms
-            </Link>
-          </p>
+          <div id="wizard-referral-code-feedback" className="mt-1.5 space-y-1.5 text-sm" aria-live="polite">
+            {referralChecking && <p className="text-muted">Checking referral code…</p>}
+            {!referralChecking && referralFeedback === "valid" && (
+              <p className="text-foreground">
+                {REFERRAL_CODE_APPLIED_MESSAGE}{" "}
+                <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
+                  See terms
+                </Link>
+              </p>
+            )}
+            {!referralChecking && referralFeedback === "inactive" && (
+              <p className="text-foreground">{REFERRAL_CODE_INACTIVE_MESSAGE}</p>
+            )}
+            {!referralChecking && referralFeedback === "error" && (
+              <p className="text-foreground">{REFERRAL_CODE_CHECK_FAILED_MESSAGE}</p>
+            )}
+            {showContinueWithoutReferral && referralFeedback === "inactive" && (
+              <button
+                type="button"
+                onClick={onContinueWithoutReferral}
+                disabled={submitting}
+                className="font-medium text-secondary underline-offset-2 hover:underline disabled:opacity-60"
+              >
+                {CONTINUE_WITHOUT_REFERRAL_LABEL}
+              </button>
+            )}
+            {!referralChecking && referralFeedback === null && (
+              <p className="text-foreground">
+                {BOOKING_REFERRAL_HEADLINE}{" "}
+                <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
+                  See terms
+                </Link>
+              </p>
+            )}
+          </div>
         </div>
 
         <div>
@@ -212,7 +261,7 @@ export default function StepTwoContact({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={submitting}
+          disabled={submitting || referralChecking}
           className="inline-flex min-h-12 flex-1 items-center justify-center rounded-full bg-primary px-8 py-3.5 text-base font-semibold text-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-70 sm:flex-none"
         >
           {submitting ? "Calculating your estimate…" : "Get My Personalized Estimate"}

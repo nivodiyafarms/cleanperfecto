@@ -1,7 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SITE_CONTACT } from "@/lib/site-contact";
+import { checkReferralCodeAction } from "@/lib/referrals/check-referral-code-action";
+import type { ReferralCodeCheckStatus } from "@/lib/referrals/check-referral-code-status";
+import { createReferralCodeCheckTracker } from "@/lib/referrals/referral-code-feedback";
 import { submitInstantQuoteRequest } from "@/lib/instant-quote/submit-instant-quote-request";
 import type {
   InstantQuoteRequestAutomaticEstimate,
@@ -30,7 +33,10 @@ interface QuoteWizardProps {
 
 export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteWizardProps) {
   const [phase, setPhase] = useState<WizardPhase>("step1");
-  const [formState, setFormState] = useState<WizardFormState>({ ...DEFAULT_WIZARD_FORM_STATE, referralCode: initialReferralCode });
+  const [formState, setFormState] = useState<WizardFormState>({
+    ...DEFAULT_WIZARD_FORM_STATE,
+    referralCode: initialReferralCode,
+  });
   const [step1Attempted, setStep1Attempted] = useState(false);
   const [step2Attempted, setStep2Attempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -39,8 +45,65 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
     InstantQuoteRequestAutomaticEstimate | InstantQuoteRequestManualReview | null
   >(null);
   const [selection, setSelection] = useState<AddOnSelection>(EMPTY_ADD_ON_SELECTION);
+  const [referralFeedback, setReferralFeedback] = useState<ReferralCodeCheckStatus | null>(null);
+  const [referralChecking, setReferralChecking] = useState(false);
+  const [showContinueWithoutReferral, setShowContinueWithoutReferral] = useState(false);
+
+  const trackerRef = useRef(createReferralCodeCheckTracker());
+
+  async function runReferralCheck(rawCode: string, options: { force?: boolean } = {}): Promise<ReferralCodeCheckStatus | null> {
+    const tracker = trackerRef.current;
+    const began = tracker.begin(rawCode, options);
+    if (began.skip) {
+      if (began.reason === "empty") {
+        setReferralFeedback(null);
+        setReferralChecking(false);
+        setShowContinueWithoutReferral(false);
+      }
+      return tracker.getSettled()?.status ?? null;
+    }
+
+    setReferralChecking(true);
+    try {
+      const result = await checkReferralCodeAction(rawCode);
+      if (tracker.isStale(began.requestId)) return null;
+      tracker.accept(began.requestId, began.codeKey, result.status);
+      setReferralFeedback(result.status);
+      return result.status;
+    } catch {
+      if (tracker.isStale(began.requestId)) return null;
+      tracker.accept(began.requestId, began.codeKey, "error");
+      setReferralFeedback("error");
+      return "error";
+    } finally {
+      if (!tracker.isStale(began.requestId)) {
+        setReferralChecking(false);
+      }
+    }
+  }
+
+  // Page-load check when ?ref seeded the field. Schedule outside the effect
+  // body so the probe's setState is not synchronous within the effect.
+  useEffect(() => {
+    const seeded = initialReferralCode.trim();
+    if (!seeded) return;
+    const tracker = trackerRef.current;
+    const timer = window.setTimeout(() => {
+      void runReferralCheck(initialReferralCode);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      tracker.clearOnFieldChange();
+    };
+  }, [initialReferralCode]);
 
   function updateField<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) {
+    if (key === "referralCode") {
+      trackerRef.current.clearOnFieldChange();
+      setReferralFeedback(null);
+      setReferralChecking(false);
+      setShowContinueWithoutReferral(false);
+    }
     setFormState((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -54,15 +117,15 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
     setPhase("step1");
   }
 
-  async function handleSubmit() {
-    setStep2Attempted(true);
-    if (submitting) return;
-    if (!isStepTwoValid(formState)) return;
+  function handleReferralBlur() {
+    void runReferralCheck(formState.referralCode);
+  }
 
+  async function submitQuote(current: WizardFormState) {
     setSubmitting(true);
     setSubmitError(null);
 
-    const rawInput = mapWizardFormToRawInput(formState);
+    const rawInput = mapWizardFormToRawInput(current);
 
     try {
       const response = await submitInstantQuoteRequest(rawInput);
@@ -79,6 +142,38 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit() {
+    setStep2Attempted(true);
+    if (submitting || referralChecking) return;
+    if (!isStepTwoValid(formState)) return;
+
+    const code = formState.referralCode.trim();
+    if (code.length > 0) {
+      const status = await runReferralCheck(code, { force: true });
+      if (status === "inactive") {
+        setShowContinueWithoutReferral(true);
+        return;
+      }
+      if (status === "error" || status === null) {
+        setShowContinueWithoutReferral(false);
+        setReferralFeedback("error");
+        return;
+      }
+      setShowContinueWithoutReferral(false);
+    }
+
+    await submitQuote(formState);
+  }
+
+  function handleContinueWithoutReferral() {
+    trackerRef.current.clearOnFieldChange();
+    setReferralFeedback(null);
+    setShowContinueWithoutReferral(false);
+    const cleared: WizardFormState = { ...formState, referralCode: "" };
+    setFormState(cleared);
+    void submitQuote(cleared);
   }
 
   function handleEditDetails() {
@@ -135,9 +230,16 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
             formState={formState}
             onFieldChange={updateField}
             onBack={handleBackToStepOne}
-            onSubmit={handleSubmit}
+            onSubmit={() => {
+              void handleSubmit();
+            }}
             submitting={submitting}
             showErrors={step2Attempted}
+            referralFeedback={referralFeedback}
+            referralChecking={referralChecking}
+            showContinueWithoutReferral={showContinueWithoutReferral}
+            onReferralBlur={handleReferralBlur}
+            onContinueWithoutReferral={handleContinueWithoutReferral}
           />
         </div>
       )}
