@@ -15,6 +15,7 @@ export interface AdminReferralSnapshot {
     codeType: string;
     active: boolean;
     referrerCustomerId: string | null;
+    recipientLabel: string | null;
   }[];
   referrals: {
     id: string;
@@ -44,7 +45,15 @@ export interface AdminReferralSnapshot {
     eligibleCleaningAmount: number;
     referralCreditId: string;
   }[];
-  audits: { id: string; actionType: string; targetId: string; reason: string | null; createdAt: string }[];
+  audits: {
+    id: string;
+    actionType: string;
+    targetId: string;
+    reason: string | null;
+    createdAt: string;
+    previousValue: string | null;
+    newValue: string | null;
+  }[];
 }
 
 function asNumber(value: unknown): number {
@@ -84,14 +93,15 @@ export function createSupabaseReferralRepository() {
       return allocated.code;
     },
 
-    async issueAdminCode(adminUserId: string): Promise<string> {
+    async issueAdminCode(adminUserId: string, recipientLabel: string | null): Promise<string> {
       const allocated = await allocateCustomerReferralCode({
         findExisting: async () => null,
         generate: generateReferralCode,
         tryInsert: async (code) => {
-          const { data, error } = await supabase.rpc("create_admin_referral_code", {
+          const { data, error } = await supabase.rpc("create_admin_referral_code_with_label", {
             p_admin_user_id: adminUserId,
             p_code: code,
+            p_recipient_label: recipientLabel,
           });
           if (error) {
             if (error.message.includes("REFERRAL_CODE_COLLISION")) throw new ReferralCodeCollision();
@@ -103,6 +113,21 @@ export function createSupabaseReferralRepository() {
         },
       });
       return allocated.code;
+    },
+
+    async referralCodeType(codeId: string): Promise<string | null> {
+      const { data, error } = await supabase.from("referral_codes").select("code_type").eq("id", codeId).maybeSingle();
+      if (error) throw new Error("[referrals] code lookup failed");
+      return (data?.code_type as string | undefined) ?? null;
+    },
+
+    async updateRecipientLabel(codeId: string, adminUserId: string, recipientLabel: string | null): Promise<void> {
+      const { error } = await supabase.rpc("update_admin_referral_code_recipient_label", {
+        p_code_id: codeId,
+        p_admin_user_id: adminUserId,
+        p_recipient_label: recipientLabel,
+      });
+      if (error) throw new Error("[referrals] recipient label update failed");
     },
 
     async setCodeActive(codeId: string, active: boolean, adminUserId: string, reason: string | null): Promise<void> {
@@ -225,20 +250,27 @@ export function createSupabaseReferralRepository() {
     },
 
     async adminSnapshot(): Promise<AdminReferralSnapshot> {
-      const [codes, referrals, creditRows, redemptionRows, audits] = await Promise.all([
+      const [codes, labels, referrals, creditRows, redemptionRows, audits] = await Promise.all([
         supabase.from("referral_codes").select("id, code, code_type, active, referrer_customer_id").order("created_at", { ascending: false }),
+        supabase.from("referral_code_recipient_labels").select("code_id, recipient_label"),
         supabase
           .from("referrals")
           .select("id, referred_customer_id, qualifying_service_visit_id, status, review_flags, quote_request_id, booking_order_id, referral_code_id")
           .order("created_at", { ascending: false }),
         supabase.from("referral_credits").select("id, beneficiary_customer_id, beneficiary_role, amount, issued_at, expires_at, status, referral_id").order("issued_at", { ascending: false }),
         supabase.from("referral_redemptions").select("id, service_visit_id, amount, status, eligible_cleaning_amount, referral_credit_id").order("created_at", { ascending: false }),
-        supabase.from("referral_program_audit").select("id, action_type, target_id, reason, created_at").order("created_at", { ascending: false }),
+        supabase
+          .from("referral_program_audit")
+          .select("id, action_type, target_id, reason, created_at, previous_value, new_value")
+          .order("created_at", { ascending: false }),
       ]);
-      if (codes.error || referrals.error || creditRows.error || redemptionRows.error || audits.error) {
+      if (codes.error || labels.error || referrals.error || creditRows.error || redemptionRows.error || audits.error) {
         throw new Error("[referrals] admin snapshot failed");
       }
       const codeTypeById = new Map((codes.data ?? []).map((row) => [row.id as string, row.code_type as string]));
+      const labelByCodeId = new Map(
+        (labels.data ?? []).map((row) => [row.code_id as string, (row.recipient_label as string | null) ?? null]),
+      );
       return {
         codes: (codes.data ?? []).map((row) => ({
           id: row.id as string,
@@ -246,6 +278,7 @@ export function createSupabaseReferralRepository() {
           codeType: row.code_type as string,
           active: row.active as boolean,
           referrerCustomerId: (row.referrer_customer_id as string | null) ?? null,
+          recipientLabel: labelByCodeId.get(row.id as string) ?? null,
         })),
         referrals: (referrals.data ?? []).map((row) => ({
           id: row.id as string,
@@ -281,6 +314,8 @@ export function createSupabaseReferralRepository() {
           targetId: row.target_id as string,
           reason: (row.reason as string | null) ?? null,
           createdAt: row.created_at as string,
+          previousValue: (row.previous_value as string | null) ?? null,
+          newValue: (row.new_value as string | null) ?? null,
         })),
       };
     },
