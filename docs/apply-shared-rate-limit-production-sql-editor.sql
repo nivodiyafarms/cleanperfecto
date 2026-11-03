@@ -122,7 +122,7 @@ begin
   end if;
 
   v_now := pg_catalog.now();
-  v_epoch := pg_catalog.extract(epoch from v_now);
+  v_epoch := extract(epoch from v_now);
   v_minute_start := pg_catalog.to_timestamp(
     pg_catalog.floor(v_epoch / 60::double precision) * 60::double precision
   );
@@ -156,7 +156,7 @@ begin
     v_minute_retry := pg_catalog.greatest(
       0,
       pg_catalog.ceil(
-        pg_catalog.extract(
+        extract(
           epoch from (v_minute_start + pg_catalog.make_interval(secs => 60) - v_now)
         )
       )::integer
@@ -168,7 +168,7 @@ begin
     v_hour_retry := pg_catalog.greatest(
       0,
       pg_catalog.ceil(
-        pg_catalog.extract(
+        extract(
           epoch from (v_hour_start + pg_catalog.make_interval(secs => 3600) - v_now)
         )
       )::integer
