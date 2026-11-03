@@ -9,8 +9,9 @@ import {
   REFERRAL_CODE_CHECK_FAILED_MESSAGE,
   REFERRAL_CODE_INACTIVE_MESSAGE,
   REFERRAL_TERMS_LINK,
+  referralCodeRateLimitedMessage,
 } from "@/lib/referrals/copy";
-import type { ReferralCodeCheckStatus } from "@/lib/referrals/check-referral-code-status";
+import type { ReferralCodeCheckResult } from "@/lib/referrals/check-referral-code-status";
 import { validateStepTwo } from "./step-validation";
 import type { WizardFormState } from "./wizard-types";
 
@@ -26,7 +27,7 @@ interface StepTwoContactProps {
   onSubmit: () => void;
   submitting: boolean;
   showErrors: boolean;
-  referralFeedback: ReferralCodeCheckStatus | null;
+  referralFeedback: ReferralCodeCheckResult | null;
   referralChecking: boolean;
   showContinueWithoutReferral: boolean;
   onReferralBlur: () => void;
@@ -208,7 +209,7 @@ export default function StepTwoContact({
           />
           <div id="wizard-referral-code-feedback" className="mt-1.5 space-y-1.5 text-sm" aria-live="polite">
             {referralChecking && <p className="text-muted">Checking referral code…</p>}
-            {!referralChecking && referralFeedback === "valid" && (
+            {!referralChecking && referralFeedback?.status === "valid" && (
               <p className="text-foreground">
                 {REFERRAL_CODE_APPLIED_MESSAGE}{" "}
                 <Link href={REFERRAL_TERMS_LINK} className="font-medium text-secondary underline-offset-2 hover:underline">
@@ -216,13 +217,18 @@ export default function StepTwoContact({
                 </Link>
               </p>
             )}
-            {!referralChecking && referralFeedback === "inactive" && (
+            {!referralChecking && referralFeedback?.status === "inactive" && (
               <p className="text-foreground">{REFERRAL_CODE_INACTIVE_MESSAGE}</p>
             )}
-            {!referralChecking && referralFeedback === "error" && (
+            {!referralChecking && referralFeedback?.status === "error" && (
               <p className="text-foreground">{REFERRAL_CODE_CHECK_FAILED_MESSAGE}</p>
             )}
-            {showContinueWithoutReferral && referralFeedback === "inactive" && (
+            {!referralChecking && referralFeedback?.status === "rate_limited" && (
+              <p className="text-foreground">
+                {referralCodeRateLimitedMessage(referralFeedback.retry_after_seconds)}
+              </p>
+            )}
+            {showContinueWithoutReferral && referralFeedback?.status === "inactive" && (
               <button
                 type="button"
                 onClick={onContinueWithoutReferral}

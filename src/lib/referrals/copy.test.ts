@@ -18,6 +18,7 @@ import {
   REFERRAL_CODE_CHECK_FAILED_MESSAGE,
   REFERRAL_CODE_HREF,
   REFERRAL_CODE_INACTIVE_MESSAGE,
+  referralCodeRateLimitedMessage,
   REFERRAL_TERMS_ITEMS,
   REFERRAL_TERMS_LINK,
   REWARDS_PAGE_BULLETS,
@@ -46,6 +47,7 @@ describe("referral copy", () => {
       "That referral code isn't active. Change it or continue without a referral."
     );
     expect(REFERRAL_CODE_CHECK_FAILED_MESSAGE).toBe("We couldn't check your code. Try again.");
+    expect(referralCodeRateLimitedMessage(7)).toBe("Too many tries. Try again in 7 seconds.");
     expect(CONTINUE_WITHOUT_REFERRAL_LABEL).toBe("Continue without referral");
     expect(REFERRAL_TERMS_LINK).toBe("/terms#referral-rewards");
     expect(SEE_FULL_TERMS_LABEL).toBe("See full terms");
@@ -115,6 +117,7 @@ describe("referral copy", () => {
     expect(wizard).toContain("REFERRAL_CODE_APPLIED_MESSAGE");
     expect(wizard).toContain("REFERRAL_CODE_INACTIVE_MESSAGE");
     expect(wizard).toContain("REFERRAL_CODE_CHECK_FAILED_MESSAGE");
+    expect(wizard).toContain("referralCodeRateLimitedMessage");
     expect(wizard).toContain("CONTINUE_WITHOUT_REFERRAL_LABEL");
     expect(wizard).toContain("See terms");
     expect(wizard).toContain('href={REFERRAL_TERMS_LINK}');

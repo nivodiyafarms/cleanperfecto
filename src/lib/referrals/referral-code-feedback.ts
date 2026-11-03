@@ -1,12 +1,18 @@
 import { normalizeReferralCode } from "./codes";
-import type { ReferralCodeCheckStatus } from "./check-referral-code-status";
+import type {
+  ReferralCodeCheckResult,
+  ReferralCodeCheckStatus,
+} from "./check-referral-code-status";
 import {
   REFERRAL_CODE_APPLIED_MESSAGE,
   REFERRAL_CODE_CHECK_FAILED_MESSAGE,
   REFERRAL_CODE_INACTIVE_MESSAGE,
+  referralCodeRateLimitedMessage,
 } from "./copy";
 
 export type ReferralCodeFeedbackKind = "none" | ReferralCodeCheckStatus;
+
+export type ReferralCodeFeedbackState = ReferralCodeCheckResult | null;
 
 /**
  * Tracks in-flight / completed checks so the UI can:
@@ -19,7 +25,7 @@ export function createReferralCodeCheckTracker() {
   let nextRequestId = 0;
   let latestRequestId = 0;
   let settledCodeKey: string | null = null;
-  let settledStatus: ReferralCodeCheckStatus | null = null;
+  let settledResult: ReferralCodeCheckResult | null = null;
   let inFlightCodeKey: string | null = null;
 
   function codeKey(raw: string): string {
@@ -44,14 +50,14 @@ export function createReferralCodeCheckTracker() {
     ): { skip: true; reason: "empty" | "deduped" } | { skip: false; requestId: number; codeKey: string } {
       if (raw.trim().length === 0) {
         settledCodeKey = null;
-        settledStatus = null;
+        settledResult = null;
         inFlightCodeKey = null;
         latestRequestId += 1;
         return { skip: true, reason: "empty" };
       }
 
       const key = codeKey(raw);
-      if (!options.force && settledCodeKey === key && settledStatus !== null && inFlightCodeKey === null) {
+      if (!options.force && settledCodeKey === key && settledResult !== null && inFlightCodeKey === null) {
         return { skip: true, reason: "deduped" };
       }
       if (!options.force && inFlightCodeKey === key) {
@@ -69,10 +75,10 @@ export function createReferralCodeCheckTracker() {
       return requestId !== latestRequestId;
     },
 
-    accept(requestId: number, key: string, status: ReferralCodeCheckStatus): boolean {
+    accept(requestId: number, key: string, result: ReferralCodeCheckResult): boolean {
       if (requestId !== latestRequestId) return false;
       settledCodeKey = key;
-      settledStatus = status;
+      settledResult = result;
       inFlightCodeKey = null;
       return true;
     },
@@ -80,25 +86,27 @@ export function createReferralCodeCheckTracker() {
     /** Field changed — drop feedback and invalidate in-flight results. */
     clearOnFieldChange(): void {
       settledCodeKey = null;
-      settledStatus = null;
+      settledResult = null;
       inFlightCodeKey = null;
       latestRequestId += 1;
     },
 
-    getSettled(): { codeKey: string; status: ReferralCodeCheckStatus } | null {
-      if (settledCodeKey === null || settledStatus === null) return null;
-      return { codeKey: settledCodeKey, status: settledStatus };
+    getSettled(): { codeKey: string; result: ReferralCodeCheckResult } | null {
+      if (settledCodeKey === null || settledResult === null) return null;
+      return { codeKey: settledCodeKey, result: settledResult };
     },
   };
 }
 
-export function messageForReferralCodeStatus(status: ReferralCodeCheckStatus): string {
-  switch (status) {
+export function messageForReferralCodeStatus(result: ReferralCodeCheckResult): string {
+  switch (result.status) {
     case "valid":
       return REFERRAL_CODE_APPLIED_MESSAGE;
     case "inactive":
       return REFERRAL_CODE_INACTIVE_MESSAGE;
     case "error":
       return REFERRAL_CODE_CHECK_FAILED_MESSAGE;
+    case "rate_limited":
+      return referralCodeRateLimitedMessage(result.retry_after_seconds);
   }
 }
