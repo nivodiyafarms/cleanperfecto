@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import { checkReferralCodeAction } from "@/lib/referrals/check-referral-code-action";
-import type { ReferralCodeCheckStatus } from "@/lib/referrals/check-referral-code-status";
+import type { ReferralCodeCheckResult } from "@/lib/referrals/check-referral-code-status";
 import { createReferralCodeCheckTracker } from "@/lib/referrals/referral-code-feedback";
 import { submitInstantQuoteRequest } from "@/lib/instant-quote/submit-instant-quote-request";
 import type {
@@ -45,13 +45,16 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
     InstantQuoteRequestAutomaticEstimate | InstantQuoteRequestManualReview | null
   >(null);
   const [selection, setSelection] = useState<AddOnSelection>(EMPTY_ADD_ON_SELECTION);
-  const [referralFeedback, setReferralFeedback] = useState<ReferralCodeCheckStatus | null>(null);
+  const [referralFeedback, setReferralFeedback] = useState<ReferralCodeCheckResult | null>(null);
   const [referralChecking, setReferralChecking] = useState(false);
   const [showContinueWithoutReferral, setShowContinueWithoutReferral] = useState(false);
 
   const trackerRef = useRef(createReferralCodeCheckTracker());
 
-  async function runReferralCheck(rawCode: string, options: { force?: boolean } = {}): Promise<ReferralCodeCheckStatus | null> {
+  async function runReferralCheck(
+    rawCode: string,
+    options: { force?: boolean } = {}
+  ): Promise<ReferralCodeCheckResult | null> {
     const tracker = trackerRef.current;
     const began = tracker.begin(rawCode, options);
     if (began.skip) {
@@ -60,21 +63,22 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
         setReferralChecking(false);
         setShowContinueWithoutReferral(false);
       }
-      return tracker.getSettled()?.status ?? null;
+      return tracker.getSettled()?.result ?? null;
     }
 
     setReferralChecking(true);
     try {
       const result = await checkReferralCodeAction(rawCode);
       if (tracker.isStale(began.requestId)) return null;
-      tracker.accept(began.requestId, began.codeKey, result.status);
-      setReferralFeedback(result.status);
-      return result.status;
+      tracker.accept(began.requestId, began.codeKey, result);
+      setReferralFeedback(result);
+      return result;
     } catch {
       if (tracker.isStale(began.requestId)) return null;
-      tracker.accept(began.requestId, began.codeKey, "error");
-      setReferralFeedback("error");
-      return "error";
+      const errorResult: ReferralCodeCheckResult = { status: "error" };
+      tracker.accept(began.requestId, began.codeKey, errorResult);
+      setReferralFeedback(errorResult);
+      return errorResult;
     } finally {
       if (!tracker.isStale(began.requestId)) {
         setReferralChecking(false);
@@ -151,14 +155,16 @@ export default function QuoteWizard({ nowIso, initialReferralCode = "" }: QuoteW
 
     const code = formState.referralCode.trim();
     if (code.length > 0) {
-      const status = await runReferralCheck(code, { force: true });
-      if (status === "inactive") {
+      const check = await runReferralCheck(code, { force: true });
+      if (check?.status === "inactive") {
         setShowContinueWithoutReferral(true);
         return;
       }
-      if (status === "error" || status === null) {
+      if (check === null || check.status === "error" || check.status === "rate_limited") {
         setShowContinueWithoutReferral(false);
-        setReferralFeedback("error");
+        if (check === null) {
+          setReferralFeedback({ status: "error" });
+        }
         return;
       }
       setShowContinueWithoutReferral(false);

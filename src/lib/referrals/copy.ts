@@ -36,8 +36,14 @@ export const REFERRAL_CODE_APPLIED_MESSAGE =
 export const REFERRAL_CODE_INACTIVE_MESSAGE =
   "That referral code isn't active. Change it or continue without a referral.";
 
-/** Lookup/rate-limit/outage failures — never labeled as an invalid code. */
+/** Lookup/outage failures — never labeled as an invalid code. */
 export const REFERRAL_CODE_CHECK_FAILED_MESSAGE = "We couldn't check your code. Try again.";
+
+/** Shared rate-limit denial — keep the entered code; never call it invalid. */
+export function referralCodeRateLimitedMessage(retryAfterSeconds: number): string {
+  const seconds = Math.max(1, Math.ceil(retryAfterSeconds));
+  return `Too many tries. Try again in ${seconds} seconds.`;
+}
 
 export const CONTINUE_WITHOUT_REFERRAL_LABEL = "Continue without referral";
 
