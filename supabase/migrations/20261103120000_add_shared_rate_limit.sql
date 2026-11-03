@@ -104,13 +104,13 @@ begin
   insert into public.rate_limit_buckets as b (key, window_seconds, window_start, count)
   values (p_key, 60, v_minute_start, 1)
   on conflict (key, window_seconds, window_start)
-  do update set count = pg_catalog.least(b.count + 1, p_minute_limit + 1)
+  do update set count = least(b.count + 1, p_minute_limit + 1)
   returning b.count into v_minute_count;
 
   insert into public.rate_limit_buckets as b (key, window_seconds, window_start, count)
   values (p_key, 3600, v_hour_start, 1)
   on conflict (key, window_seconds, window_start)
-  do update set count = pg_catalog.least(b.count + 1, p_hour_limit + 1)
+  do update set count = least(b.count + 1, p_hour_limit + 1)
   returning b.count into v_hour_count;
 
   v_minute_blocked := v_minute_count > p_minute_limit;
@@ -124,7 +124,7 @@ begin
   end if;
 
   if v_minute_blocked then
-    v_minute_retry := pg_catalog.greatest(
+    v_minute_retry := greatest(
       0,
       pg_catalog.ceil(
         extract(
@@ -136,7 +136,7 @@ begin
   end if;
 
   if v_hour_blocked then
-    v_hour_retry := pg_catalog.greatest(
+    v_hour_retry := greatest(
       0,
       pg_catalog.ceil(
         extract(
