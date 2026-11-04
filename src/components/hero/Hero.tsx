@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { HOMEPAGE_BANNER_HEADLINE, REWARDS_PAGE_HREF } from "@/lib/referrals/copy";
 import { SITE_CONTACT } from "@/lib/site-contact";
 import FirstCleaningOfferBadge from "./FirstCleaningOfferBadge";
-import HeroVideoBackground from "./HeroVideoBackground";
+import HeroRealVideo from "./HeroRealVideo";
 
 function TagIcon() {
   return (
@@ -73,11 +73,11 @@ export default function Hero() {
   return (
     <section
       id="hero"
-      className="relative isolate overflow-hidden px-6 pt-28 pb-12 min-h-[700px] lg:flex lg:h-[88vh] lg:min-h-[760px] lg:items-center lg:px-8 lg:pt-8 lg:pb-8"
+      className="relative isolate overflow-hidden px-6 pt-28 pb-12 lg:flex lg:h-[88vh] lg:min-h-[760px] lg:items-center lg:px-8 lg:pt-24 lg:pb-10"
     >
-      <HeroVideoBackground />
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-gradient-to-br from-foreground via-foreground to-[#1f3b52]" />
 
-      <div className="relative mx-auto w-full max-w-7xl">
+      <div className="relative mx-auto grid w-full max-w-7xl items-center gap-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-16">
         <div className="max-w-xl text-left">
           <FirstCleaningOfferBadge nowIso={new Date().toISOString()} />
 
@@ -119,6 +119,8 @@ export default function Hero() {
             </a>
           </div>
 
+          <HeroRealVideo autoplay={false} className="mx-auto mt-8 w-[min(60vw,calc(50svh*9/16))] lg:hidden" />
+
           <div className="mt-6 grid gap-2 sm:grid-cols-3 lg:mt-8 lg:gap-3">
             {BENEFITS.map((benefit) => (
               <div
@@ -134,6 +136,8 @@ export default function Hero() {
             ))}
           </div>
         </div>
+
+        <HeroRealVideo autoplay className="hidden w-[min(340px,calc((88vh-10rem)*9/16))] lg:block" />
       </div>
     </section>
   );
