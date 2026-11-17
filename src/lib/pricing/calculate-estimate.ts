@@ -1,4 +1,4 @@
-import { getActiveFirstCleaningOffer } from "@/lib/offers/first-cleaning-offer";
+import { getActiveFirstCleaningOffer, isServiceEligibleForFirstCleaningOffer } from "@/lib/offers/first-cleaning-offer";
 import { classifyAddOns, classifyQuantifiedAddOns, COMPLETE_MOVE_PACKAGE_ADD_ONS, splitCompletePackageAddOns } from "./add-ons";
 import { BASE_PRICES, CONDITION_MULTIPLIERS, MINIMUM_SERVICE_TOTAL, MOVE_BASE_PRICE, PRICING_VERSION } from "./config";
 import { chooseCleaningServiceDiscount } from "./discount-program";
@@ -194,7 +194,12 @@ export function calculateEstimate(
     (basePrice + roomAdjustments + specialRoomChargesTotal) * squareFootageMultiplier * conditionMultiplier;
 
   const activeOffer = input.firstCleaningEligible ? getActiveFirstCleaningOffer(input.asOf) : null;
-  const activeFirstCleaningOfferPercent = activeOffer?.percent ?? null;
+  // Service-type eligibility: after the Dec 1 cutoff, only Deep Cleaning qualifies
+  // for the first-cleaning offer; Standard/Move get no first-cleaning discount.
+  const serviceEligible = input.firstCleaningEligible
+    ? isServiceEligibleForFirstCleaningOffer(input.asOf, input.cleaningType)
+    : false;
+  const activeFirstCleaningOfferPercent = serviceEligible && activeOffer ? activeOffer.percent : null;
 
   const discountSelection = chooseCleaningServiceDiscount({
     cleaningSubtotal,
@@ -202,6 +207,7 @@ export function calculateEstimate(
     isPrepaidPackage: input.isPrepaidPackage,
     visitCount: input.visitCount,
     activeFirstCleaningOfferPercent,
+    cleaningType: input.cleaningType,
   });
   const discountProgram = discountSelection.discountProgram;
   let recurringAdjustment = discountSelection.recurringAdjustment;

@@ -14,6 +14,7 @@ import PropertySpecializations from "@/components/sections/PropertySpecializatio
 import ServiceArea from "@/components/sections/ServiceArea";
 import QuoteSection from "@/components/sections/QuoteSection";
 import SiteFooter from "@/components/footer/SiteFooter";
+import { resolveOfferTime } from "@/lib/offers/first-cleaning-offer";
 
 // The first-cleaning offer badge transitions from 30% to 25% automatically
 // based on server time (src/lib/offers/first-cleaning-offer.ts). Real
@@ -22,12 +23,18 @@ import SiteFooter from "@/components/footer/SiteFooter";
 // offer copy to non-JS clients/crawlers past the deadline.
 export const revalidate = 3600;
 
-export default function Home() {
+interface HomeProps {
+  searchParams: Promise<{ offer_time_override?: string }>;
+}
+
+export default async function Home({ searchParams }: HomeProps) {
+  const params = await searchParams;
+  const offerTime = resolveOfferTime(params.offer_time_override);
   return (
     <SelectionProvider>
       <SiteNav />
       <main className="flex-1 pb-20 md:pb-0">
-        <Hero />
+        <Hero nowIso={offerTime.toISOString()} />
         <GoogleReviewsSection />
         <RealResultsSection />
         <CleaningServiceSelector />

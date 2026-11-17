@@ -72,6 +72,20 @@ export default function TermsPage() {
         </p>
       </LegalSection>
 
+      <LegalSection id="first-cleaning-offer" title="First-cleaning offer">
+        <p>
+          First-cleaning offers apply to new customers only — customers who have not previously received a completed cleaning service from CleanPerfecto (by email, phone, or service
+          address).
+        </p>
+        <p>
+          The specific percentage and eligible cleaning types depend on when you book. Offers shown at the time of your quote are the offers that apply to that quote. First-cleaning
+          offers do not stack with prepaid-package pricing — they are separate discount programs. Referral rewards are a separate program and may apply alongside first-cleaning
+          offers where stated.
+        </p>
+        <p>Through November 30, 2026: up to 25% off your first cleaning. Applies to Standard, Deep, and Move-In/Move-Out cleaning types.</p>
+        <p>Starting December 1, 2026: 20% off your first cleaning when you choose Deep Cleaning. Standard and Move-In/Move-Out cleaning types are not eligible for a first-cleaning discount after this date.</p>
+      </LegalSection>
+
       <LegalSection id="referral-rewards" title="Referral rewards">
         <ul className="list-disc space-y-3 pl-5">
           {REFERRAL_TERMS_ITEMS.map((item) => (

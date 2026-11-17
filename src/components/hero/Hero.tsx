@@ -69,7 +69,13 @@ const BENEFITS: { icon: ReactNode; title: string; supporting: string }[] = [
   },
 ];
 
-export default function Hero() {
+interface HeroProps {
+  /** Server-rendered instant (ISO string) used to seed the first-cleaning offer badge. Accepts a Preview-only time override for testing. */
+  nowIso?: string;
+}
+
+export default function Hero({ nowIso }: HeroProps) {
+  const resolvedNowIso = nowIso ?? new Date().toISOString();
   return (
     <section
       id="hero"
@@ -79,7 +85,7 @@ export default function Hero() {
 
       <div className="relative mx-auto w-full max-w-7xl">
         <div className="max-w-xl text-left">
-          <FirstCleaningOfferBadge nowIso={new Date().toISOString()} />
+          <FirstCleaningOfferBadge nowIso={resolvedNowIso} />
 
           <p className="mt-3 text-sm text-white/85">
             <Link href={REWARDS_PAGE_HREF} className="underline-offset-2 hover:underline">

@@ -9,6 +9,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(result).toEqual({
       discountProgram: "none",
@@ -25,6 +26,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: 30,
+      cleaningType: "deep",
     });
     expect(result).toEqual({
       discountProgram: "first_cleaning",
@@ -41,6 +43,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(weekly.discountProgram).toBe("recurring_cycle");
     expect(weekly.recurringAdjustment).toBeCloseTo(42); // 21% of 200
@@ -53,6 +56,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(biweekly.recurringAdjustment).toBeCloseTo(28); // 14% of 200
 
@@ -62,6 +66,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(monthly.recurringAdjustment).toBeCloseTo(14); // 7% of 200
   });
@@ -74,6 +79,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: 30,
+      cleaningType: "deep",
     });
     expect(result).toEqual({
       discountProgram: "first_cleaning",
@@ -94,6 +100,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 1,
       activeFirstCleaningOfferPercent: 10,
+      cleaningType: "deep",
     });
     expect(result.discountProgram).toBe("recurring_cycle");
     expect(result.recurringAdjustment).toBeCloseTo(42);
@@ -108,6 +115,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: true,
       visitCount: 5,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(result.discountProgram).toBe("recurring_cycle");
     expect(result.packageDiscount).toBe(0);
@@ -120,6 +128,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: false,
       visitCount: 8,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(result.discountProgram).toBe("recurring_cycle");
     expect(result.packageDiscount).toBe(0);
@@ -132,6 +141,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: true,
       visitCount: 6,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     // afterRecurring = 200 * 0.79 = 158; afterPackage = 158 * 0.90 = 142.2
     expect(result.discountProgram).toBe("prepaid_package");
@@ -146,6 +156,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: true,
       visitCount: 10,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     expect(result.discountProgram).toBe("prepaid_package");
     // afterRecurring = 200 * 0.86 = 172; afterPackage = 172 * 0.90 = 154.8
@@ -160,6 +171,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: true,
       visitCount: 6,
       activeFirstCleaningOfferPercent: 30,
+      cleaningType: "deep",
     });
     expect(result.discountProgram).toBe("prepaid_package");
     expect(result.firstCleaningDiscount).toBe(0);
@@ -172,6 +184,7 @@ describe("chooseCleaningServiceDiscount", () => {
       isPrepaidPackage: true,
       visitCount: 6,
       activeFirstCleaningOfferPercent: null,
+      cleaningType: "standard",
     });
     const totalDiscount = result.recurringAdjustment + result.packageDiscount;
     // Naive additive stacking (21% + 10% = 31%) would give 31; sequential

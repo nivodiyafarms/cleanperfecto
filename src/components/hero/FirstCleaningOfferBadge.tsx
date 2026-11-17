@@ -10,7 +10,9 @@ import {
 
 const LAUNCH_SUPPORTING_TEXT = "Launch Month Special · Ends August 31";
 const STANDARD_SUPPORTING_TEXT = "New customers · All cleaning service types";
-const DEADLINE_LABEL = "Offer ends August 31, 2026 at 11:59 PM Central Time";
+const DEEP_ONLY_SUPPORTING_TEXT = "New customers · Deep Cleaning only";
+const DEADLINE_LABEL_LAUNCH = "Offer ends August 31, 2026 at 11:59 PM Central Time";
+const DEADLINE_LABEL_STANDARD = "Offer ends November 30, 2026 at 11:59 PM Central Time";
 // The "Up to" qualifier and this note are required together: the $99
 // minimum service total can reduce the effective discount on smaller jobs
 // below the advertised percentage, so the badge must never imply every job
@@ -56,25 +58,52 @@ export default function FirstCleaningOfferBadge({ nowIso }: FirstCleaningOfferBa
       ? formatCountdown(getCountdownParts(new Date(asOfMs), offer.expiresAt))
       : null;
 
+  const supportingText =
+    offer.offerType === "launch"
+      ? LAUNCH_SUPPORTING_TEXT
+      : offer.offerType === "standard"
+        ? STANDARD_SUPPORTING_TEXT
+        : DEEP_ONLY_SUPPORTING_TEXT;
+
+  const deadlineLabel = offer.offerType === "launch" ? DEADLINE_LABEL_LAUNCH : DEADLINE_LABEL_STANDARD;
+
+  // For deep_only offer, we show the specific message about Deep Cleaning
+  const headlineText =
+    offer.offerType === "deep_only"
+      ? "Your First Deep Cleaning"
+      : "Your First Cleaning";
+
+  // Build the offer end date label for visible display
+  const offerEndsLabel =
+    offer.offerType === "launch"
+      ? "Offer ends August 31"
+      : offer.offerType === "standard"
+        ? "Offer ends November 30"
+        : null;
+
   return (
     <div className="inline-flex flex-col gap-1.5 rounded-2xl border border-primary/40 bg-foreground/50 px-5 py-3 backdrop-blur-sm sm:py-3.5">
       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-4">
         <span className="text-2xl leading-none font-bold whitespace-nowrap text-primary sm:text-3xl">
-          Up to {offer.percent}% OFF
+          {offer.offerType === "deep_only" ? `${offer.percent}% OFF` : `Up to ${offer.percent}% OFF`}
         </span>
         <span className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold text-white">Your First Cleaning</span>
+          <span className="text-sm font-semibold text-white">{headlineText}</span>
           <span className="text-xs text-white/70">
-            {offer.offerType === "launch" ? LAUNCH_SUPPORTING_TEXT : STANDARD_SUPPORTING_TEXT}
+            {supportingText}
           </span>
         </span>
       </div>
 
-      {countdownText && (
+      {countdownText && offerEndsLabel && (
         <p className="text-xs font-medium tabular-nums text-white/85">
-          <span aria-hidden="true">{countdownText}</span>
-          <span className="sr-only">{DEADLINE_LABEL}</span>
+          <span aria-hidden="true">{offerEndsLabel} · {countdownText}</span>
+          <span className="sr-only">{deadlineLabel}</span>
         </p>
+      )}
+
+      {offer.showCountdown && (
+        <p className="text-[10px] text-white/60">Times shown in Central Time (CT)</p>
       )}
 
       <p className="text-[11px] text-white/60">{MINIMUM_SERVICE_TOTAL_NOTE}</p>
