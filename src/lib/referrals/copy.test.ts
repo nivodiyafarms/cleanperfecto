@@ -87,7 +87,7 @@ describe("referral copy", () => {
     const booking = readFileSync("src/components/booking/BookingPaymentClient.tsx", "utf8");
     const wizard = readFileSync("src/components/quote-wizard/StepTwoContact.tsx", "utf8");
 
-    expect(home).toContain("<Hero />");
+    expect(home).toContain("<Hero nowIso={offerTime.toISOString()}");
     expect(home).not.toContain("ReferralOffer");
     expect(hero).toContain("HOMEPAGE_BANNER_HEADLINE");
     expect(hero).toContain("REWARDS_PAGE_HREF");

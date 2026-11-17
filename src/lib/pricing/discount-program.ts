@@ -1,13 +1,20 @@
 import { PACKAGE_DISCOUNT_MULTIPLIER, PACKAGE_MIN_VISITS, RECURRING_MULTIPLIERS } from "./config";
-import type { DiscountProgram, FrequencyId } from "./types";
+import type { CleaningType, DiscountProgram, FrequencyId } from "./types";
 
 export interface DiscountProgramInput {
   cleaningSubtotal: number;
   frequency: FrequencyId;
   isPrepaidPackage: boolean;
   visitCount: number;
-  /** Null when the customer is not first-cleaning eligible. */
+  /**
+   * Null when the customer is not first-cleaning eligible (e.g. returning
+   * customer), OR when the cleaning type itself is not eligible for the
+   * current offer (e.g. Standard/Move after the Dec 1 deep-only cutoff).
+   * The caller resolves service-type eligibility before passing this in.
+   */
   activeFirstCleaningOfferPercent: number | null;
+  /** The cleaning type being priced — passed through for reference but not directly used in discount selection (service-type eligibility is pre-resolved into activeFirstCleaningOfferPercent). */
+  cleaningType: CleaningType;
 }
 
 export interface DiscountProgramResult {
